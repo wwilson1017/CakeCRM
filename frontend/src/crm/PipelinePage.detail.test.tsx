@@ -30,6 +30,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CrmDeal } from '../core/types';
+import { ymd } from './pipelineFilters';
 
 const api = vi.hoisted(() => vi.fn());
 // `importOriginal` rather than a hand-written stub: PipelinePage imports `ApiError` from this
@@ -189,6 +190,18 @@ const click = (el: Element | null) => act(() => { (el as HTMLElement).click(); }
 const buttonByText = (text: string) =>
   [...container.querySelectorAll('button')]
     .find(b => b.textContent?.trim() === text || b.getAttribute('aria-label') === text) ?? null;
+
+/** #279: Mark Won opens the portalled Closed on dialog; accept its default day. */
+const portalButton = (text: string) =>
+  [...document.body.querySelectorAll('button')]
+    .find(b => b.textContent?.trim() === text && !container.contains(b)) ?? null;
+async function markWon() {
+  click(buttonByText('Mark Won'));
+  await settle();
+  const confirm = portalButton('Confirm');
+  if (confirm) click(confirm);
+  await settle();
+}
 
 const byLabel = <E extends Element>(label: string) =>
   container.querySelector<E>(`[aria-label="${label}"]`);
@@ -494,8 +507,7 @@ describe('the bulk lock', () => {
     await settle();
     expect(panelTitle()).toBe('Wholesale order');
 
-    click(buttonByText('Mark Won'));
-    await settle();
+    await markWon();
 
     expect(panelTitle()).toBe('Wholesale order');
     expect(callsWithMethod('PUT')).toHaveLength(0);
@@ -522,8 +534,7 @@ describe("the body's own exits", () => {
 
     renderAt('/crm/pipeline?deal=5');
     await settle();
-    click(buttonByText('Mark Won'));
-    await settle();
+    await markWon();
 
     expect(toast.error.mock.calls).toEqual([['Failed to move deal.']]);
     consoleError.mockRestore();
@@ -539,7 +550,14 @@ describe("the body's own exits", () => {
     const markWon = buttonByText('Mark Won')!;
     act(() => { (markWon as HTMLElement).click(); (markWon as HTMLElement).click(); });
     await settle();
+    // #279: one dialog, and its Confirm is latched too.
+    const confirm = portalButton('Confirm')!;
+    act(() => { (confirm as HTMLElement).click(); (confirm as HTMLElement).click(); });
+    await settle();
     expect(callsWithMethod('PUT')).toHaveLength(1);
+    // …and the PUT carries the day the dialog chose (its default, today).
+    expect(JSON.parse(String(callsWithMethod('PUT')[0][1]?.body)))
+      .toEqual({ stage: 'won', closed_on: ymd(new Date()) });
   });
 });
 
@@ -598,8 +616,7 @@ describe('a close-out dismisses only the panel that asked for it', () => {
     await settle();
     expect(panelTitle()).toBe('Wholesale order');
 
-    click(buttonByText('Mark Won'));
-    await settle();
+    await markWon();
     // Walk to the other deal while deal 5's PUT is still in the air. The arrows are the SHELL's
     // and are not disabled by the body's own close-out latch — which is exactly the exposure.
     // Backwards, because the optimistic restage has already moved deal 5 to the Won column and
@@ -691,8 +708,7 @@ describe('a close-out that outlived its own panel', () => {
 
     renderAt('/crm/pipeline?deal=5');
     await settle();
-    click(buttonByText('Mark Won'));
-    await settle();
+    await markWon();
 
     // Away and back, inside the one request.
     click(byLabel('Previous record'));

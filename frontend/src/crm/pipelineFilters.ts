@@ -184,6 +184,31 @@ export function matchesCreatedPreset(
   }
 }
 
+/** Closed-on buckets (#279). */
+export type ClosedOnPreset = 'last7' | 'thisMonth' | 'lastMonth' | 'noDate';
+
+/**
+ * Bucket for a deal's Closed on day (#279) — a date-only value, so taken verbatim like the
+ * forecast. `noDate` is Won deals nobody dated (open and lost deals have no Closed on by
+ * construction, so including them would bury the ones a rep should fill in). `lastMonth` is
+ * calendar arithmetic, never "-30 days", for the reason `matchesCreatedPreset` gives.
+ * Called by the facet directly; not part of `AdvancedFilters`.
+ */
+export function matchesClosedOnPreset(deal: CrmDeal, preset: ClosedOnPreset, now: Date): boolean {
+  const day = closeDatePart(deal.closed_on);
+  switch (preset) {
+    case 'noDate':
+      return deal.stage === 'won' && !day;
+    case 'last7':
+      return !!day && day >= ymd(now, -7);
+    case 'thisMonth':
+      return !!day && day.slice(0, 7) === ymd(now).slice(0, 7);
+    case 'lastMonth':
+      return !!day
+        && day.slice(0, 7) === ymd(new Date(now.getFullYear(), now.getMonth() - 1, 1)).slice(0, 7);
+  }
+}
+
 /**
  * Recency bucket for ANY last-touch timestamp — the deal-shaped wrapper below is one
  * caller, the Contacts list's Last-contact facet (#77) is the other. Extracted rather than

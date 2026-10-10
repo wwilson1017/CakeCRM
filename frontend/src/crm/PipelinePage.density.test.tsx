@@ -159,7 +159,7 @@ describe('board density follows the number of visible stage columns', () => {
     expect(open.textContent).not.toContain('Last contact');
     expect(open.textContent).not.toContain('Dana Reed');
     // A dateless card renders no close-date slot at all here, as it always did.
-    expect(card('Beta renewal').textContent).not.toContain('No close date');
+    expect(card('Beta renewal').textContent).not.toContain('No forecast date');
   });
 
   it('promotes the close date and the last-contact line at 3-4 visible stages', async () => {
@@ -173,7 +173,7 @@ describe('board density follows the number of visible stage columns', () => {
     // Owner belongs to the widest tier only.
     expect(open.textContent).not.toContain('Dana Reed');
     // An absent close date is now a state worth reading rather than an empty slot.
-    expect(card('Beta renewal').textContent).toContain('No close date');
+    expect(card('Beta renewal').textContent).toContain('No forecast date');
   });
 
   it('adds the owner at 1-2 visible stages, keeping everything the tier below shows', async () => {
@@ -205,7 +205,7 @@ describe('board density follows the number of visible stage columns', () => {
     expect(closed.querySelector('[title^="Computed lead score"]')).toBeNull();
     // The tier's own additions still apply to it.
     expect(closed.textContent).toContain('Last contact 3w ago');
-    expect(closed.textContent).toContain('No close date');
+    expect(closed.textContent).toContain('No forecast date');
   });
 });
 

@@ -302,7 +302,7 @@ function DealRow({ deal, open, onToggle }: {
       <InfoRow label="Value">{money(deal.value, deal.currency)}</InfoRow>
       <InfoRow label="Probability">{`${deal.probability}%`}</InfoRow>
       <InfoRow label="Currency">{deal.currency}</InfoRow>
-      <InfoRow label="Expected close">{deal.expected_close_date}</InfoRow>
+      <InfoRow label="Forecasted close">{deal.expected_close_date}</InfoRow>
       <InfoRow label="Owner"><OwnerName ownerId={deal.owner_id} /></InfoRow>
       <InfoRow label="Contact">
         {deal.contact_id != null

@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import type { CrmDeal } from '../core/types';
 import type { FacetDef, MultiFacetDef, SingleFacetDef, BooleanFacetDef, RangeFacetDef, CustomFacetDef, DateRangeValue } from '../shared/collection';
 import type { CrmUser } from './useUsers';
+import { ymd } from './pipelineFilters';
 import { DEAL_DETAIL_CONFIG } from './dealDetailConfig';
 import { archivedSelectionIncludesArchived, makePipelineCollectionConfig } from './pipelineCollection';
 import { isManualSort } from '../shared/search';
@@ -222,6 +223,7 @@ describe('date facets (#181)', () => {
       'value',
       'closeDate',
       'closeDateRange',
+      'closedOn',
       'createdDate',
       'createdDateRange',
       'lastActivity',
@@ -302,5 +304,22 @@ describe('date facets (#181)', () => {
     const march = deal({ id: 1, expected_close_date: '2026-03-15', stage: 'lead' });
     expect(range('closeDateRange').predicate(march, q1)).toBe(true);
     expect(preset.predicate(march, 'noDate')).toBe(false);
+  });
+});
+
+describe('the closedOn facet (#279)', () => {
+  it('is a single-choice facet over the Closed on buckets that delegates to the shared predicate', () => {
+    const f = facet<SingleFacetDef<CrmDeal>>('closedOn');
+    expect(f.kind).toBe('single');
+    expect(f.label).toBe('Closed on');
+    expect(f.options.map(o => o.value)).toEqual(['last7', 'thisMonth', 'lastMonth', 'noDate']);
+    const today = ymd(new Date());
+    expect(f.predicate(deal({ id: 1, stage: 'won', closed_on: today }), 'last7')).toBe(true);
+    expect(f.predicate(deal({ id: 2, stage: 'won', closed_on: null }), 'noDate')).toBe(true);
+    expect(f.predicate(deal({ id: 3, stage: 'lead' }), 'noDate')).toBe(false);
+  });
+
+  it('adds no storage bump — the pipeline is still version 1', () => {
+    expect(build().storage).toEqual({ key: 'crm_pipeline', version: 1 });
   });
 });

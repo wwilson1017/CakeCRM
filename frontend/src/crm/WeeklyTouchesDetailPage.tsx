@@ -163,9 +163,11 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
     setReloadTick(t => t + 1);
   }
 
-  async function updateDealStage(deal: CrmDeal, stage: string, lostReason?: string) {
+  async function updateDealStage(
+    deal: CrmDeal, stage: string, lostReason?: string, closedOn?: string,
+  ) {
     try {
-      const { path, init } = stageWriteRequest(deal.id, stage, lostReason);
+      const { path, init } = stageWriteRequest(deal.id, stage, lostReason, closedOn);
       await api(path, init);
       // No dismissal here: `DealDetailBody` closes itself on a successful write, because only a
       // MOUNTED body can tell whether the panel in front of it is still the one that asked.
@@ -283,7 +285,7 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
               // knows.
               stageWritable
               ctx={ctx}
-              onMarkWon={d => updateDealStage(d, 'won')}
+              onMarkWon={(d, closedOn) => updateDealStage(d, 'won', undefined, closedOn)}
               onMarkLost={(d, lostReason) => updateDealStage(d, 'lost', lostReason)}
               onSaveDeal={saveDeal}
               // Patching only — the body dismisses itself, and only while it is still on screen.

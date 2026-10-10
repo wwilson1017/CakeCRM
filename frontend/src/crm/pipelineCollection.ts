@@ -49,8 +49,10 @@ import {
   dealMatchesAdvanced,
   isArchivedDeal,
   localDayOf,
+  matchesClosedOnPreset,
   type ActivityPreset,
   type ClosePreset,
+  type ClosedOnPreset,
   type CreatedPreset,
 } from './pipelineFilters';
 import { stageLabel, stageToggleKey } from './pipelineBoard';
@@ -61,7 +63,15 @@ export const CLOSE_OPTIONS: FacetOption[] = [
   { value: 'overdue', label: 'Overdue' },
   { value: 'next7', label: 'Next 7 days' },
   { value: 'thisMonth', label: 'This month' },
-  { value: 'noDate', label: 'No close date' },
+  { value: 'noDate', label: 'No forecasted close date' },
+];
+
+/** Closed-on buckets (#279): the day a Won deal actually closed. */
+export const CLOSED_ON_OPTIONS: FacetOption[] = [
+  { value: 'last7', label: 'Last 7 days' },
+  { value: 'thisMonth', label: 'This month' },
+  { value: 'lastMonth', label: 'Last month' },
+  { value: 'noDate', label: 'Won, no closed-on date' },
 ];
 
 /** Creation buckets (#181). Recency windows matching the activity facet's boundaries, plus the
@@ -146,7 +156,7 @@ export function makePipelineCollectionConfig(deps: PipelineConfigDeps): Collecti
     {
       kind: 'single',
       key: 'closeDate',
-      label: 'Close date',
+      label: 'Forecasted close date',
       options: CLOSE_OPTIONS,
       // Delegates rather than restates: `dealMatchesAdvanced` owns what each bucket means.
       // The clock is read per call; a memo pass spanning exact midnight could therefore judge
@@ -162,9 +172,16 @@ export function makePipelineCollectionConfig(deps: PipelineConfigDeps): Collecti
     // calendar day a timestamp falls on.
     dateRangeFacet<CrmDeal>({
       key: 'closeDateRange',
-      label: 'Close date range',
+      label: 'Forecasted close range',
       getDay: d => closeDatePart(d.expected_close_date),
     }),
+    {
+      kind: 'single',
+      key: 'closedOn',
+      label: 'Closed on',
+      options: CLOSED_ON_OPTIONS,
+      predicate: (d, v) => matchesClosedOnPreset(d, v as ClosedOnPreset, new Date()),
+    },
     {
       kind: 'single',
       key: 'createdDate',
@@ -211,7 +228,7 @@ export function makePipelineCollectionConfig(deps: PipelineConfigDeps): Collecti
   ];
 
   return {
-    // Still version 1 after #181's four new facets: `coerceSelections` walks the DECLARED
+    // Still version 1 after #181's four new facets and #279's `closedOn`: `coerceSelections` walks the DECLARED
     // facets and defaults any key a persisted envelope lacks, so ADDING a facet is not a shape
     // change. The number pins facet KEYS and their value shapes — and saved views are stamped
     // with it — so renaming or repurposing one of these keys is what must bump it.

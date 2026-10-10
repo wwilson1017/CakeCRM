@@ -275,6 +275,13 @@ async function click(el: Element | null | undefined, what: string) {
   await flush();
 }
 
+/** #279: Mark Won opens the portalled Closed on dialog; accept its default day. */
+async function confirmClosedOn() {
+  const confirm = [...document.body.querySelectorAll('button')]
+    .find(b => b.textContent?.trim() === 'Confirm' && !container.contains(b));
+  await click(confirm, 'Closed on Confirm');
+}
+
 /** Find a button by its visible text OR its `aria-label`. Since #75 the detail panel is the
  *  collection layer's shell, whose Close is an icon button carrying only the accessible name —
  *  so matching on text alone finds nothing where the deleted sheet had a worded button. */
@@ -731,6 +738,7 @@ describe('PipelinePage — archived deals', () => {
 
     await click(card('Acme renewal'), 'live card');
     await click(button('Mark Won'), 'Mark Won');
+    await confirmClosedOn();
     expect(stageColumn('won').textContent).toContain('Acme renewal');
 
     await pickArchivedFacet('Include archived');
@@ -839,6 +847,7 @@ describe('PipelinePage — archived deals', () => {
 
     await click(card('Acme renewal'), 'live card');
     await click(button('Mark Won'), 'Mark Won');
+    await confirmClosedOn();
     await pickArchivedFacet('Archived only');
     // Nothing has been fetched yet, so nothing has failed yet — this pins that the toast
     // below comes from the REPLAY and not from the original load.

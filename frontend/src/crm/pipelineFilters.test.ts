@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { CrmDeal } from '../core/types';
-import { EMPTY_ADVANCED, dealMatchesAdvanced, isArchivedDeal, localDayOf, matchesActivityPreset, matchesCreatedPreset, ymd, type AdvancedFilters } from './pipelineFilters';
+import { EMPTY_ADVANCED, dealMatchesAdvanced, isArchivedDeal, localDayOf, matchesActivityPreset, matchesClosedOnPreset, matchesCreatedPreset, ymd, type AdvancedFilters } from './pipelineFilters';
 
 function deal(over: Partial<CrmDeal> = {}): CrmDeal {
   return {
@@ -278,5 +278,39 @@ describe('dealMatchesAdvanced with the created bucket', () => {
   it('leaves the close-date and activity rules untouched', () => {
     const won = deal({ stage: 'won', expected_close_date: '2020-01-01' });
     expect(dealMatchesAdvanced(won, adv({ closeDate: 'overdue' }), may15)).toBe(false);
+  });
+});
+
+describe('closed-on buckets (#279)', () => {
+  const NOW = new Date(2026, 9, 10, 12); // 10 Oct 2026, local noon
+  const won = (closed_on: string | null) => deal({ stage: 'won', closed_on });
+
+  it('last 7 days includes its far edge and excludes the day before', () => {
+    expect(matchesClosedOnPreset(won('2026-10-03'), 'last7', NOW)).toBe(true);
+    expect(matchesClosedOnPreset(won('2026-10-02'), 'last7', NOW)).toBe(false);
+  });
+
+  it('this month and last month are calendar months', () => {
+    expect(matchesClosedOnPreset(won('2026-10-01'), 'thisMonth', NOW)).toBe(true);
+    expect(matchesClosedOnPreset(won('2026-09-30'), 'thisMonth', NOW)).toBe(false);
+    expect(matchesClosedOnPreset(won('2026-09-01'), 'lastMonth', NOW)).toBe(true);
+    expect(matchesClosedOnPreset(won('2026-08-31'), 'lastMonth', NOW)).toBe(false);
+  });
+
+  it('last month across a year boundary', () => {
+    expect(matchesClosedOnPreset(won('2025-12-15'), 'lastMonth', new Date(2026, 0, 5))).toBe(true);
+  });
+
+  it('"no date" is Won deals nobody dated, never open or lost ones', () => {
+    expect(matchesClosedOnPreset(won(null), 'noDate', NOW)).toBe(true);
+    expect(matchesClosedOnPreset(won('2026-10-01'), 'noDate', NOW)).toBe(false);
+    expect(matchesClosedOnPreset(deal({ stage: 'lead', closed_on: null }), 'noDate', NOW)).toBe(false);
+    expect(matchesClosedOnPreset(deal({ stage: 'lost', closed_on: null }), 'noDate', NOW)).toBe(false);
+  });
+
+  it('an undated deal matches no dated bucket', () => {
+    for (const p of ['last7', 'thisMonth', 'lastMonth'] as const) {
+      expect(matchesClosedOnPreset(won(null), p, NOW)).toBe(false);
+    }
   });
 });

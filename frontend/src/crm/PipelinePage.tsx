@@ -9,7 +9,7 @@ import { ScorePill, TouchCountPill } from './components/badges';
 import DealTemperatureIcon from './components/DealTemperatureIcon';
 import { DealTemperatureWriter } from './components/DealTemperatureCell';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
-import { stageWriteRequest } from './dealStageWrite';
+import { movedDeal, stageWriteRequest } from './dealStageWrite';
 import { IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
@@ -588,7 +588,7 @@ export function PipelinePage() {
     if (toStage !== undefined) {
       setData(prev => prev ? {
         ...prev,
-        deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: toStage } : d),
+        deals: prev.deals.map(d => d.id === dealId ? movedDeal(d, toStage, patch.closed_on ?? undefined) : d),
       } : prev);
     }
     pendingWrites.current++; // an unconfirmed optimistic write now exists (see `load`'s silent guard)
@@ -662,7 +662,10 @@ export function PipelinePage() {
         const confirmed = dealConfirmedStage.current.get(dealId) ?? fromStage ?? deal.stage;
         setData(prev => prev ? {
           ...prev,
-          deals: prev.deals.map(d => d.id === dealId ? { ...d, stage: confirmed } : d),
+          // #279: the captured row's Closed on goes back with the stage, so a painted date
+          // cannot outlive the move that failed; the next load is the full repair.
+          deals: prev.deals.map(d => d.id === dealId
+            ? { ...d, stage: confirmed, closed_on: deal.closed_on } : d),
         } : prev);
         // The TOAST stays stage-only, unlike the revert. A fields-only write announced no move,
         // so announcing a failed one would report a board change nobody asked for — its form
@@ -721,7 +724,9 @@ export function PipelinePage() {
   //
   // `lostReason` is present only for a Mark Lost taken through the reason dialog (#128); it rides
   // through to `writeDeal`, which is where the endpoint is chosen.
-  const updateDealStage = useCallback(async (deal: CrmDeal, stage: string, lostReason?: string) => {
+  const updateDealStage = useCallback(async (
+    deal: CrmDeal, stage: string, lostReason?: string, closedOn?: string,
+  ) => {
     // Read BEFORE the await. If a load is deferred behind this very write — the user reaching for
     // the Archived facet while the PUT is in the air — the write's own `finally` replays it, and
     // that replay is issued AFTER the server answered, so it already carries everything the
@@ -745,7 +750,10 @@ export function PipelinePage() {
       // user can see and put away again is harmless; a card that vanishes mid-write is not.
       revealStage(stage);
       try {
-        await writeDeal(deal, { stage }, deal.stage, lostReason);
+        await writeDeal(
+          deal, closedOn !== undefined ? { stage, closed_on: closedOn } : { stage },
+          deal.stage, lostReason,
+        );
       } catch (err) {
         // Report ONLY the refusal `writeDeal` cannot report itself. A stage PUT that reached the
         // server and failed has already raised its own toast in there; toasting again here would
@@ -768,7 +776,10 @@ export function PipelinePage() {
   // close-out buttons `disabled` for the whole write (#128) — that attribute IS the re-entry
   // guard, and a second Mark Lost appends a second "Deal lost —" note. `updateDealStage` reports
   // its own failures and never rejects, so awaiting it here can only ever settle.
-  const markWon = useCallback((deal: CrmDeal) => updateDealStage(deal, 'won'), [updateDealStage]);
+  const markWon = useCallback(
+    (deal: CrmDeal, closedOn: string) => updateDealStage(deal, 'won', undefined, closedOn),
+    [updateDealStage],
+  );
   const markLost = useCallback(
     (deal: CrmDeal, lostReason?: string) => updateDealStage(deal, 'lost', lostReason),
     [updateDealStage],
@@ -1071,11 +1082,12 @@ export function PipelinePage() {
     // and therefore already live; this map is only the fallback for a deal that has no
     // confirmed entry yet (one whose write never succeeded), so the captured `deals` is right.
     const prevStages = new Map(deals.map(d => [d.id, d.stage]));
+    const prevClosedOn = new Map(deals.map(d => [d.id, d.closed_on]));
     // Optimistic: restage every mover in one pass, positions untouched (same trick as
     // moveDealStage, so a revert needs no position bookkeeping).
     setData(prev => prev ? {
       ...prev,
-      deals: prev.deals.map(d => moving.has(d.id) ? { ...d, stage: toStage } : d),
+      deals: prev.deals.map(d => moving.has(d.id) ? movedDeal(d, toStage) : d),
     } : prev);
 
     // try/finally for the same reason moveDealStage has one: the lock disables drag and
@@ -1109,7 +1121,11 @@ export function PipelinePage() {
         setData(prev => prev ? {
           ...prev,
           deals: prev.deals.map(d => moving.has(d.id)
-            ? { ...d, stage: dealConfirmedStage.current.get(d.id) ?? prevStages.get(d.id) ?? d.stage }
+            ? {
+              ...d,
+              stage: dealConfirmedStage.current.get(d.id) ?? prevStages.get(d.id) ?? d.stage,
+              closed_on: prevClosedOn.has(d.id) ? prevClosedOn.get(d.id) : d.closed_on,
+            }
             : d),
         } : prev);
       }
@@ -1995,7 +2011,7 @@ function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelect
             Won card's "No contact logged" follows (#128) — where on a six-column board an
             extra line on every undated card is just noise. */}
         {(deal.expected_close_date || roomy) && (
-          <span>{deal.expected_close_date || 'No close date'}</span>
+          <span>{deal.expected_close_date || 'No forecast date'}</span>
         )}
         {/* The widest tier only (1-2 stages visible). `ownerName` resolves NULL to
             "Unassigned", which is a real state and renders unconditionally — #128's rule. */}

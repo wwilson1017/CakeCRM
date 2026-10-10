@@ -88,11 +88,13 @@ export function CrmDashboardPage() {
     setSelectedDealId(id);
   }
 
-  async function updateDealStage(deal: CrmDeal, stage: string, lostReason?: string) {
+  async function updateDealStage(
+    deal: CrmDeal, stage: string, lostReason?: string, closedOn?: string,
+  ) {
     try {
       // `lostReason` is present only for a Mark Lost taken through the reason dialog,
       // which routes to the mark-lost verb instead of the plain stage PUT (issue #128).
-      const { path, init } = stageWriteRequest(deal.id, stage, lostReason);
+      const { path, init } = stageWriteRequest(deal.id, stage, lostReason, closedOn);
       await api(path, init);
       // No dismissal here: `DealDetailBody` closes itself on a successful write, because only a
       // MOUNTED body can tell whether the panel in front of it is still the one that asked.
@@ -648,7 +650,7 @@ export function CrmDashboardPage() {
               // is the only thing that knows, since these rows carry no board state.
               stageWritable
               ctx={ctx}
-              onMarkWon={d => updateDealStage(d, 'won')}
+              onMarkWon={(d, closedOn) => updateDealStage(d, 'won', undefined, closedOn)}
               onMarkLost={(d, lostReason) => updateDealStage(d, 'lost', lostReason)}
               onSaveDeal={saveDeal}
               // The archived banner and its Restore render on ANY host (issue #83). Without this
