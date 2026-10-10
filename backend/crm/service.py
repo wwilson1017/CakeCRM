@@ -4077,19 +4077,25 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # (ON DELETE CASCADE), so it must share the statement, and its writers (post_note /
     # edit_note) lock the entity or note row before touching it. Like attachments it is
     # absent from is_crm_empty — the cascade makes "mentions without notes" impossible.
+    # crm_stage_criteria (#289) trails everything in BOTH variants, as the issue specifies:
+    # a reset returns the board to the standard checklists too. No FK, and its writers are
+    # single-statement upserts/deletes touching only that table, so the last position can't
+    # invert against anything. It stays OUT of is_crm_empty: it is configuration, and counting
+    # it would let a customised checklist suppress the first-run sample-data prompt.
     if include_definitions:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
             "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_definitions, "
             "crm_field_values, "
             "crm_field_provenance, deal_stage_events, proactive_nudges, "
-            "deal_ai_touch_evidence RESTART IDENTITY"
+            "deal_ai_touch_evidence, crm_stage_criteria RESTART IDENTITY"
         )
     else:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
             "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_values, "
-            "crm_field_provenance, deal_stage_events, proactive_nudges, deal_ai_touch_evidence RESTART IDENTITY"
+            "crm_field_provenance, deal_stage_events, proactive_nudges, deal_ai_touch_evidence, "
+            "crm_stage_criteria RESTART IDENTITY"
         )
 
 

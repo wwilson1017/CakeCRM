@@ -115,6 +115,10 @@ ADMIN_ONLY = {
     ("/api/crm/fields", "POST"),
     ("/api/crm/fields/{field_id}", "PUT"),
     ("/api/crm/fields/{field_id}", "DELETE"),
+    # Pipeline stage criteria (#289): replacing or resetting a stage's checklist changes it
+    # for every seat, so it is install configuration. Reading it stays member-visible.
+    ("/api/crm/stage-criteria/{stage}", "PUT"),
+    ("/api/crm/stage-criteria/{stage}", "DELETE"),
 }
 
 
