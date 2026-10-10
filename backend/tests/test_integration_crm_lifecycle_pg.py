@@ -1151,7 +1151,7 @@ def test_the_declared_column_types_match_the_real_deals_schema(pg_db):
     actual = {r["column_name"]: r["data_type"] for r in pg_fetchall(
         "SELECT column_name, data_type FROM information_schema.columns "
         "WHERE table_name = 'deals' AND table_schema = current_schema()")}
-    expected = {"text": "text", "float8": "double precision", "int": "integer"}
+    expected = {"text": "text", "float8": "double precision", "int": "integer", "date": "date"}
 
     missing = service._DEAL_COLUMN_TYPES.keys() - actual.keys()
     assert not missing, f"declared columns absent from the deals table: {sorted(missing)}"
@@ -1497,3 +1497,100 @@ def test_top_deals_floor_a_negative_value_or_probability(pg_db):
 
     top = service.get_dashboard_stats()["top_deals"]
     assert [d["id"] for d in top] == [neg_prob["id"], floor["id"], neg_val["id"], zero["id"]]
+
+
+# ── Closed on (#279) ─────────────────────────────────────────────────────────
+
+def _closed_on_notes(deal_id):
+    from core.postgres import pg_fetchall
+    from crm import scoring_service
+    return [r["message"] for r in pg_fetchall(
+        "SELECT message FROM crm_chatter WHERE entity_type = 'deal' AND entity_id = %s "
+        "AND starts_with(message, %s) ORDER BY id", (deal_id, scoring_service.CLOSED_ON_NOTE_PREFIX))]
+
+
+def test_the_closed_on_backfill_dates_won_deals_in_the_install_zone(pg_db, monkeypatch):
+    """The migration's one UPDATE, re-run for real: the newest move into won, as a day in
+    TIMEZONE (03:30 UTC on 2 March is 1 March in Chicago); undated, open and already-dated
+    deals are left alone; and the zone does not leak into the pooled session."""
+    from pathlib import Path
+
+    from core import postgres
+    from core.postgres import pg_execute, pg_fetchone
+
+    pg_execute("INSERT INTO deals (id, title, stage) VALUES (1, 'A', 'won'), (2, 'B', 'won'), "
+               "(3, 'C', 'lead'), (4, 'D', 'won')")
+    pg_execute("UPDATE deals SET closed_on = '2026-01-15' WHERE id = 4")
+    for deal_id, stage, at in ((1, "won", "2026-01-05 12:00:00+00"),
+                               (1, "won", "2026-03-02 03:30:00+00"),
+                               (3, "won", "2026-02-01 12:00:00+00"),
+                               (4, "won", "2026-03-01 12:00:00+00")):
+        pg_execute("INSERT INTO deal_stage_events (deal_id, old_stage, new_stage, changed_at) "
+                   "VALUES (%s, 'negotiation', %s, %s)", (deal_id, stage, at))
+    name = next(Path(postgres.__file__).resolve().parent.parent.joinpath("migrations")
+                .glob("*_deal_closed_on.sql")).name
+    pg_execute("DELETE FROM _migrations_applied WHERE filename = %s", (name,))
+    monkeypatch.setenv("TIMEZONE", "America/Chicago")
+    postgres.run_migrations()
+
+    def day(i):
+        return pg_fetchone("SELECT closed_on FROM deals WHERE id = %s", (i,))["closed_on"]
+    assert day(1) == "2026-03-01"
+    assert day(2) is None and day(3) is None
+    assert day(4) == "2026-01-15"
+    assert (pg_fetchone("SELECT current_setting('cakecrm.timezone', true) AS z")["z"] or "") == ""
+
+
+def test_closed_on_through_every_writer_with_its_notes(pg_db):
+    from datetime import timedelta
+
+    from core.localtime import today_local
+    from core.postgres import pg_fetchone
+    from crm import service
+
+    today = today_local()
+    yesterday = (today - timedelta(days=1)).isoformat()
+    t, y = today.isoformat(), yesterday
+
+    deal = service.create_deal("Closer", stage="negotiation")
+    did = deal["id"]
+    assert deal["closed_on"] is None
+
+    assert service.mark_deal_won(did)["closed_on"] == t
+    assert service.mark_deal_won(did)["closed_on"] == t            # won -> won: untouched
+    assert service.update_deal(did, closed_on=y)["closed_on"] == y
+    assert service.update_deal(did, closed_on="")["closed_on"] == y  # never blanked
+    assert service.update_deal_stage(did, "negotiation")["closed_on"] is None
+    assert service.bulk_move_deals([did], "won", closed_on="2026-01-02")["ok"] is True
+    assert pg_fetchone("SELECT closed_on FROM deals WHERE id = %s", (did,))["closed_on"] == "2026-01-02"
+    service.bulk_move_deals([did], "lead")
+    assert pg_fetchone("SELECT closed_on FROM deals WHERE id = %s", (did,))["closed_on"] is None
+
+    assert _closed_on_notes(did) == [
+        f"Closed on: none → {t}",
+        f"Closed on: {t} → {y}",
+        f"Closed on: {y} → none",
+        "Closed on: none → 2026-01-02",
+        "Closed on: 2026-01-02 → none",
+    ]
+    with pytest.raises(ValueError, match="only be set on a Won deal"):
+        service.update_deal(did, closed_on=y)
+
+    born = service.create_deal("Born won", stage="won")
+    assert born["closed_on"] == t and _closed_on_notes(born["id"]) == []
+
+
+def test_a_closed_on_note_is_not_a_touch(pg_db):
+    """The note is housekeeping: dating a win must not reset the deal's staleness clock."""
+    from core.postgres import pg_execute, pg_fetchone
+    from crm import service
+
+    did = service.create_deal("Quiet", stage="negotiation")["id"]
+    before = pg_fetchone(f"SELECT ({service.LAST_TOUCH_SQL}) AS t FROM deals d WHERE d.id = %s",
+                         (did,))["t"]
+    pg_execute("UPDATE deals SET stage = 'won', closed_on = current_date WHERE id = %s", (did,))
+    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message) VALUES ('deal', %s, %s)",
+               (did, service._closed_on_note(None, "2026-10-01")))
+    after = pg_fetchone(f"SELECT ({service.LAST_TOUCH_SQL}) AS t FROM deals d WHERE d.id = %s",
+                        (did,))["t"]
+    assert after == before

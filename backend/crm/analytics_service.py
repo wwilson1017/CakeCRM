@@ -636,10 +636,6 @@ def get_pipeline_analytics(window_days: int = DEFAULT_ANALYTICS_WINDOW_DAYS) -> 
     "convert", it was put away.
     """
     window_days = _bounded(window_days, DEFAULT_ANALYTICS_WINDOW_DAYS, 7, 365)
-    # #279: a won deal is dated by its Closed on day when someone recorded one (reps
-    # backdate wins), else by its move into won. The DATE becomes an instant at local
-    # midnight; zoneinfo names the zone, Postgres only applies it.
-    zone = tz().key
 
     # Completed stage intervals: how long a deal sat in a stage before leaving it.
     # LEAD() over the deal's own event chain gives the exit time; a NULL next event
@@ -672,13 +668,18 @@ def get_pipeline_analytics(window_days: int = DEFAULT_ANALYTICS_WINDOW_DAYS) -> 
           FROM deal_stage_events e
           JOIN deals d ON d.id = e.deal_id
          WHERE {LIVE_PREDICATE_D}
-           AND COALESCE(
-                 CASE WHEN e.new_stage = 'won' THEN d.closed_on::timestamp AT TIME ZONE %s END,
-                 e.changed_at) >= now() - make_interval(days => %s)
+           AND e.changed_at >= now() - make_interval(days => %s)
          ORDER BY e.deal_id, e.new_stage, e.changed_at, e.id
         """,
-        (zone, window_days),
+        (window_days,),
     )
+
+    # #279: velocity dates a win by its Closed on day when someone recorded one (reps
+    # backdate wins), else by the move into won. The DATE becomes an instant at local
+    # midnight; zoneinfo names the zone, Postgres only applies it. Conversion needs no
+    # such change: it buckets entries into OPEN stages and reads the outcome from the
+    # deal's current stage, so no win date enters it.
+    zone = tz().key
 
     # Velocity: deals won inside the window, and how long they took from their first
     # recorded stage event. Deals that predate the log have no first event, so they
