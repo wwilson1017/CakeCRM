@@ -24,10 +24,13 @@
  *   Writes arriving DURING the new sweep still apply: they land in the cleared map, and
  *   the assembly publishes no rows until it finishes.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { usePageAssembly, type PageAssembly } from '../shared/collection';
 import { ApiError } from '../core/api/client';
 import { assemblyPageParams, nextCursor, splitAssemblyPage } from './assemblyPage';
+import { readWarm, writeWarm, WarmViewerContext, type WarmTab } from './warmCache';
+import { warmEpoch } from './warmStore';
+import { claimWarmTab } from './warmQueue';
 
 /** Tombstone for a hard-deleted row. A unique object, so it can never collide with a patch. */
 const REMOVED = Symbol('removed');
@@ -156,6 +159,10 @@ export interface CrmCorpus<T> extends PatchableAssembly<T> {
   loading: boolean;
   error: string | null;
   itemsLoaded: number;
+  /** When the rows on screen came from the warm cache: their save time. Null once fresh. */
+  savedAt: number | null;
+  /** The fresh sweep failed while cached rows are on screen — a notice, not the page's error. */
+  refreshFailed: boolean;
 }
 
 /**
@@ -174,6 +181,9 @@ export interface CrmCorpus<T> extends PatchableAssembly<T> {
 export function useCrmCorpus<T extends { id: number }>(
   fetchRows: (params: URLSearchParams, signal: AbortSignal) => Promise<T[]>,
   enabled = true,
+  /** Keep the last complete sweep in the warm cache under this name (#281). Omitted ⇒ no cache,
+   *  and the hook behaves exactly as before. */
+  warmTab?: WarmTab,
 ): CrmCorpus<T> {
   // Latest-ref, for the same reason usePageAssembly keeps one: the natural call site is an
   // inline arrow, and depending on its identity would restart the sweep every render.
@@ -195,8 +205,47 @@ export function useCrmCorpus<T extends { id: number }>(
   }, []);
 
   const assembly = usePageAssembly<T>(fetchPage, enabled);
+
+  // The warm cache (#281). The email is FROZEN at mount: a cross-tab sign-in swaps the account in
+  // place without unmounting this page, and a sweep that started as one user must never be saved
+  // under the next one — so a changed viewer simply stops this mount's writes. Same for a
+  // sign-out, via the epoch the sweep started under.
+  const viewer = useContext(WarmViewerContext);
+  const [email] = useState(warmTab ? viewer : null);
+  const [epoch] = useState(warmEpoch);
+  // The newest COMPLETE set this mount knows of: the cached one until a fresh sweep lands, then
+  // that sweep. It is what keeps rows on screen across a `retry()`, which nulls the assembly.
+  const [last, setLast] = useState<{ items: T[]; savedAt: number } | null>(null);
+  useEffect(() => {
+    if (!email || !warmTab) return;
+    let live = true;
+    void readWarm<T[]>(email, warmTab).then(hit => {
+      // `prev ??` — a read that resolves after a fresh sweep must not put older rows back.
+      if (live && hit) setLast(prev => prev ?? { items: hit.data, savedAt: hit.savedAt });
+    });
+    return () => { live = false; };
+  }, [email, warmTab]);
+
+  // This page sweeps its own list, so the background queue must not sweep it a second time.
+  useEffect(() => {
+    if (enabled && warmTab) claimWarmTab(warmTab);
+  }, [enabled, warmTab]);
+
+  // Written from exactly one place: the assembly's `items` turning non-null, which happens only
+  // when every page has landed — and it is the raw sweep, never the write overlay on top of it.
+  const fresh = assembly.items;
+  useEffect(() => {
+    if (fresh === null || !warmTab) return;
+    let live = true;
+    const savedAt = Date.now();
+    const write = email !== null && viewer === email ? writeWarm(email, warmTab, fresh, savedAt, epoch) : Promise.resolve();
+    void write.then(() => { if (live) setLast({ items: fresh, savedAt }); });
+    return () => { live = false; };
+  }, [fresh, warmTab, email, viewer, epoch]);
+
+  const shown = fresh ?? (warmTab ? last?.items ?? null : null);
   const getId = useCallback((row: T) => row.id, []);
-  const patchable = usePatchableAssembly(assembly, getId);
+  const patchable = usePatchableAssembly({ ...assembly, items: shown }, getId);
 
   // Bound how stale the corpus can get while nobody touches it.
   //
@@ -229,8 +278,11 @@ export function useCrmCorpus<T extends { id: number }>(
 
   return {
     ...patchable,
-    loading: assembly.loading,
-    error: assembly.error,
+    loading: shown === null && assembly.error === null,
+    // With rows to show, a failed refresh is a notice (`refreshFailed`), not the page's error.
+    error: shown === null ? assembly.error : null,
     itemsLoaded: assembly.itemsLoaded,
+    savedAt: fresh === null && last !== null ? last.savedAt : null,
+    refreshFailed: shown !== null && assembly.error !== null,
   };
 }

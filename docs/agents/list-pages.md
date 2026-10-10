@@ -99,6 +99,47 @@
   **deleted** — an Owner facet with an Unassigned bucket replaces it and can select any
   owner, hiding itself on a single-seat install the same way.
 
+- **Bump `WARM_SCHEMA_VERSION` (`frontend/src/crm/warmCache.ts`) in the same PR as any change
+  to the shape of a list `CrmContact`, `CrmCompany` or the board's `CrmDeal`** — the same kind of
+  rule as a facet `key` change bumping `CollectionStorage.version`. The warm cache keeps each
+  user's last complete sweep in IndexedDB, and an entry saved under another version is dropped
+  unread; without the bump, yesterday's cached rows render in today's UI until the fresh sweep
+  lands. Adding an optional field the UI tolerates being absent is still a bump: the version is
+  cheap, a half-shaped row is not.
+
+- **Warm-up queue and browser cache (#281, port of the blueprint's #3635/#3637) — frontend only,
+  no endpoint changed.** Pipeline, Contacts and Companies open on the last COMPLETE sweep from a
+  per-user IndexedDB cache while their own sweep runs, with a "Refreshing… showing saved data
+  from …" line (`WarmStatus`) until the fresh rows replace it, and "Couldn't refresh" plus Retry
+  if the sweep fails — the cached rows stay up rather than blanking to an error. The rules
+  (`warmCache.ts`; `warmStore.ts` is the transport, a dependency-free leaf): keyed by the
+  signed-in email, nothing read or written without one; wiped on sign-out, both this tab's
+  `logout` and the cross-tab one, with an epoch that drops any write from a sweep that started
+  before the wipe; other users' entries purged when the CRM opens (only once the account is
+  known — `currentUser` is briefly null after a login); dropped after 7 days; written only by a
+  complete sweep, replaced wholesale, never the write overlay and never a partial set.
+  **Divergences from the blueprint**, all because these pages are ROUTES that remount rather
+  than hidden tabs that stay mounted: (1) the warm-up queue (`warmQueue.ts`) cannot open a
+  page's gate, so it sweeps with its own imperative fetchers — the pages' own
+  `fetchContactRows`/`fetchCompanyRows` and `sweepPipelineDeals`, so both cache one shape; (2)
+  a mounting page CLAIMS its list from the queue (dropped if queued, aborted if in flight), since
+  its own sweep writes the cache and two sweeps of one corpus is waste; (3) the email reaches the
+  pages through `WarmViewerContext` from `CrmLayout`, and each mount FREEZES it, because a
+  cross-tab sign-in swaps the account without unmounting — a changed viewer stops that mount's
+  writes rather than filing one user's rows under another. **Decisions:** the queue starts once
+  the Dashboard's own read has settled (data or failure), runs Pipeline → Contacts → Companies
+  strictly one at a time, moving on when a sweep completes or fails — never parallel — and runs
+  **once per signed-in session**, not on every Dashboard visit: the pages re-sweep on every entry
+  anyway, so the queue only fills a cold or week-old cache, and re-running it per visit would add
+  three whole-corpus sweeps for nothing. **Todos stays out** — its corpus is per-user and small.
+  The board caches its live-only content set; an Archived-facet load neither seeds nor writes.
+  **A cache-seeded board cannot vouch for an absence**: the deep-link verdict's `boardLoaded`
+  counts a cached board only when it HOLDS the linked deal, so the cache may open a deal but
+  only a load that applied (`boardLoads.applied`) may call one gone — and the mount load in
+  flight settles the link, so no second sweep fires through the `refresh` verdict. Residual,
+  stated: until the fresh sweep lands, the rows are as old as the status line says, and a write
+  made against a cached row is the server's to reconcile when the sweep replaces it.
+
 - Never page a full-corpus sweep on a mutable order. `sort=id` is the assembly key on
   every list endpoint, `after_id` is refused with any other sort, and `hasMore` comes from
   an extra row rather than a `total` computed in a separate transaction (#77). A new list
