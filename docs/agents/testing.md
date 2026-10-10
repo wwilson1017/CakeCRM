@@ -44,6 +44,11 @@
   **not** UTC: `crm/pipelineFilters.ts` derives `ymd` from local-date getters because
   `toISOString()` drifts a day in US evening time, and under a UTC runner that distinction
   disappears, so a test pinning it could never fail.
+- **A frontend test never imports from `../backend`** (#289). `tsc -b` type-checks test files
+  too, and the Docker image builds the frontend from a copy of `frontend/` alone, so such an
+  import passes CI and breaks the image build. To share a backend file with a test, read it
+  in a `define` in `vitest.config.ts`, which no tsconfig includes and the build never loads.
+  The `__CAPTURE_PAGE_PY__` and `__STAGE_CRITERIA_STANDARD__` entries there show the pattern.
 
 ## Genericization guard (`test_prompt_genericization.py`)
 

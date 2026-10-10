@@ -122,6 +122,7 @@ from crm import (
     report_service,
     scoring_service,
     service as crm,
+    stage_criteria,
     today_service,
     todo_tokens,
     touch_count_service,
@@ -1808,3 +1809,64 @@ async def set_field_values(
         # A definition was deleted concurrently (the FOR SHARE lock narrows but the
         # 400 is the correct backstop, never a 500).
         raise HTTPException(status_code=400, detail="One or more fields no longer exist") from None
+
+
+# ── Pipeline stage criteria (#289) ──────────────────────────────────────────────────────
+# Reading is for everyone (the board shows it); replacing or resetting a stage's criteria is
+# install configuration, so both writes are admin-only and pinned in test_route_authz.
+
+_MAX_SUMMARY = 1000
+_MAX_ITEM = 300
+_MAX_ITEMS = 30
+
+
+class StageCriteriaBody(BaseModel):
+    summary: str
+    checklist: list[str]
+
+    # Trim FIRST, then check: a whitespace-only summary or line must fail, not pass a
+    # length check and save as blank.
+    @field_validator("summary")
+    @classmethod
+    def _summary(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Summary is required")
+        if len(v) > _MAX_SUMMARY:
+            raise ValueError(f"Summary is limited to {_MAX_SUMMARY} characters")
+        return v
+
+    @field_validator("checklist")
+    @classmethod
+    def _checklist(cls, v: list[str]) -> list[str]:
+        items = [i.strip() for i in v]
+        if not items:
+            raise ValueError("The checklist needs at least one item")
+        if len(items) > _MAX_ITEMS:
+            raise ValueError(f"The checklist is limited to {_MAX_ITEMS} items")
+        if any(not i for i in items):
+            raise ValueError("Checklist items cannot be blank")
+        if any(len(i) > _MAX_ITEM for i in items):
+            raise ValueError(f"Checklist items are limited to {_MAX_ITEM} characters")
+        return items
+
+
+@router.get("/stage-criteria")
+def list_stage_criteria(user=Depends(get_current_user)):
+    return stage_criteria.list_criteria()
+
+
+@router.put("/stage-criteria/{stage}")
+def put_stage_criteria(stage: str, body: StageCriteriaBody, user=Depends(require_admin)):
+    try:
+        return stage_criteria.set_criteria(stage, body.summary, body.checklist)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
+
+
+@router.delete("/stage-criteria/{stage}")
+def reset_stage_criteria(stage: str, user=Depends(require_admin)):
+    try:
+        return stage_criteria.reset_criteria(stage)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
