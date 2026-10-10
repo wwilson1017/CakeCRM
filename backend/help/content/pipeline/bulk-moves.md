@@ -41,5 +41,6 @@ skip the reason capture, so it refuses and points at `crm_mark_deal_won` and
 `crm_mark_deal_lost`.
 
 Note the difference from the interface: the Move to… menu in the app does list Won and Lost,
-and moving there in bulk closes those deals with no reason recorded. If the reason matters,
+and moving there in bulk closes those deals with no reason recorded. Deals moved into Won in
+bulk are dated today; correct a date afterwards on the deal itself. If the reason matters,
 close them one at a time.

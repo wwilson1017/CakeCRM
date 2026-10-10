@@ -323,7 +323,7 @@ def test_deal_update_omitted_contact_not_touched(client, monkeypatch):
     monkeypatch.setattr(service, "update_deal",
                         lambda did, **kw: seen.update(kw) or {"id": did})
     client.put("/api/crm/deals/5", json={"title": "Renamed"})
-    assert seen == {"title": "Renamed"}  # contact_id not sent → not in the update
+    assert seen == {"title": "Renamed", "actor_id": 1}  # contact_id not sent → not in the update
 
 
 def test_todo_update_can_clear_contact(client, monkeypatch):
@@ -543,7 +543,7 @@ def test_deal_update_unlink_company_explicit_null(client, monkeypatch):
                         lambda did, **kw: seen.update(kw) or {"id": did})
     resp = client.put("/api/crm/deals/1", json={"company_id": None})
     assert resp.status_code == 200
-    assert seen == {"company_id": None}
+    assert seen == {"company_id": None, "actor_id": 1}  # #279: who, if it dates a close
 
 
 def test_contact_update_omitted_company_id_not_sent(client, monkeypatch):
@@ -560,7 +560,7 @@ def test_deal_update_omitted_company_id_not_sent(client, monkeypatch):
     monkeypatch.setattr(service, "update_deal",
                         lambda did, **kw: seen.update(kw) or {"id": did})
     client.put("/api/crm/deals/1", json={"title": "D"})
-    assert "company_id" not in seen and seen == {"title": "D"}
+    assert "company_id" not in seen and seen == {"title": "D", "actor_id": 1}
 
 
 # ── AI touch counts + provenance (issue #16) — HTTP wiring through the ASGI stack ──
@@ -720,7 +720,7 @@ def test_bulk_move_returns_the_service_shape_verbatim(client, monkeypatch):
     seen = {}
     payload = {"ok": True, "updated": 2, "updated_ids": [1, 2], "errors": ["Deal 7 not found"]}
     monkeypatch.setattr(service, "bulk_move_deals",
-                        lambda ids, stage: seen.update(ids=ids, stage=stage) or payload)
+                        lambda ids, stage, **kw: seen.update(ids=ids, stage=stage) or payload)
     r = client.post("/api/crm/deals/bulk-move", json={"deal_ids": [1, 2, 7], "stage": "won"})
     assert r.status_code == 200
     assert r.json() == payload
@@ -731,7 +731,7 @@ def test_bulk_move_refusal_is_a_200_body_not_an_error_status(client, monkeypatch
     """The board's rejected-vs-unconfirmed split depends on this: only transport and
     5xx failures may throw at the client, so a refusal has to arrive as ok:false/200."""
     monkeypatch.setattr(service, "bulk_move_deals",
-                        lambda ids, stage: {"ok": False, "updated": 0, "updated_ids": [],
+                        lambda ids, stage, **kw: {"ok": False, "updated": 0, "updated_ids": [],
                                             "errors": ["Invalid stage: nope"]})
     r = client.post("/api/crm/deals/bulk-move", json={"deal_ids": [1], "stage": "nope"})
     assert r.status_code == 200
@@ -759,7 +759,7 @@ def test_bulk_move_refuses_ids_that_are_not_strictly_integers(client, monkeypatc
 def test_bulk_move_path_is_not_shadowed_by_the_deal_detail_route(client, monkeypatch):
     """"bulk-move" must reach the bulk handler, not POST /deals/{id}-style routing."""
     monkeypatch.setattr(service, "bulk_move_deals",
-                        lambda ids, stage: {"ok": True, "updated": 1, "updated_ids": [3], "errors": []})
+                        lambda ids, stage, **kw: {"ok": True, "updated": 1, "updated_ids": [3], "errors": []})
     r = client.post("/api/crm/deals/bulk-move", json={"deal_ids": [3], "stage": "lead"})
     assert r.status_code == 200 and r.json()["updated_ids"] == [3]
 
@@ -1203,3 +1203,33 @@ def test_an_overlong_archive_reason_is_rejected_not_truncated(client, monkeypatc
 def test_creating_an_archived_record_is_a_400(client, path):
     r = client.post(path, json={"name": "A", "status": "archived"})
     assert r.status_code == 400 and "already archived" in r.json()["detail"]
+
+
+# ── Closed on (#279) — the REST wiring ───────────────────────────────────────
+
+def test_deal_update_forwards_closed_on_and_the_actor(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "update_deal",
+                        lambda did, **kw: seen.update(kw) or {"id": did})
+    client.put("/api/crm/deals/7", json={"closed_on": "2026-10-01"})
+    assert seen == {"closed_on": "2026-10-01", "actor_id": 1}
+    seen.clear()
+    client.put("/api/crm/deals/7", json={"title": "T", "closed_on": None})
+    assert "closed_on" not in seen  # a null never reaches the service, so it cannot blank
+
+
+def test_deal_update_future_closed_on_is_a_400(client, monkeypatch):
+    def refuse(deal_id, **kw):
+        raise ValueError("Closed on cannot be in the future (today is 2026-10-10)")
+    monkeypatch.setattr(service, "update_deal", refuse)
+    r = client.put("/api/crm/deals/7", json={"stage": "won", "closed_on": "2026-10-11"})
+    assert r.status_code == 400 and "future" in r.json()["detail"]
+
+
+def test_bulk_move_forwards_closed_on_and_the_actor(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "bulk_move_deals",
+                        lambda ids, stage, **kw: seen.update(kw) or {"ok": True})
+    client.post("/api/crm/deals/bulk-move",
+                json={"deal_ids": [1], "stage": "won", "closed_on": "2026-10-01"})
+    assert seen == {"closed_on": "2026-10-01", "actor_id": 1}

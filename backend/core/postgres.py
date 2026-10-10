@@ -16,6 +16,8 @@ from pathlib import Path
 import psycopg2
 import psycopg2.pool
 
+from core.localtime import tz
+
 logger = logging.getLogger(__name__)
 
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
@@ -211,12 +213,19 @@ def run_migrations() -> None:
             applied = {row[0] for row in cur.fetchall()}
 
             sql_files = sorted(migrations_dir.glob("*.sql"))
+            # The install zone, for a migration that turns an instant into a calendar day
+            # (#279's closed_on backfill). A .sql file cannot read TIMEZONE, so zoneinfo
+            # picks the zone and each file's transaction gets it as the namespaced setting
+            # `cakecrm.timezone` — transaction-local and read by nothing else, so no other
+            # migration's semantics change and nothing leaks to the pooled session.
+            zone = tz().key
             for sql_file in sql_files:
                 if sql_file.name in applied:
                     continue
 
                 logger.info("Applying migration: %s", sql_file.name)
                 sql = sql_file.read_text(encoding="utf-8")
+                cur.execute("SELECT set_config('cakecrm.timezone', %s, true)", (zone,))
                 cur.execute(sql)
                 cur.execute(
                     "INSERT INTO _migrations_applied (filename) VALUES (%s)",

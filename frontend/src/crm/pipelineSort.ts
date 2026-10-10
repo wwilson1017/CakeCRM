@@ -37,7 +37,9 @@ const STATIC_SORT_FIELDS = [
   { value: 'touches', label: 'Touches', get: (d: CrmDeal) => num(d.ai_touch_count) },
   // A date-ONLY `YYYY-MM-DD` compares correctly with < / >, which is what sort.ts uses —
   // deliberately not localeCompare, whose ICU collation mis-orders ties.
-  { value: 'closeDate', label: 'Close date', get: (d: CrmDeal) => d.expected_close_date || null },
+  { value: 'closeDate', label: 'Forecasted close date', get: (d: CrmDeal) => d.expected_close_date || null },
+  // #279: date-only 'YYYY-MM-DD', so string order is day order.
+  { value: 'closedOn', label: 'Closed on', get: (d: CrmDeal) => d.closed_on || null },
   // `last_activity_at` does NOT get that treatment, and this reason is engine-independent: a
   // TIMESTAMPTZ is not lexicographically ordered, because the zone may be spelled `Z` or
   // `+00:00` and `Z` sorts after `+` — so the same instant written two ways compares unequal and

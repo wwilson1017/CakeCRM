@@ -43,7 +43,10 @@ PROVENANCE_FIELDS = {
     "contact": {"email", "phone", "company", "title", "tags", "notes"},
     # lost_reason joined in #22: when the assistant decides WHY a deal was lost, that
     # is a judgement worth a human's confirmation, and it feeds win/loss review.
-    "deal": {"stage", "value", "notes", "probability", "expected_close_date", "lost_reason"},
+    # closed_on joined in #279: a day the assistant says a deal closed is badged like any
+    # other value it wrote, so a human can see and confirm it.
+    "deal": {"stage", "value", "notes", "probability", "expected_close_date", "lost_reason",
+             "closed_on"},
 }
 VALID_SOURCES = {"assistant"}
 

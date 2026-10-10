@@ -93,7 +93,11 @@ _REFRESH_BATCH = 100
 PROVENANCE_NOTE_PREFIX = "Confirmed AI-populated value for "
 ARCHIVE_NOTE_PREFIX = "Archived — "
 RESTORE_NOTE = "Restored from archive."
-HOUSEKEEPING_NOTE_PREFIXES = (PROVENANCE_NOTE_PREFIX, ARCHIVE_NOTE_PREFIX, RESTORE_NOTE)
+# #279: every set, clear or edit of a deal's closed_on ("Closed on: none → 2026-10-01").
+CLOSED_ON_NOTE_PREFIX = "Closed on: "
+HOUSEKEEPING_NOTE_PREFIXES = (
+    PROVENANCE_NOTE_PREFIX, ARCHIVE_NOTE_PREFIX, RESTORE_NOTE, CLOSED_ON_NOTE_PREFIX,
+)
 assert all("%" not in p and "'" not in p for p in HOUSEKEEPING_NOTE_PREFIXES)
 
 

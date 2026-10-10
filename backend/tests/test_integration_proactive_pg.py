@@ -257,3 +257,27 @@ def test_collect_digest_reads_real_pipeline_numbers():
     assert summary["open_value"] == 2500.0
     assert summary["overdue_todos"] == 1
     assert [d["title"] for d in summary["top_deals"]] == ["Live"]
+
+
+def test_pipeline_analytics_dates_a_win_by_closed_on_when_recorded():
+    """#279: velocity reads the rep's Closed on day when there is one, else
+    the move into won. A win clicked 100 days ago but closed 5 days ago is in a 90-day
+    window; one clicked 5 days ago but closed 100 days ago is not; an undated one falls
+    back to its event. A Closed on day before the first event counts 0 days, never less."""
+    from core.postgres import pg_execute
+    from crm import analytics_service
+
+    pg_execute("INSERT INTO deals (id, title, stage, closed_on) VALUES "
+               "(11, 'Late click', 'won', current_date - 5), "
+               "(12, 'Backdated', 'won', current_date - 100), "
+               "(13, 'Undated', 'won', NULL)")
+    for did, first, won in ((11, 120, 100), (12, 30, 5), (13, 30, 10)):
+        pg_execute("INSERT INTO deal_stage_events (deal_id, old_stage, new_stage, changed_at) "
+                   "VALUES (%s, '', 'lead', now() - make_interval(days => %s)), "
+                   "(%s, 'lead', 'won', now() - make_interval(days => %s))",
+                   (did, first, did, won))
+
+    out = analytics_service.get_pipeline_analytics(window_days=90)
+    assert out["velocity"]["won_in_window"] == 2          # 11 and 13, not 12
+    # 11: closed 5 days ago, first event 120 days ago -> 115. 13: event-dated -> 20.
+    assert abs(out["velocity"]["avg_days_to_won"] - 67.5) < 0.6

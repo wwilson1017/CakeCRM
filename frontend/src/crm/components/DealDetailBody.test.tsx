@@ -14,6 +14,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CrmDeal } from '../../core/types';
+import { ymd } from '../pipelineFilters';
 import type { DealPatch } from './DealDetailBody';
 import type { DetailCloseGuard, DetailCloseReason, DetailRenderContext } from '../../shared/collection';
 
@@ -340,12 +341,12 @@ describe('the close guard', () => {
     setField('deal-log-note', 'Half-written');
 
     confirmDialog.mockResolvedValue(false);
-    click(buttonByText('Mark Won'));
+    await markWon();
     await settle();
     expect(props.onMarkWon).not.toHaveBeenCalled();
 
     confirmDialog.mockResolvedValue(true);
-    click(buttonByText('Mark Won'));
+    await markWon();
     await settle();
     expect(props.onMarkWon).toHaveBeenCalledTimes(1);
   });
@@ -393,6 +394,46 @@ describe('the inline save', () => {
     await settle();
     const [, patch] = (props.onSaveDeal as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(patch).toEqual({ expected_close_date: '' });
+  });
+
+  it('offers Closed on only while the form says Won, and edits it (#279)', async () => {
+    routeDetail(detailResponse({ stage: 'won', closed_on: '2026-09-01' }));
+    const props = render({ deal: makeDeal({ stage: 'won', closed_on: '2026-09-01' }) });
+    await settle();
+    click(buttonByText('Edit'));
+    expect(input('deal-closed-on')).toBeTruthy();
+    setField('deal-closed-on', '2026-08-15');
+    click(buttonByText('Save'));
+    await settle();
+    const [, patch] = (props.onSaveDeal as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch).toEqual({ closed_on: '2026-08-15' });
+  });
+
+  it('has no Closed on field on an open deal (#279)', async () => {
+    render({ deal: makeDeal({ stage: 'lead' }) });
+    await settle();
+    click(buttonByText('Edit'));
+    expect(input('deal-closed-on')).toBeNull();
+  });
+
+  it('refuses a blanked Closed on inline instead of dropping it (#279)', async () => {
+    routeDetail(detailResponse({ stage: 'won', closed_on: '2026-09-01' }));
+    const props = render({ deal: makeDeal({ stage: 'won', closed_on: '2026-09-01' }) });
+    await settle();
+    click(buttonByText('Edit'));
+    setField('deal-closed-on', '');
+    click(buttonByText('Save'));
+    await settle();
+    expect(container.textContent).toContain('Closed on cannot be blank');
+    expect(props.onSaveDeal).not.toHaveBeenCalled();
+  });
+
+  it('shows the Closed on day and the relabelled forecast on a won deal (#279)', async () => {
+    routeDetail(detailResponse({ stage: 'won', closed_on: '2026-09-01', expected_close_date: '2026-12-01' }));
+    render({ deal: makeDeal({ stage: 'won', closed_on: '2026-09-01', expected_close_date: '2026-12-01' }) });
+    await settle();
+    expect(container.textContent).toContain('Closed on2026-09-01');
+    expect(container.textContent).toContain('Forecasted close date2026-12-01');
   });
 
   it('unlinks a contact with null rather than dropping the key', async () => {
@@ -825,6 +866,15 @@ const dialogButton = (label: string) =>
   [...document.body.querySelectorAll('button')]
     .find(b => b.textContent?.trim() === label && !container.contains(b)) ?? null;
 
+/** #279: Mark Won opens the Closed on dialog; accept its default day when it opened. A refused
+ *  draft guard or a disabled button opens nothing, so there is nothing to confirm. */
+async function markWon() {
+  await click(buttonByText('Mark Won'));
+  await settle();
+  const confirm = dialogButton('Confirm');
+  if (confirm) await click(confirm);
+}
+
 describe('Mark Lost captures a reason', () => {
   it('opens the reason dialog instead of closing the deal immediately', async () => {
     routeDetail(detailResponse());
@@ -874,16 +924,34 @@ describe('Mark Lost captures a reason', () => {
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it('leaves Mark Won a direct, dialog-free stage change', async () => {
+  it('Mark Won asks which day the deal closed, defaulting to today (#279)', async () => {
     routeDetail(detailResponse());
     const props = render({ deal: makeDeal() });
     await settle();
     await click(buttonByText('Mark Won'));
     await settle();
 
-    // No reason argument at all, which is precisely what routes the write to the plain stage PUT
-    // rather than the mark-lost verb — a won deal has no reason to record.
-    expect(props.onMarkWon).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }));
+    // The dialog is up and nothing is written yet.
+    expect(document.body.querySelector('[role="dialog"] h2')?.textContent)
+      .toBe('When did this close?');
+    expect(props.onMarkWon).not.toHaveBeenCalled();
+
+    await click(dialogButton('Confirm'));
+    await settle();
+    // No reason argument — a won deal has none — and the dialog's default day, today.
+    expect(props.onMarkWon).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }), ymd(new Date()));
+  });
+
+  it('cancelling the Closed on dialog writes nothing (#279)', async () => {
+    routeDetail(detailResponse());
+    const props = render({ deal: makeDeal() });
+    await settle();
+    await click(buttonByText('Mark Won'));
+    await settle();
+    await click(dialogButton('Cancel'));
+    await settle();
+    expect(props.onMarkWon).not.toHaveBeenCalled();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it('disables the close-out pair while a slow write is in flight', async () => {
@@ -898,14 +966,14 @@ describe('Mark Lost captures a reason', () => {
     render({ deal: makeDeal(), onMarkWon });
     await settle();
 
-    await click(buttonByText('Mark Won'));
+    await markWon();
     expect(onMarkWon).toHaveBeenCalledTimes(1);
     expect((buttonByText('Mark Won') as HTMLButtonElement).disabled).toBe(true);
     expect((buttonByText('Mark Lost') as HTMLButtonElement).disabled).toBe(true);
 
     // A second click during the request must not reach the host. `disabled` is what enforces
     // that, which is also why it is asserted above rather than trusted.
-    await click(buttonByText('Mark Won'));
+    await markWon();
     expect(onMarkWon).toHaveBeenCalledTimes(1);
 
     // …and they come back once it settles, so a host that keeps the panel open after a FAILED
@@ -946,7 +1014,7 @@ describe('an ambiguous close reconciles before a retry', () => {
     await settle();
     expect(buttonByText('Mark Lost')).toBeTruthy();
 
-    await click(buttonByText('Mark Won'));
+    await markWon();
     await settle();
 
     // Not dismissed — the write failed as far as this client knows.
@@ -964,7 +1032,7 @@ describe('an ambiguous close reconciles before a retry', () => {
     const onClose = vi.fn();
     render({ deal: makeDeal({ stage: 'lead' }), onMarkWon, onClose });
     await settle();
-    await click(buttonByText('Mark Won'));
+    await markWon();
     await settle();
 
     expect(onClose).not.toHaveBeenCalled();
@@ -979,7 +1047,7 @@ describe('an ambiguous close reconciles before a retry', () => {
     const onClose = vi.fn();
     render({ deal: makeDeal({ stage: 'lead' }), onClose });
     await settle();
-    await click(buttonByText('Mark Won'));
+    await markWon();
     await settle();
 
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -1117,7 +1185,7 @@ describe('an exit in flight closes the door behind it', () => {
     render({ deal: makeDeal(), onMarkWon });
     await settle();
 
-    await click(buttonByText('Mark Won'));
+    await markWon();
     expect((buttonByText('Edit') as HTMLButtonElement).disabled).toBe(true);
 
     // ...and it comes back once the write settles, for a host that keeps the panel open.
@@ -1245,7 +1313,7 @@ describe('the quick-log row during an exit', () => {
       .find(b => b.textContent?.trim() === 'call') as HTMLButtonElement;
     expect(chip().disabled).toBe(false);
 
-    await click(buttonByText('Mark Won'));
+    await markWon();
     expect(chip().disabled).toBe(true);
 
     await act(async () => { release(); await inFlight; });
@@ -1291,7 +1359,7 @@ describe('an exit that outlives its own body', () => {
     const onClose = vi.fn();
     render({ deal: makeDeal(), onMarkWon, onClose });
     await settle();
-    await click(buttonByText('Mark Won'));
+    await markWon();
 
     act(() => root.render(<MemoryRouter><ActiveRecordProvider><span /></ActiveRecordProvider></MemoryRouter>));
     await act(async () => { release(); await inFlight; });
@@ -1333,7 +1401,7 @@ describe('under StrictMode', () => {
       );
     });
     await settle();
-    await click(buttonByText('Mark Won'));
+    await markWon();
     await settle();
 
     expect(onClose).toHaveBeenCalledTimes(1);

@@ -256,6 +256,42 @@
   on a DEAL reset its staleness clock (the deal-side twin of the contact bug #77 fixed).
   Stale deals, the Today panel, the nudges and Weekly Touches now agree with the contact
   side. A new housekeeping writer must build its text from those constants.
+  **Closed on (#279, port of cake_os #3642).** `deals.closed_on` is a nullable `DATE`: the
+  day a Won deal actually closed, distinct from `expected_close_date` (the forecast, now
+  labelled "Forecasted close date" everywhere; column, API field and the `closeDate` facet key
+  unchanged). **The one rule** is `service.closed_on_transition`: set when a deal ENTERS won,
+  cleared when it LEAVES won holding a date, untouched otherwise (won->won included, so a
+  re-marked win keeps its date). It lives in `_classify_deal_update`, so `mark_deal_won`,
+  `mark_deal_lost`, `update_deal`, `update_deal_stage` and `bulk_move_deals` all inherit it
+  with no per-writer SQL; `create_deal` dates a born-won deal itself. Upstream keys "clear"
+  on the destination because its archive path bypasses the movers; here an archived deal
+  cannot change stage at all, so keying on leaving won is equivalent and simpler. The day is
+  resolved (`resolve_closed_on`: strict `YYYY-MM-DD`, default `today_local()`, future refused)
+  BEFORE the lock. An explicit day with no transition is an EDIT, Won-only; `today` is only
+  ever a transition's default. `closed_on` is deliberately **outside `_DEAL_USER_WRITABLE`**:
+  `update_deal` pops it and hands it to `_write_deal_update(closed_on=…)`, so a PUT or
+  `crm_update_deal` can neither date an open deal nor blank a won one (null/"" = not
+  supplied). **The record is a housekeeping note**, not upstream's `field_change` row (there
+  are none here): `"Closed on: old → new"` under `scoring_service.CLOSED_ON_NOTE_PREFIX`, on
+  the writer's cursor, only when the stored day changes, authored by `actor_id` (REST user,
+  or the seat bound through `_identity_executors` like #239). **Backfill** is one statement in
+  the migration, dated in the install zone: `run_migrations` sets the transaction-local
+  `cakecrm.timezone` setting to `tz().key` before each file, which only that statement reads.
+  **Reports:** pipeline velocity dates a win by `closed_on` (local midnight via
+  `AT TIME ZONE` with zoneinfo's zone name) when present, else the move into won, and clamps a
+  same-day/backdated win at 0 days. Stage conversion needed no change: it buckets entries into
+  OPEN stages and reads the outcome from the current stage, so no win date enters it.
+  `get_analytics` and `TOUCH_AT_SQL` still date wins by the stage event (follow-ups).
+  **Frontend:** Mark Won opens `ClosedOnModal` (inside `DealDetailBody`, so the board,
+  dashboard and Weekly Touches share it); drags, bulk moves and the stage field don't prompt
+  and get today. The dialog's "today" is the VIEWER's day while the server refuses after the
+  INSTALL's day, an accepted edge for a team that shares a zone. `dealStageWrite.movedDeal`
+  is the optimistic mirror of the rule; the edit form edits the date only while Won and
+  refuses a blank inline (`crm/closedOn.ts`). The List view gains a Closed on column and the
+  facet panel a `closedOn` facet (no storage bump: adding a facet is not a shape change).
+  Divergences: no admin backfill route or `date_closed` source (no Odoo here); only
+  `crm_mark_deal_won` advertises `closed_on` (the stage-move and bulk tools refuse Won, #99);
+  no agent "on behalf of" message (the seat is bound instead).
   **The desktop board is bounded to the window** (#129) and is therefore ONE scroll region on
   both axes: `shared/dnd/useBoardScroller` writes its height so the bottom edge lands on the
   bottom of the visible area, the per-column `max-h-[70vh]` scrollport is gone (desktop only —

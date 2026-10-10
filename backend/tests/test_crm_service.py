@@ -736,7 +736,7 @@ def test_list_contacts_company_sort_uses_effective_name(rec):
 def test_update_deal_accepts_company_id(monkeypatch, rec, fake_conn):
     # Deal writes go through one transaction (issue #22: the stage event must land
     # with the UPDATE), so the UPDATE is on the raw cursor, not pg_execute.
-    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None)])
+    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None, None)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal(1, company_id=None)
     sql = next(s for s, _ in conn.executed if "UPDATE deals SET" in s)
@@ -978,14 +978,14 @@ def test_create_deal_scores_deal_and_contact(rec, score_spy):
 def test_update_deal_relink_scores_old_and_new_contact(monkeypatch, rec, fake_conn, score_spy):
     # contact_id in the update -> the funnel's FOR UPDATE row carries the old link (2);
     # the new link (5) rides in the update itself. Both rescore, new first.
-    fake_conn(monkeypatch, service, fetchone_results=[("lead", None, 2)])
+    fake_conn(monkeypatch, service, fetchone_results=[("lead", None, 2, None)])
     rec.fetchone_queue = [{"id": 1, "contact_id": 5}]  # get_deal after the funnel
     service.update_deal(1, contact_id=5)
     assert score_spy == [{"deal_ids": (1,), "contact_ids": (5, 2)}]
 
 
 def test_update_deal_stage_scores_deal_and_linked_contact(monkeypatch, rec, fake_conn, score_spy):
-    fake_conn(monkeypatch, service, fetchone_results=[("lead", None, 4)])
+    fake_conn(monkeypatch, service, fetchone_results=[("lead", None, 4, None)])
     rec.fetchone_queue = [{"id": 1, "contact_id": 4}]  # get_deal after the funnel
     service.update_deal_stage(1, "won")
     # No re-link in a stage move: slot 1 (the update's contact_id) is empty, the
@@ -996,7 +996,7 @@ def test_update_deal_stage_scores_deal_and_linked_contact(monkeypatch, rec, fake
 def test_mark_deal_won_scores_through_the_funnel(monkeypatch, rec, fake_conn, score_spy):
     # The #22 lifecycle verbs postdate #18 — the funnel hook is what guarantees they
     # rescore at all. Pin one so the hook can't silently move back into the callers.
-    fake_conn(monkeypatch, service, fetchone_results=[("negotiation", None, 7)])
+    fake_conn(monkeypatch, service, fetchone_results=[("negotiation", None, 7, None)])
     rec.fetchone_queue = [{"id": 3, "contact_id": 7}]
     service.mark_deal_won(3)
     assert score_spy == [{"deal_ids": (3,), "contact_ids": (None, 7)}]
@@ -1355,11 +1355,12 @@ def test_every_housekeeping_writer_matches_the_family_and_renders_without_a_perc
         "Confirmed AI-populated value for 'probability'.",  # provenance_service.confirm
         scoring_service.ARCHIVE_NOTE_PREFIX + "dupe",
         scoring_service.RESTORE_NOTE,
+        service._closed_on_note(None, "2026-10-01"),  # #279's Closed on set/clear/edit
     ]
     assert all(any(w.startswith(p) for p in scoring_service.HOUSEKEEPING_NOTE_PREFIXES)
                for w in written)
     rendered = scoring_service.not_housekeeping_sql("ch.message")
-    assert rendered.count("NOT starts_with(ch.message, '") == 3 and "%" not in rendered
+    assert rendered.count("NOT starts_with(ch.message, '") == 4 and "%" not in rendered
 
 
 def test_last_touch_excludes_housekeeping_notes_so_archiving_moves_no_clock():

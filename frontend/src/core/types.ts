@@ -47,6 +47,8 @@ export interface CrmDeal {
   value: number;
   notes: string;
   expected_close_date: string;
+  /** #279: the day a Won deal actually closed (YYYY-MM-DD); null until won, cleared when it leaves won. */
+  closed_on?: string | null;
   probability: number;
   currency: string;
   created_at: string;

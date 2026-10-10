@@ -453,7 +453,7 @@ def test_merge_deals_tool_wraps_validation_errors(monkeypatch):
 
 
 def test_lifecycle_tools_report_a_missing_deal(monkeypatch):
-    monkeypatch.setattr(service, "mark_deal_won", lambda d: None)
+    monkeypatch.setattr(service, "mark_deal_won", lambda d, **kw: None)
     monkeypatch.setattr(service, "mark_deal_lost", lambda d, lost_reason="": None)
     monkeypatch.setattr(service, "archive_deal", lambda d, archived=True, **kw: None)
     assert "error" in tools.crm_mark_deal_won(9)
@@ -466,7 +466,7 @@ def test_won_and_lost_record_provenance(monkeypatch):
     IS an 'AI set this field' event — same contract as crm_update_deal."""
     from crm import provenance_service
     recorded = []
-    monkeypatch.setattr(service, "mark_deal_won", lambda d: {"id": d, "stage": "won", "probability": 100})
+    monkeypatch.setattr(service, "mark_deal_won", lambda d, **kw: {"id": d, "stage": "won", "probability": 100})
     monkeypatch.setattr(provenance_service, "record_fields",
                         lambda et, eid, fields: recorded.append((et, eid, sorted(fields))))
     tools.crm_mark_deal_won(4)
@@ -508,7 +508,7 @@ def test_bulk_move_records_provenance_for_every_moved_deal(monkeypatch):
     from crm import provenance_service
     recorded = []
     monkeypatch.setattr(service, "bulk_move_deals",
-                        lambda ids, stage: {"ok": True, "updated": 2,
+                        lambda ids, stage, **kw: {"ok": True, "updated": 2,
                                             "updated_ids": [4, 9], "errors": []})
     monkeypatch.setattr(provenance_service, "record_fields",
                         lambda et, eid, fields: recorded.append((et, eid, sorted(fields))))
@@ -520,7 +520,7 @@ def test_bulk_move_badges_only_the_deals_that_actually_moved(monkeypatch):
     from crm import provenance_service
     recorded = []
     monkeypatch.setattr(service, "bulk_move_deals",
-                        lambda ids, stage: {"ok": True, "updated": 1, "updated_ids": [4],
+                        lambda ids, stage, **kw: {"ok": True, "updated": 1, "updated_ids": [4],
                                             "errors": ["Deal 9 not found"]})
     monkeypatch.setattr(provenance_service, "record_fields",
                         lambda et, eid, fields: recorded.append((et, eid)))
@@ -534,7 +534,7 @@ def test_bulk_move_passes_a_service_refusal_through_verbatim(monkeypatch):
     from crm import provenance_service
     refusal = {"ok": False, "updated": 0, "updated_ids": [],
                "errors": ["Invalid stage: nonsense"]}
-    monkeypatch.setattr(service, "bulk_move_deals", lambda ids, stage: refusal)
+    monkeypatch.setattr(service, "bulk_move_deals", lambda ids, stage, **kw: refusal)
     monkeypatch.setattr(provenance_service, "record_fields",
                         lambda *a: (_ for _ in ()).throw(AssertionError("badged a refusal")))
     assert tools.crm_bulk_move_deals([1], "nonsense") == refusal
@@ -543,7 +543,7 @@ def test_bulk_move_passes_a_service_refusal_through_verbatim(monkeypatch):
 def test_bulk_move_dedupes_ids_before_calling_the_service(monkeypatch):
     seen = []
     monkeypatch.setattr(service, "bulk_move_deals",
-                        lambda ids, stage: seen.append(ids) or {"ok": True, "updated": 0,
+                        lambda ids, stage, **kw: seen.append(ids) or {"ok": True, "updated": 0,
                                                                "updated_ids": [], "errors": []})
     tools.crm_bulk_move_deals([9, 5, 9], "qualified")
     assert seen == [[9, 5]]
@@ -787,11 +787,11 @@ def test_every_open_stage_still_reaches_the_service(monkeypatch):
     from crm import provenance_service
     seen = []
 
-    def fake_bulk(ids, stage):
+    def fake_bulk(ids, stage, **kw):
         seen.append(("bulk", stage))
         return {"ok": True, "updated": 0, "updated_ids": [], "errors": []}
 
-    def fake_single(deal_id, stage):
+    def fake_single(deal_id, stage, **kw):
         seen.append(("single", stage))
         return {"id": deal_id, "stage": stage}
 
@@ -810,11 +810,11 @@ def test_the_guard_refuses_ONLY_closed_stages_not_every_invalid_one(monkeypatch)
     deal. Widening the guard to the complement would break exactly this."""
     reached = []
 
-    def fake_single(deal_id, stage):
+    def fake_single(deal_id, stage, **kw):
         reached.append(("single", stage))
         return None  # the service's own "invalid stage" answer
 
-    def fake_bulk(ids, stage):
+    def fake_bulk(ids, stage, **kw):
         reached.append(("bulk", stage))
         return {"ok": False, "updated": 0, "updated_ids": [], "errors": [f"Invalid stage: {stage}"]}
 

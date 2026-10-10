@@ -20,6 +20,7 @@ archived deal is not "going stale", it is put away.
 
 import logging
 
+from core.localtime import tz
 from core.postgres import pg_fetchall, pg_fetchone
 from crm import gtd_common, provenance_service, scoring_service
 from crm.service import (
@@ -673,26 +674,36 @@ def get_pipeline_analytics(window_days: int = DEFAULT_ANALYTICS_WINDOW_DAYS) -> 
         (window_days,),
     )
 
+    # #279: velocity dates a win by its Closed on day when someone recorded one (reps
+    # backdate wins), else by the move into won. The DATE becomes an instant at local
+    # midnight; zoneinfo names the zone, Postgres only applies it. Conversion needs no
+    # such change: it buckets entries into OPEN stages and reads the outcome from the
+    # deal's current stage, so no win date enters it.
+    zone = tz().key
+
     # Velocity: deals won inside the window, and how long they took from their first
     # recorded stage event. Deals that predate the log have no first event, so they
-    # are simply absent — never counted with a fabricated start date.
+    # are simply absent — never counted with a fabricated start date. A Closed on day
+    # earlier than the first event (a same-day win, or a backdate) counts as 0 days.
     velocity_row = pg_fetchone(
         f"""
         SELECT COUNT(*) AS won_count,
-               AVG(EXTRACT(EPOCH FROM (won_at - first_at)) / 86400.0) AS avg_days_to_won
+               AVG(GREATEST(EXTRACT(EPOCH FROM (won_at - first_at)), 0) / 86400.0)
+                   AS avg_days_to_won
           FROM (
             SELECT e.deal_id,
                    MIN(e.changed_at) AS first_at,
-                   MAX(e.changed_at) FILTER (WHERE e.new_stage = 'won') AS won_at
+                   COALESCE(d.closed_on::timestamp AT TIME ZONE %s,
+                            MAX(e.changed_at) FILTER (WHERE e.new_stage = 'won')) AS won_at
               FROM deal_stage_events e
               JOIN deals d ON d.id = e.deal_id
              WHERE {LIVE_PREDICATE_D}
-             GROUP BY e.deal_id
+             GROUP BY e.deal_id, d.closed_on
           ) s
          WHERE won_at IS NOT NULL
            AND won_at >= now() - make_interval(days => %s)
         """,
-        (window_days,),
+        (zone, window_days),
     )
 
     history_row = pg_fetchone(

@@ -242,6 +242,9 @@ def seed_demo_data(conn) -> bool:
              _ts(3), _ts(3), None),
         ],
     )
+    # #279: the sample Won deals carry a Closed on date like any deal won in the app (the
+    # seed writes no stage events, so the migration's backfill has nothing to date them by).
+    cur.execute("UPDATE deals SET closed_on = updated_at::date WHERE stage = 'won'")
 
     # ── Todos ────────────────────────────────────────────────────────────────
     # `status`/`completed_at` are DERIVED from each row's `completed` flag rather than

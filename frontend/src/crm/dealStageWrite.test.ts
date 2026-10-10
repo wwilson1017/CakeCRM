@@ -7,7 +7,8 @@
 // give two reps materially different writes for the same gesture.
 import { describe, expect, it } from 'vitest';
 
-import { stageWriteRequest } from './dealStageWrite';
+import type { CrmDeal } from '../core/types';
+import { movedDeal, stageWriteRequest } from './dealStageWrite';
 
 const body = (init: RequestInit) => JSON.parse(init.body as string);
 
@@ -47,5 +48,28 @@ describe('stageWriteRequest', () => {
   it('never routes a non-lost stage to mark-lost, even carrying a reason', () => {
     const { path } = stageWriteRequest(7, 'won', 'ignored');
     expect(path).toBe('/api/crm/deals/7');
+  });
+});
+
+describe('Closed on (#279)', () => {
+  it('a Mark Won PUT carries the chosen day; other moves never do', () => {
+    expect(body(stageWriteRequest(7, 'won', undefined, '2026-10-01').init))
+      .toEqual({ stage: 'won', closed_on: '2026-10-01' });
+    expect(body(stageWriteRequest(7, 'won').init)).toEqual({ stage: 'won' });
+    expect(body(stageWriteRequest(7, 'qualified', undefined, '2026-10-01').init))
+      .toEqual({ stage: 'qualified' });
+  });
+
+  it('movedDeal mirrors the server rule: set into won, clear out of won, else untouched', () => {
+    const base = { id: 1, title: 't', value: 0, probability: 0, expected_close_date: '' } as CrmDeal;
+    const T = '2026-10-10';
+    expect(movedDeal({ ...base, stage: 'lead' }, 'won', '2026-10-01', T).closed_on).toBe('2026-10-01');
+    expect(movedDeal({ ...base, stage: 'lead' }, 'won', undefined, T).closed_on).toBe(T);
+    expect(movedDeal({ ...base, stage: 'won', closed_on: '2026-09-01' }, 'lead', undefined, T).closed_on)
+      .toBeNull();
+    expect(movedDeal({ ...base, stage: 'won', closed_on: '2026-09-01' }, 'won', '2026-10-01', T).closed_on)
+      .toBe('2026-09-01');
+    expect(movedDeal({ ...base, stage: 'lead', closed_on: null }, 'qualified', undefined, T))
+      .toEqual({ ...base, stage: 'qualified', closed_on: null });
   });
 });

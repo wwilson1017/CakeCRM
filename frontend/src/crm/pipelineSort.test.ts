@@ -32,6 +32,7 @@ describe('absent values sort as null, never 0 or empty string', () => {
     ['score', deal({ id: 1, lead_score: null })],
     ['touches', deal({ id: 1, ai_touch_count: null })],
     ['closeDate', deal({ id: 1, expected_close_date: '' })],
+    ['closedOn', deal({ id: 1, closed_on: null })],
     ['lastActivity', deal({ id: 1, last_activity_at: null })],
     ['owner', deal({ id: 1, owner_id: null })],
   ];
@@ -102,7 +103,7 @@ describe('list columns and sort fields cannot drift', () => {
     const keys = buildPipelineListColumns(() => 'x').map(c => c.key);
     expect(keys).toEqual([
       'title', 'temperature', 'company', 'stage', 'value', 'probability', 'score', 'touches',
-      'closeDate', 'lastActivity', 'owner',
+      'closeDate', 'closedOn', 'lastActivity', 'owner',
     ]);
   });
 });

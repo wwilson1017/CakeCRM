@@ -168,9 +168,15 @@ export function buildPipelineListColumns(
     },
     {
       key: 'closeDate',
-      header: 'Close date',
+      header: 'Forecasted close',
       className: 'hidden md:table-cell',
       render: d => shortDate(d.expected_close_date),
+    },
+    {
+      key: 'closedOn',
+      header: 'Closed on',
+      className: 'hidden lg:table-cell',
+      render: d => shortDate(d.closed_on),
     },
     {
       key: 'lastActivity',

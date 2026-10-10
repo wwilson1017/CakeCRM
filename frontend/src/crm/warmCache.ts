@@ -29,7 +29,8 @@ export type WarmTab = 'pipeline' | 'contacts' | 'companies';
  * cached rows would render in today's UI. Deliberately NOT the build id: a per-build version would
  * empty every cache on each deploy. The rule is recorded in `docs/agents/list-pages.md`.
  */
-export const WARM_SCHEMA_VERSION = 1;
+// 2: #279 added `closed_on` to the board's `CrmDeal`.
+export const WARM_SCHEMA_VERSION = 2;
 export const WARM_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**

@@ -6,6 +6,9 @@
  * so they cannot drift about which one a Mark Lost uses.
  */
 
+import type { CrmDeal } from '../core/types';
+import { ymd } from './pipelineFilters';
+
 /** The request a stage change should issue: a path plus `api()`'s options. */
 export interface StageWriteRequest {
   path: string;
@@ -30,6 +33,7 @@ export function stageWriteRequest(
   dealId: number,
   stage: string,
   lostReason?: string,
+  closedOn?: string,
 ): StageWriteRequest {
   if (stage === 'lost' && lostReason !== undefined) {
     return {
@@ -39,6 +43,24 @@ export function stageWriteRequest(
   }
   return {
     path: `/api/crm/deals/${dealId}`,
-    init: { method: 'PUT', body: JSON.stringify({ stage }) },
+    init: {
+      method: 'PUT',
+      // #279: Mark Won carries the day the Closed on dialog chose; the server records it.
+      body: JSON.stringify(stage === 'won' && closedOn ? { stage, closed_on: closedOn } : { stage }),
+    },
   };
+}
+
+/**
+ * The row a board paints before the server answers a stage move (#279) — the client mirror
+ * of `service.closed_on_transition`: a move INTO won takes the chosen day (else today, the
+ * server's default), a move OUT of won clears it, anything else leaves it alone.
+ */
+export function movedDeal(
+  deal: CrmDeal, stage: string, closedOn?: string, today: string = ymd(new Date()),
+): CrmDeal {
+  if (stage === deal.stage) return { ...deal, stage };
+  if (stage === 'won') return { ...deal, stage, closed_on: closedOn || today };
+  if (deal.stage === 'won') return { ...deal, stage, closed_on: null };
+  return { ...deal, stage };
 }

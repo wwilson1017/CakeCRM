@@ -72,7 +72,9 @@ import {
 } from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { OPEN_STAGES, STAGE_COLORS, STAGE_ORDER } from '../constants';
+import { closedOnEditError } from '../closedOn';
 import { dealDeepLink } from '../dealDeepLink';
+import { ymd } from '../pipelineFilters';
 import {
   companyLabelOf, companyNameOf, companySublabelOf, contactLabelOf, contactSublabelOf,
   createCompany, createContact, recordId, searchCompanies, searchContacts,
@@ -85,6 +87,7 @@ import { ActivityTimeline } from './ActivityTimeline';
 import { AiTouchDetail } from './AiTouchDetail';
 import { ScorePill } from './badges';
 import { CustomFieldsSection } from './CustomFieldsSection';
+import { ClosedOnModal } from './ClosedOnModal';
 import { LostReasonModal } from './LostReasonModal';
 import { RecordCombobox } from './RecordCombobox';
 import { NotesThread } from './NotesThread';
@@ -101,7 +104,7 @@ import { ProvenanceBadge } from './ProvenanceBadge';
  */
 export type DealPatch = Partial<Pick<CrmDeal,
   'title' | 'value' | 'contact_id' | 'company_id' | 'owner_id'
-  | 'expected_close_date' | 'probability' | 'notes' | 'stage'
+  | 'expected_close_date' | 'probability' | 'notes' | 'stage' | 'closed_on'
   // Issue #125. Not a form field — the temperature is written by its own one-click control,
   // here and on the board, so it never joins `formFields` or the dirty comparison. It is in
   // this type because it travels the same `writeDeal` PUT as everything else.
@@ -113,6 +116,8 @@ interface DealFormState {
   value: string;
   probability: string;
   expected_close_date: string;
+  /** #279: the day a Won deal closed. Editable only while the form's stage is Won. */
+  closed_on: string;
   notes: string;
   contact_id: number | null;
   company_id: number | null;
@@ -132,7 +137,7 @@ interface DealFormState {
 function formFields(f: DealFormState) {
   return {
     title: f.title, stage: f.stage, value: f.value, probability: f.probability,
-    expected_close_date: f.expected_close_date, notes: f.notes,
+    expected_close_date: f.expected_close_date, closed_on: f.closed_on, notes: f.notes,
     contact_id: f.contact_id, company_id: f.company_id, owner_id: f.owner_id,
   };
 }
@@ -150,6 +155,7 @@ function toDealForm(deal: CrmDeal): DealFormState {
     value: deal.value == null ? '' : String(deal.value),
     probability: deal.probability == null ? '' : String(deal.probability),
     expected_close_date: deal.expected_close_date ?? '',
+    closed_on: deal.closed_on ?? '',
     notes: deal.notes ?? '',
     contact_id: deal.contact_id ?? null,
     company_id: deal.company_id ?? null,
@@ -172,6 +178,11 @@ function buildPatch(form: DealFormState, baseline: DealFormState, stageWritable:
   // columns and drops it for everything else, so a null here would be a silent no-op.
   if (form.expected_close_date !== baseline.expected_close_date) {
     patch.expected_close_date = form.expected_close_date;
+  }
+  // #279: only while the form says Won (the server refuses it on any other stage), and never
+  // blank — the server cannot blank it; `closedOnEditError` refuses the attempt visibly.
+  if (form.stage === 'won' && form.closed_on && form.closed_on !== baseline.closed_on) {
+    patch.closed_on = form.closed_on;
   }
   if (form.notes !== baseline.notes) patch.notes = form.notes;
   if (form.contact_id !== baseline.contact_id) patch.contact_id = form.contact_id;
@@ -317,11 +328,18 @@ function DealEditForm({
             onChange={e => onChange({ probability: e.target.value })} style={inputStyle} />
         </div>
         <div>
-          <label style={labelStyle} htmlFor="deal-close">Expected Close</label>
+          <label style={labelStyle} htmlFor="deal-close">Forecasted close date</label>
           <input id="deal-close" type="date" value={form.expected_close_date}
             onChange={e => onChange({ expected_close_date: e.target.value })} style={inputStyle} />
         </div>
       </div>
+      {form.stage === 'won' && (
+        <div>
+          <label style={labelStyle} htmlFor="deal-closed-on">Closed on</label>
+          <input id="deal-closed-on" type="date" max={ymd(new Date())} value={form.closed_on}
+            onChange={e => onChange({ closed_on: e.target.value })} style={inputStyle} />
+        </div>
+      )}
       <div>
         <label style={labelStyle} htmlFor="deal-notes">Notes</label>
         <textarea id="deal-notes" value={form.notes} rows={2}
@@ -414,7 +432,7 @@ interface Props {
   ctx: DetailRenderContext;
   /** May return a promise; this body AWAITS it, which is what keeps the close-out pair disabled
    *  for the whole write (#128). A host that resolves synchronously is unaffected. */
-  onMarkWon: (deal: CrmDeal) => void | Promise<void>;
+  onMarkWon: (deal: CrmDeal, closedOn: string) => void | Promise<void>;
   /** `lostReason` is present ONLY for a Mark Lost taken through the reason dialog — a string,
    *  possibly empty. Every other close leaves it undefined, which is what tells the host to use
    *  the plain stage PUT rather than the mark-lost verb (see `crm/dealStageWrite.ts`). */
@@ -475,6 +493,8 @@ export function DealDetailBody({
   const [logging, setLogging] = useState(false);
   // Mark Lost opens the reason dialog instead of closing the deal immediately (issue #128).
   const [askingLostReason, setAskingLostReason] = useState(false);
+  // #279: Mark Won asks which day the deal actually closed.
+  const [askingClosedOn, setAskingClosedOn] = useState(false);
   // A close-out is in flight. The two hosts dismiss differently — the pipeline clears its
   // selection only once the write succeeds, while a refusal keeps the panel open so the user can
   // retry — so without this the buttons stay live during the request, and a second Mark Lost
@@ -712,6 +732,8 @@ export function DealDetailBody({
       setFormError('Still creating a linked record — one moment.');
       return;
     }
+    const closedOnError = closedOnEditError(form, baseline, ymd(new Date()));
+    if (closedOnError) { setFormError(closedOnError); return; }
     const patch = buildPatch(form, baseline, stageEditable);
     if (Object.keys(patch).length === 0) { setEditing(false); return; }
     setSaving(true);
@@ -784,10 +806,10 @@ export function DealDetailBody({
    * open when the write fails (the dashboard does) would otherwise leave the user unable to retry
    * the close they just watched fail.
    */
-  async function closeOut(toStage: 'won' | 'lost', lostReason?: string) {
+  async function closeOut(toStage: 'won' | 'lost', lostReason?: string, closedOn?: string) {
     setClosing(true);
     try {
-      if (toStage === 'won') await onMarkWon(record);
+      if (toStage === 'won') await onMarkWon(record, closedOn ?? ymd(new Date()));
       else await onMarkLost(record, lostReason);
       // Written. The deal is closed, so the panel goes — see `onClose` for why that decision is
       // made HERE. A refused or failed write rejects instead, and the host has already said so.
@@ -845,7 +867,7 @@ export function DealDetailBody({
   // The dialog half is defence in depth behind its focus trap: this panel stays a live DOM subtree
   // underneath, and Mark Won sitting one stray Tab away from an open Mark Lost dialog is a wrong
   // write, not just an a11y lapse.
-  const closeOutDisabled = closing || askingLostReason;
+  const closeOutDisabled = closing || askingLostReason || askingClosedOn;
   // An exit this body started is in flight. While it is, the body accepts NO new draft: the host
   // dismisses the panel when the write settles, and the close guard already ran — at click time,
   // before any such draft existed — so anything typed underneath would be discarded in silence.
@@ -876,7 +898,7 @@ export function DealDetailBody({
           <>
             <button
               type="button"
-              onClick={() => void leaveVia(() => { void closeOut('won'); })}
+              onClick={() => void leaveVia(() => setAskingClosedOn(true))}
               disabled={closeOutDisabled}
               style={{
                 ...actionButtonStyle, background: SAGE_FILL, color: ON_STATUS,
@@ -1080,10 +1102,11 @@ export function DealDetailBody({
               </div>
             )}
             <Row
-              label="Expected Close"
+              label="Forecasted close date"
               value={record.expected_close_date}
               badge={badge('expected_close_date')}
             />
+            <Row label="Closed on" value={record.closed_on ?? ''} badge={badge('closed_on')} />
           </div>
         </>
       )}
@@ -1133,6 +1156,16 @@ export function DealDetailBody({
             // ALWAYS a string, never undefined — that is what routes this to the mark-lost verb
             // even when the rep left the box empty. See `crm/dealStageWrite.ts`.
             void closeOut('lost', reason);
+          }}
+        />
+      )}
+      {askingClosedOn && (
+        <ClosedOnModal
+          dealTitle={record.title}
+          onCancel={() => setAskingClosedOn(false)}
+          onConfirm={day => {
+            setAskingClosedOn(false);
+            void closeOut('won', undefined, day);
           }}
         />
       )}
