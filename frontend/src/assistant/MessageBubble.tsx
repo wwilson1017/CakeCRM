@@ -17,7 +17,8 @@ import {
   SAGE_TEXT,
 } from '../shared/styles';
 import { MarkdownContent } from './MarkdownContent';
-import type { ChatMessage, PendingConfirmation, ToolCallInfo } from './types';
+import type { ChatMessage, PendingConfirmation, ToolCallInfo, WorkingState } from './types';
+import { WorkingIndicator } from './WorkingIndicator';
 
 function summarize(value: unknown): string {
   if (value == null) return '';
@@ -142,10 +143,13 @@ function ConfirmationCard({
 
 export function MessageBubble({
   message,
+  working = null,
   onApprove,
   onDeny,
 }: {
   message: ChatMessage;
+  /** The in-flight turn's state when this is its bubble (#282). */
+  working?: WorkingState | null;
   onApprove: (msgId: string, toolUseId: string) => void;
   onDeny: (msgId: string, toolUseId: string) => void;
 }) {
@@ -176,7 +180,7 @@ export function MessageBubble({
         <IconBot size={16} />
       </div>
       <div style={{ minWidth: 0, flex: 1 }}>
-        {empty && message.streaming ? (
+        {empty && message.streaming && !working ? (
           <span style={{ color: INK_SOFT, fontSize: 14 }}>…</span>
         ) : (
           message.content && <MarkdownContent content={message.content} />
@@ -194,6 +198,7 @@ export function MessageBubble({
             onDeny={() => onDeny(message.id, c.toolUseId)}
           />
         ))}
+        {working && <WorkingIndicator working={working} />}
       </div>
     </div>
   );

@@ -194,6 +194,11 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # #282: stop this process's detached chat turns with the true reason ("the server
+        # was restarting") while the pool is still up, so their last flush can commit. A
+        # turn that outlives the 5 s grace is judged dead by the next reader.
+        from assistant.turns import runner as turn_runner
+        await turn_runner.shutdown()
         # Stop the scheduler (waiting for an in-flight tick) BEFORE closing the
         # pool, so a running tick never loses the Postgres pool under it. The
         # Telegram poller stops next — a tick's notification delivery goes through

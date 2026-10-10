@@ -99,4 +99,25 @@ export interface ServerMessage {
   content: string;
   tool_calls?: ServerToolCall[] | null;
   model?: string;
+  created_at?: string;
+}
+
+// Detached turns (#282) --------------------------------------------------------
+
+/** What the in-flight turn is doing, for the bubble's working indicator. `startedAt` is
+ *  the SERVER's clock (`turn_start` / `running_turn.started_at`), so the elapsed time
+ *  survives a reattach and a reload. */
+export interface WorkingState {
+  phase: 'model' | 'writing' | 'tool' | 'reconnecting' | 'stopping';
+  tool?: string;
+  startedAt: number;
+  /** The assistant bubble the turn is streaming into. */
+  messageId: string;
+}
+
+/** `GET /api/assistant/conversations/{id}`'s `running_turn`: a turn still running server-side. */
+export interface RunningTurn {
+  turn_id: string;
+  started_at: string;
+  last_seq: number;
 }

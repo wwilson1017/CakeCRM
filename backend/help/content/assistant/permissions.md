@@ -33,6 +33,19 @@ Two: admin and member. Both get Baker. The role governs install configuration, n
 see `settings/team`. The server enforces it either way; Baker knowing the difference only
 makes its advice correct, never more permissive.
 
+## Leaving mid-answer
+
+Closing the tab, locking your phone or losing the connection does not stop a reply Baker is
+working on: the turn keeps running on the server and the panel picks it back up when you
+return, showing what Baker is doing and how long it has been at it. Switching to another
+conversation or starting a new chat also leaves it running — reopen that conversation to watch
+it finish.
+
+A turn you started keeps the mode and tools you started it with; it does not become one of the
+unattended turns below. To end it, press Stop. Baker stops at its next step; a step that was
+already running when you pressed it can still complete. The conversation then shows exactly
+what was saved.
+
 ## Unattended turns
 
 Baker also runs on a schedule with nobody watching, for the daily digest and nudges. There

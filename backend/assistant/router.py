@@ -9,17 +9,22 @@ Bearer header, which a browser EventSource cannot set).
   POST   /api/assistant/chat                  — stream a turn (SSE); {} messages = continuation;
                                                  optional validated `context` (open CRM record, #14)
                                                  and `page` (open settings section, #200)
-  POST   /api/assistant/chat/upload           — same, multipart (payload + files)
+  POST   /api/assistant/chat/upload           — same, multipart (payload + files + turn_id)
+  GET    /api/assistant/turns/:id/events      — replay a detached turn's frames after ?after=N,
+                                                 then tail it (#282)
+  POST   /api/assistant/turns/:id/cancel      — Stop a detached turn (#282)
   POST   /api/assistant/confirm               — approve/deny a pending write (idempotent)
   GET    /api/assistant/conversations         — list (own only)
-  GET    /api/assistant/conversations/:id     — one conversation with messages (own only)
+  GET    /api/assistant/conversations/:id     — one conversation with messages (own only),
+                                                 plus `running_turn` when a turn is still live
   DELETE /api/assistant/conversations/:id     — delete (own only)
   PATCH  /api/assistant/conversations/:id/title — rename (own only)
 
 Conversations are **owner-only, with no admin override** (issue #191) — the one place
 the product access-controls a record rather than merely attributing it. Every path that
 can reach a conversation from a seat is scoped to that seat: the four endpoints above,
-``/chat``'s resume of a supplied ``conversation_id``, and ``/confirm``'s claim. A
+``/chat``'s resume of a supplied ``conversation_id``, ``/confirm``'s claim, and the two turn
+routes (a turn is visible only to the seat that started it — ``assistant/turns.py``). A
 conversation owned by someone else answers exactly as one that does not exist — 404,
 never 403 — so the API is not an existence oracle for other people's threads.
   GET    /api/assistant/identity              — fixed name + personality
@@ -36,7 +41,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
-from assistant import engine, history, identity, uploads
+from assistant import engine, history, identity, turns, uploads
 from assistant.registry import ToolRegistry
 from core.auth import get_current_user, require_admin
 from providers import get_ai_provider
@@ -112,6 +117,9 @@ class ChatRequest(BaseModel):
     tool_mode: str = "normal"
     context: ChatContext | None = None
     page: PageContext | None = None
+    # #282: the client-minted id of this turn (a UUID), so Stop and reattach have a key
+    # before the first frame arrives. Missing or malformed -> the server mints one.
+    turn_id: str | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -147,6 +155,17 @@ def _require_provider():
     return provider
 
 
+async def _start_turn(turn_id, user: dict, chat):
+    """Run the turn detached (#282) and stream it to this request. ``chat()`` is the
+    route's own ``engine.chat(...)`` call, deferred so a re-sent id attaches instead of
+    starting a second turn."""
+    try:
+        stream = await turns.runner.start(turn_id=turn_id, user_id=user["id"], chat=chat)
+    except turns.TurnNotFound:
+        raise HTTPException(status_code=404, detail="Turn not found.")
+    return StreamingResponse(stream, media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
 @router.post("/chat")
 async def chat(req: ChatRequest, user=Depends(get_current_user)):
     if not req.messages and not req.conversation_id:
@@ -156,20 +175,20 @@ async def chat(req: ChatRequest, user=Depends(get_current_user)):
     # (issue #8), so build it off the event loop. `user` is what carries the caller's
     # seat into the tool layer (issue #190).
     registry = await asyncio.to_thread(ToolRegistry, user=user)
-    stream = engine.chat(
+    return await _start_turn(req.turn_id, user, lambda: engine.chat(
         provider, registry, req.messages,
         tool_mode=req.tool_mode, conversation_id=req.conversation_id,
         context=req.context.model_dump() if req.context else None,
         page=req.page.model_dump() if req.page else None,
         user=user,
-    )
-    return StreamingResponse(stream, media_type="text/event-stream", headers=_SSE_HEADERS)
+    ))
 
 
 @router.post("/chat/upload")
 async def chat_upload(
     payload: str = Form(...),
     files: list[UploadFile] = File(default=[]),
+    turn_id: str | None = Form(None),
     user=Depends(get_current_user),
 ):
     try:
@@ -252,12 +271,46 @@ async def chat_upload(
             tool_mode = "normal"
 
     registry = await asyncio.to_thread(ToolRegistry, user=user)
-    stream = engine.chat(
+    return await _start_turn(turn_id, user, lambda: engine.chat(
         provider, registry, messages,
         tool_mode=tool_mode, conversation_id=conversation_id, title_hint=original_text,
         context=context, page=page, user=user,
+    ))
+
+
+# ── Detached turns (#282): reattach and Stop ───────────────────────────────
+
+async def _visible_turn(turn_id: str, user: dict) -> dict:
+    """404 — never 403 — unless this seat started the turn (conversations are owner-only,
+    #191, so the starter is the only reader). An unreachable turn log is a 503, never a
+    404: a 404 sends the client to its fallback for good, a 503 only makes it retry."""
+    try:
+        row = await turns.runner.visible_turn(turn_id, user_id=user["id"])
+    except Exception:
+        logger.warning("assistant: turn lookup failed", exc_info=True)
+        raise HTTPException(status_code=503, detail="Turn log unavailable — try again.")
+    if not row:
+        raise HTTPException(status_code=404, detail="Turn not found.")
+    return row
+
+
+@router.get("/turns/{turn_id}/events")
+async def attach_turn(turn_id: str, after: int = Query(-1), user=Depends(get_current_user)):
+    """Replay a turn's committed frames after ``after``, then tail it to the end."""
+    await _visible_turn(turn_id, user)
+    return StreamingResponse(
+        turns.runner.attach(turn_id, after), media_type="text/event-stream", headers=_SSE_HEADERS,
     )
-    return StreamingResponse(stream, media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+@router.post("/turns/{turn_id}/cancel")
+async def cancel_turn(turn_id: str, user=Depends(get_current_user)):
+    await _visible_turn(turn_id, user)
+    try:
+        return {"cancelled": await turns.runner.request_cancel(turn_id, turns.STOP_REASON)}
+    except Exception:
+        logger.warning("assistant: could not record a Stop", exc_info=True)
+        raise HTTPException(status_code=503, detail="Could not stop the turn — try again.")
 
 
 # ── Confirmation (server-authoritative, idempotent) ────────────────────────
@@ -291,10 +344,15 @@ def list_conversations(limit: int = Query(50), offset: int = Query(0), user=Depe
 
 @router.get("/conversations/{conv_id}")
 def get_conversation(conv_id: str, user=Depends(get_current_user)):
+    # #282: a turn still running here, so a fresh open can attach to it. Looked up BEFORE
+    # the read: it judges a stale turn dead, and that outcome belongs in this response.
+    # Never raises; None when the turn log is unreachable.
+    running = turns.runner.running_turn_for(conv_id)
     conv = history.get_conversation(conv_id, user_id=user["id"])
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found.")
     conv["messages"] = [_message_for_ui(m) for m in conv.get("messages", [])]
+    conv["running_turn"] = running
     return conv
 
 

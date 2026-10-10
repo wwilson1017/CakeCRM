@@ -2,7 +2,8 @@
 //
 // Self-contained, compact-panel-sized unit that #9's AssistantLauncher mounts
 // into its panel body. Assumes ai_ready === true (the launcher only renders it
-// when a provider is configured) and self-manages conversations + streaming.
+// when a provider is configured) and self-manages conversations + streaming. A turn
+// keeps running server-side when the panel lets go of it (#282); Stop is what ends it.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -117,7 +118,7 @@ export default function AssistantPanelBody({
   const openConversation = async (id: string) => {
     setShowHistory(false);
     const conv = await fetchConversation(id);
-    if (conv) chat.loadMessages(conv.messages, conv.id);
+    if (conv) chat.loadMessages(conv.messages, conv.id, conv.running_turn ?? null);
   };
 
   const meterPct = useMemo(() => {
@@ -175,7 +176,13 @@ export default function AssistantPanelBody({
           </div>
         ) : (
           chat.messages.map((m) => (
-            <MessageBubble key={m.id} message={m} onApprove={chat.approveAction} onDeny={chat.denyAction} />
+            <MessageBubble
+              key={m.id}
+              message={m}
+              working={chat.working?.messageId === m.id ? chat.working : null}
+              onApprove={chat.approveAction}
+              onDeny={chat.denyAction}
+            />
           ))
         )}
         <div ref={endRef} />

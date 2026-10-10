@@ -579,3 +579,53 @@
   rather than `false`, which would invite the turn to say "go link a chat" about one that
   may already exist. The bot-config half and the seat half are read in SEPARATE
   try/excepts, so a failed per-seat read cannot blank the install-wide fact beside it.
+
+- **Detached turns (#282, port of cake_os #3629 — `backend/assistant/turns.py`).** A Baker
+  turn outlives the browser that started it. `POST /chat` and `/chat/upload` hand
+  `engine.chat(...)` to `turns.runner`, which drives it as a task the server owns and gives
+  every frame a `seq`; the client mints the `turn_id` (a UUID in the JSON body, and a
+  separate `turn_id` form field on an upload; invalid or missing → minted server-side). A
+  re-sent id never starts a second turn: the same seat attaches to the first, anyone else
+  gets 404. **Two delivery paths, never merged:** the starting POST tails an in-memory
+  queue (every frame at once); every other reader — `GET /turns/{id}/events?after=N`, and
+  `running_turn` on `GET /conversations/{id}` (looked up BEFORE the read, so a stale turn it
+  judges is reflected in the same response) — polls ONLY the committed log in
+  `chat_turns` / `chat_turn_events`. **One writer, one transaction per flush** (150 ms):
+  frames + lease (`heartbeat_at`) + conversation id, and on the last flush the final status,
+  so a non-running row always has its terminal frame committed with it; the origin gets its
+  terminal frame only after that commit (or after one failed attempt — then the turn is
+  judged dead later rather than hanging the response). **Lifecycle rule:** the engine is
+  untouched and the turn runs the very `ToolRegistry(user=user)` and `tool_mode` the route
+  built — a detached turn is still a user-initiated turn with the user's tool set, NOT an
+  unattended one, so the background-turn restrictions neither apply nor change. Stop
+  (`POST /turns/{id}/cancel`) and lifespan shutdown cancel the task with a reason → `done
+  stopped:true` (a tool already in a worker thread may still finish). A lease older than
+  60 s is judged dead by any reader or by the 60 s `maintenance_tick` sweep → `error
+  dead_turn:true`, in one transaction with the status flip; a turn this process still owns
+  is never judged (one worker: a local task is alive however long Postgres was down). Stop
+  and death add NO transcript row — the engine already saved every completed iteration;
+  the in-progress one is lost as it was before. **One authz rule:** the row stores the
+  starting seat's `user_id`; both turn routes answer 404 (never 403) to anyone else —
+  conversations are owner-only (#191), so starter = only reader — and an unreachable log is
+  a 503, never a 404. Rows are transport, pruned 24 h after the turn ends, and NOT in
+  `crm.service._truncate_all` (assistant data, like `assistant_conversations`). If the
+  `chat_turns` insert fails the route falls back to the pre-#282 attached stream (no
+  `turn_start`, no `seq`, not reattachable) — the DB-free router tests ride that path.
+  **Frontend (`useAssistantChat.ts`):** one `ActiveTurn` per turn; dedupe by `seq`; a stream
+  that ends without a terminal frame, goes silent 45 s after `turn_start`, or closes on a
+  `reattach` frame reopens the log from `after=<last seq>` at once, then 0.5 s doubling to
+  8 s, no attempt budget, parked while hidden/offline. The "connection ended" note is taken
+  ONLY when the server does not know the turn (4xx other than 408/429, or a 200 that is not
+  `text/event-stream`). Stop = cancel (retried each second) + follow to the terminal frame,
+  one 10 s timer bounding all of it + one conversation read. New chat, switching threads
+  and unmount DETACH; reopening a thread with a `running_turn` attaches from `seq -1`,
+  hiding that turn's saved rows by `created_at >= started_at` (display only — the turn ends
+  with one conversation read that replaces the panel). Every loop checks `isLive(turn)`
+  after each await before writing state. Streamed text flushes on a 50 ms timer while the
+  tab is hidden. `WorkingIndicator` shows the phase and `m:ss` from the server's
+  `started_at`. Deliberately not ported: multi-instance lease handoff and the pause fence,
+  log redaction (no private-tool concept; the log's only reader is the owner), the saved
+  stop/dead-turn note, `status` frames, the completion-claim guard. Tests:
+  `test_assistant_turns.py` (memory twin), `test_assistant_turn_routes.py`,
+  `test_assistant_turns_pg.py` (integration), `useAssistantChat.reattach.test.tsx`,
+  `WorkingIndicator.test.tsx`.
