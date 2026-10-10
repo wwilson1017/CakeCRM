@@ -26,7 +26,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => vi.fn());
 vi.mock('../core/api/client', () => ({ api }));
-const currentUser = vi.hoisted(() => ({ value: { id: 7 } as { id: number } | null }));
+const currentUser = vi.hoisted(() => ({ value: { id: 7 } as { id: number; email?: string } | null }));
 vi.mock('../core/auth/AuthContext', () => ({
   useAuth: () => ({ logout: vi.fn(), isAdmin: true, currentUser: currentUser.value }),
 }));
@@ -41,9 +41,16 @@ vi.mock('./components/NotificationsBell', () => ({ NotificationsBell: () => null
 vi.mock('./components/AssistantLauncher', () => ({ AssistantLauncher: () => null }));
 vi.mock('./components/BrandLogo', () => ({ BrandLogo: () => null }));
 vi.mock('./components/ThemeToggle', () => ({ ThemeToggle: () => null }));
+const purgeForeignWarm = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('./warmCache', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./warmCache')>()),
+  purgeForeignWarm,
+}));
 
 const { CrmLayout } = await import('./CrmLayout');
 const { useSetTodoMode, useTodoMode } = await import('./gtd/TodoModeContext');
+const { WarmViewerContext } = await import('./warmCache');
+const { useContext } = await import('react');
 import type { TodoMode } from './gtd/TodoModeContext';
 
 let container: HTMLDivElement;
@@ -52,6 +59,7 @@ let root: Root;
 beforeEach(() => {
   api.mockReset();
   resyncPushSubscription.mockReset();
+  purgeForeignWarm.mockClear();
   currentUser.value = { id: 7 };
   // jsdom ships no matchMedia, and useIsMobile calls it on mount. Stubbed per-file
   // rather than in a shared setup file, per the repo's "opt in per test file" rule.
@@ -261,5 +269,38 @@ describe('CrmLayout push-subscription self-heal (issue #192)', () => {
     currentUser.value = { id: 9 };
     await renderLayout();
     expect(resyncPushSubscription).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('CrmLayout and the warm cache (#281)', () => {
+  function Viewer() {
+    return <span data-testid="viewer">{useContext(WarmViewerContext) ?? 'none'}</span>;
+  }
+  async function renderWithViewer() {
+    api.mockRejectedValue(new Error('offline'));
+    await act(async () => root.render(
+      <MemoryRouter initialEntries={['/crm']}>
+        <Routes>
+          <Route path="/crm" element={<CrmLayout />}>
+            <Route index element={<Viewer />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    ));
+  }
+  const viewer = () => container.querySelector('[data-testid="viewer"]')?.textContent;
+
+  it("purges other users' entries and hands the pages the signed-in email", async () => {
+    currentUser.value = { id: 7, email: 'ana@example.com' };
+    await renderWithViewer();
+    expect(purgeForeignWarm).toHaveBeenCalledWith('ana@example.com');
+    expect(viewer()).toBe('ana@example.com');
+  });
+
+  it('purges nothing while the account is not yet known, which would wipe the arriving user', async () => {
+    currentUser.value = null;
+    await renderWithViewer();
+    expect(purgeForeignWarm).not.toHaveBeenCalled();
+    expect(viewer()).toBe('none');
   });
 });

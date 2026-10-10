@@ -74,6 +74,8 @@ export class SweepSupersededError extends Error {
 export async function sweepPipelineDeals(
   includeArchived: boolean,
   isCurrent: () => boolean = () => true,
+  /** Cancels the page in flight too (#281's warm-up queue; the board itself passes none). */
+  signal?: AbortSignal,
 ): Promise<CrmDeal[]> {
   const all: CrmDeal[] = [];
   let afterId: number | null = null;
@@ -87,7 +89,9 @@ export async function sweepPipelineDeals(
     // Per-page timeout, like the hook's: flaky Wi-Fi HANGS rather than fails, and a sweep
     // that stalls on page 3 must not pin the board's spinner forever.
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PAGE_TIMEOUT_MS);
+    const abort = () => controller.abort();
+    const timer = setTimeout(abort, PAGE_TIMEOUT_MS);
+    signal?.addEventListener('abort', abort);
     let data: PipelineDealsPage;
     try {
       data = await api<PipelineDealsPage>(`/api/crm/deals?${params}`, {
@@ -95,6 +99,7 @@ export async function sweepPipelineDeals(
       });
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
     }
 
     // The server was asked for one row more than a page holds, so an over-long response IS

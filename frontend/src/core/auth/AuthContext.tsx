@@ -23,6 +23,8 @@ import {
   type ReactNode,
 } from 'react';
 import { TOKEN_KEY } from './tokenUtils';
+// A dependency-free leaf (#281), so the CRM page graph stays out of the shell chunk.
+import { wipeWarm } from '../../crm/warmStore';
 
 const CHANNEL_NAME = 'cakecrm_auth';
 
@@ -106,6 +108,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (result === 'invalid') {
           // Definitively dead — this is the only case that discards the token.
           sessionStorage.removeItem(TOKEN_KEY);
+          // ...and the CRM rows cached under it (#281).
+          void wipeWarm();
           setIsLoggedIn(false);
         } else if (result === 'unknown') {
           // Backend unreachable or erroring. Keep the token so the session survives
@@ -134,6 +138,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setCurrentUser(user);
         } else if (e.data?.type === 'logout') {
           sessionStorage.removeItem(TOKEN_KEY);
+          // The signing-out tab wiped the shared store already; this bumps THIS tab's epoch so a
+          // sweep still running here cannot write its rows back afterwards.
+          void wipeWarm();
           setIsLoggedIn(false);
           setCurrentUser(null);
         }
@@ -181,6 +188,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     sessionStorage.removeItem(TOKEN_KEY);
+    // CRM rows cached in this browser must not outlive the session that fetched them (#281).
+    void wipeWarm();
     setIsLoggedIn(false);
     setCurrentUser(null);
 

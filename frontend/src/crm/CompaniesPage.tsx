@@ -6,9 +6,8 @@
  * routed page rather than moving into the layer's modal shell. See ContactsPage's header
  * for why.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api } from '../core/api/client';
 import type { CrmCompany } from '../core/types';
 import { CompanyDetailPage } from './CompanyDetailPage';
 import { CompanyForm } from './components/CompanyForm';
@@ -23,6 +22,8 @@ import { makeCompaniesCollectionConfig } from './collectionConfig';
 import { buildCompanyColumns } from './listColumns';
 import { useCrmCorpus, type CrmCorpus } from './usePatchableAssembly';
 import { RefreshButton } from './components/RefreshButton';
+import { WarmStatus } from './components/WarmStatus';
+import { fetchCompanyRows } from './warmQueue';
 
 const COMPANY_COLUMNS = buildCompanyColumns();
 const NO_ROWS: CrmCompany[] = [];
@@ -34,11 +35,10 @@ export function CompaniesPage() {
   const { options: owners, loading: usersLoading } = useOwnerOptions();
 
   const corpus = useCrmCorpus<CrmCompany>(
-    useCallback(async (params, signal) => {
-      const res = await api<{ companies: CrmCompany[] }>(`/api/crm/companies?${params}`, { signal });
-      return res.companies;
-    }, []),
+    fetchCompanyRows,
     id === undefined,
+    // #281: the last complete sweep is cached per user, so the page opens on rows.
+    'companies',
   );
   const { upsert, remove, retry } = corpus;
 
@@ -58,6 +58,7 @@ export function CompaniesPage() {
         </div>
       </div>
 
+      <WarmStatus savedAt={corpus.savedAt} failed={corpus.refreshFailed} onRetry={retry} />
       {usersLoading
         ? <p style={{ ...mono(12), color: INK_DIM }}>Loading…</p>
         : <CompaniesCollection corpus={corpus} owners={owners} />}
