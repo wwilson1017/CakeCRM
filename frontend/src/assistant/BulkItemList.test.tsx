@@ -6,7 +6,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { BulkItemList, COLLAPSED_ROWS, bulkItems } from './BulkItemList';
+import { BulkItemList } from './BulkItemList';
+import { COLLAPSED_ROWS, bulkItems } from './bulkItems';
 
 let container: HTMLDivElement;
 let root: Root;

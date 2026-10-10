@@ -7,14 +7,7 @@
 import { useState } from 'react';
 
 import { ACCENT_TEXT, INK, INK_SOFT } from '../shared/styles';
-
-export const COLLAPSED_ROWS = 20;
-
-/** The items of an args object whose `todos` is an array, or null for any other call. */
-export function bulkItems(args: Record<string, unknown> | undefined): unknown[] | null {
-  const todos = args?.todos;
-  return Array.isArray(todos) ? todos : null;
-}
+import { COLLAPSED_ROWS } from './bulkItems';
 
 function describe(item: unknown): { title: string; detail: string } {
   if (!item || typeof item !== 'object') return { title: String(item ?? ''), detail: '' };

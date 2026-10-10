@@ -16,7 +16,8 @@ import {
   LINE,
   SAGE_TEXT,
 } from '../shared/styles';
-import { BulkItemList, bulkItems } from './BulkItemList';
+import { BulkItemList } from './BulkItemList';
+import { bulkItems } from './bulkItems';
 import { MarkdownContent } from './MarkdownContent';
 import type { ChatMessage, PendingConfirmation, ToolCallInfo, WorkingState } from './types';
 import { WorkingIndicator } from './WorkingIndicator';
