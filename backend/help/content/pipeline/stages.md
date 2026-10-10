@@ -1,7 +1,7 @@
 ---
 title: Pipeline stages
 description: The six deal stages, how a deal moves between them, and why Won and Lost are hidden by default.
-aliases: pipeline, stages, kanban, board, deals, won, lost, drag, close a deal, closed on, filters, hidden columns
+aliases: pipeline, stages, kanban, board, won, lost, close a deal, closed on, filters, hidden columns, stage criteria, stage checklist
 admin: false
 ---
 ## The six stages
@@ -11,6 +11,24 @@ the open stages; won and lost are the closed ones.
 
 There is no preset probability per stage. A new deal starts at 0% unless you set one. Closing
 a deal is the exception: winning sets it to 100, losing sets it to 0.
+
+## Stage checklists, and your own criteria
+
+Every stage has a short summary and a checklist of what it takes for a deal to belong there.
+
+- **Hover** a stage name on the board for a quick look.
+- **Click** it to pin the checklist in a small panel at the bottom-right of the screen (a sheet
+  at the bottom on a phone). The panel does not block anything: the board keeps scrolling, and
+  you can still drag and open deals while you work down the list. Click another stage name to
+  switch, or the same one to close it. The **×**, a click anywhere on the panel, or Escape
+  close it too, and it closes by itself if you hide that stage's column.
+
+CakeCRM ships a **standard** set of criteria for every stage. An admin can replace any stage's
+summary and checklist with your own: pin the stage, press **Edit**, change the summary, and add,
+remove or reorder checklist lines, then **Save**. The panel shows **Standard** or **Custom** so
+everyone can tell which they are reading. **Reset to standard** puts a customised stage back.
+Members see the criteria but not the Edit control. Your own criteria are replaced by the
+standard ones when the CRM is reset or its sample data is cleared.
 
 ## Won and Lost are hidden by default
 

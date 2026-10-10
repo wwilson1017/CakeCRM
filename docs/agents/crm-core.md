@@ -1150,6 +1150,36 @@
   deals it exists to surface. The proactive digest's own top list
   (`proactive.collect_digest`, by `lead_score`) is a different question and is untouched.
 
+- **Stage checklists: pinned panel + an install's own criteria** (#289; half 1 ports upstream
+  #3633). Hovering a stage name peeks at its checklist (desktop only, portaled to `<body>` at a
+  `fixed` position from the name's rect, because the board's `overflow` scroller clips anything
+  absolute — the reason the pre-#289 checklist expanded INLINE and pushed the cards down; the
+  peek drops on any scroll rather than float away from its name). A click pins it as
+  `components/StageCriteriaPanel`: `role="dialog"` with NO `aria-modal`, no backdrop, no scroll
+  lock, no focus trap, so the board keeps scrolling, dragging and opening deals. One panel per
+  board (`pinnedStage` in `PipelinePage`; same stage again closes, another swaps); ×, a click
+  anywhere on it and Escape close it, and it closes for good when its column leaves the screen
+  (hidden, faceted out, filtered to nothing, list view). It sits at z 38 — under the deal sheet
+  (39), the launcher (40) and modals — docked bottom-right above `LAUNCHER_CLEARANCE_PX`, a
+  half-height sheet on a phone. **Escape yields to any other on-screen dialog**, because the
+  deal sheet closes on Escape without `preventDefault`, so without that one key would close
+  both. Half 2 is new on both sides: the **standard** copy is
+  `backend/crm/stage_criteria_standard.json`, its one home — the server merges it, the frontend
+  no longer bundles it, and `stageCriteria.test.ts` reads the JSON to keep pinning stage coverage
+  and vertical-neutral wording. An override is one `crm_stage_criteria` row (`stage` PK,
+  `summary`, `checklist` JSONB); `GET /api/crm/stage-criteria` returns all six stages in board
+  order with `source: standard|custom`, `PUT`/`DELETE /stage-criteria/{stage}` are
+  `require_admin` (pinned in `test_route_authz`), and the router trims BEFORE it validates so
+  whitespace cannot pass a length check. The table joins BOTH `_truncate_all` branches, as the
+  issue specified (a reset returns the board to the standard checklists), but stays out of
+  `is_crm_empty` — it is configuration, and counting it would suppress the sample-data prompt.
+  Edit and Reset show only to admins (`useAuth().isAdmin`, the Settings `adminOnly` rule).
+  While editing, click-anywhere and Escape do not close the panel (both would discard typing);
+  ×, Cancel and swapping stage are the explicit exits and drop the draft. The board fetches the
+  merged set once per mount; until it lands a stage name is a plain label. **Follow-up, not
+  built:** a Baker `crm_get_stage_criteria` read tool, so the assistant can answer "does this
+  deal belong in Proposal?" from the install's own criteria.
+
 - **Never build a `Date` from a TIMESTAMPTZ with the bare constructor** — use
   `crm/gtd/util.parseUTC` (#125). Two reasons, and the one this was originally filed under is
   **false**, recorded here so nobody re-derives it: every such column is written from

@@ -17,7 +17,7 @@ import { formatDate } from '../shared/formatDate';
 import { toast } from '../shared/toast';
 import type { DealTemperature } from './dealTemperature';
 import {
-  INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, BG_CARD, BG_ELEV, BG_PAGE, ACCENT, ACCENT_TEXT, SHADOW,
+  INK, INK_MUTE, INK_DIM, LINE, LINE_STRONG, BG_CARD, BG_PAGE, ACCENT, ACCENT_TEXT,
   FONT_DISPLAY, mono, formatNumber, inputStyle, tint,
 } from '../shared/styles';
 import { pageHeading, btnPrimary, btnSecondary, btnSmall, stageCard, LAUNCHER_CLEARANCE_PX } from './styles';
@@ -36,7 +36,8 @@ import { CORPUS_MAX_AGE_MS } from './usePatchableAssembly';
 import { archivedSelectionIncludesArchived, makePipelineCollectionConfig } from './pipelineCollection';
 import { buildPipelineListColumns } from './components/pipelineListColumns';
 import StageChipBar from './components/StageChipBar';
-import { STAGE_CRITERIA } from './stageCriteria';
+import { fetchStageCriteria, type StageCriteriaEntry, type StageCriteriaMap } from './stageCriteria';
+import { StageCriteriaPanel, StageCriteriaPeek } from './components/StageCriteriaPanel';
 import { applicableBulkIds } from './bulkSelection';
 import {
   DEAL_DEEP_LINK_PARAM, deepLinkVerdict, parseDealDeepLinkId,
@@ -115,6 +116,27 @@ export function PipelinePage() {
   const location = useLocation();
   const isMobile = useIsMobile();
   const { users, nameFor } = useUsers();
+
+  // Stage criteria (#289): the merged standard-or-custom set, fetched once per mount — it is six
+  // small entries. Until it lands (or if it fails) a stage name is a plain label, not a button.
+  const [stageCriteria, setStageCriteria] = useState<StageCriteriaMap>({});
+  useEffect(() => {
+    let live = true;
+    fetchStageCriteria().then(m => { if (live) setStageCriteria(m); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+  const onCriteriaSaved = useCallback(
+    (entry: StageCriteriaEntry) => setStageCriteria(m => ({ ...m, [entry.stage]: entry })),
+    [],
+  );
+  // The pinned checklist (#289, upstream #3633): ONE for the whole board, so it lives here rather
+  // than in each header. Local UI state only — never persisted; leaving the route unmounts it.
+  const [pinnedStage, setPinnedStage] = useState<string | null>(null);
+  const togglePinnedStage = useCallback(
+    (stage: string) => setPinnedStage(cur => (cur === stage ? null : stage)),
+    [],
+  );
+  const closePinnedStage = useCallback(() => setPinnedStage(null), []);
 
   // Per-stage column visibility (issue #74). Client state, unlike the blueprint's `stages.hidden`
   // column — CakeCRM's stages are the STAGE_ORDER constants, so there is no row to persist to.
@@ -1277,6 +1299,14 @@ export function PipelinePage() {
   // match your filters." — two different explanations for one blank screen.
   const filteredToNothing = items.length > 0 && state.isFiltering && state.visibleItems.length === 0;
 
+  // The pinned stage's column left the screen — hidden, faceted out, filtered to nothing, or the
+  // board swapped for the list view: close the panel for good, rather than have it reappear when
+  // the column comes back. Set during render (React's "adjust state on a prop change" pattern).
+  const boardOnScreen = state.view === 'kanban' && items.length > 0 && !filteredToNothing;
+  if (pinnedStage !== null && !(boardOnScreen && columns.some(c => c.id === pinnedStage))) {
+    setPinnedStage(null);
+  }
+
   // Open-pipeline $/count reflect the visible set so the header describes what's shown (the
   // toolbar's own "N of M deals" readout signals when a filter is narrowing the board) — minus
   // archived deals, which are visible but are not open pipeline (issue #83).
@@ -1714,6 +1744,10 @@ export function PipelinePage() {
                 selectedIds={bulkSelected}
                 onToggleColumn={toggleColumn}
                 onHide={() => onToggleStage(stageToggleKey(col.data.stage), false)}
+                criteria={stageCriteria[col.data.stage]}
+                pinned={pinnedStage === col.data.stage}
+                onTogglePin={togglePinnedStage}
+                peek={!isMobile}
               />
               {children}
             </div>
@@ -1757,6 +1791,17 @@ export function PipelinePage() {
 
       {/* Create only — editing a deal is inline in the detail panel now. */}
       {showCreate && <DealForm onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); load(); }} />}
+
+      {pinnedStage && stageCriteria[pinnedStage] && (
+        <StageCriteriaPanel
+          // Keyed by stage, so swapping to another stage starts clean (no stale edit draft).
+          key={pinnedStage}
+          entry={stageCriteria[pinnedStage]}
+          isMobile={isMobile}
+          onClose={closePinnedStage}
+          onSaved={onCriteriaSaved}
+        />
+      )}
     </div>
   );
 }
@@ -1834,7 +1879,7 @@ const stopCardInteraction = {
 
 const checkboxStyle = { accentColor: ACCENT, width: 14, height: 14, cursor: 'pointer', flexShrink: 0 };
 
-function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onToggleColumn, onHide, sticky = false }: {
+export function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onToggleColumn, onHide, sticky = false, criteria, pinned = false, onTogglePin, peek = true }: {
   stage: string; count: number; total: number;
   columnDealIds?: number[];
   selectedIds?: ReadonlySet<number>;
@@ -1842,20 +1887,33 @@ function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onT
   onHide?: () => void;
   /** Pin the header while the BOARD scrolls vertically (issue #129, desktop only). */
   sticky?: boolean;
+  /** This stage's merged criteria (#289); absent until the fetch lands, and then a plain label. */
+  criteria?: StageCriteriaEntry;
+  /** This stage's checklist is the pinned panel — its own hover peek would duplicate it. */
+  pinned?: boolean;
+  onTogglePin?: (stage: string) => void;
+  /** Hover quick look. Off on touch, where a tap pins directly. */
+  peek?: boolean;
 }) {
   const color = STAGE_COLORS[stage]?.fill || INK_DIM;
   const selectedHere = selectedIds ? columnDealIds.filter(id => selectedIds.has(id)).length : 0;
   const allSelected = columnDealIds.length > 0 && selectedHere === columnDealIds.length;
-  const [showCriteria, setShowCriteria] = useState(false);
-  const criteria = STAGE_CRITERIA[stage];
-
-  // Escape closes the popover, matching every other dismissible surface in the CRM.
+  // The hover peek's anchor rect while it is open. A short close delay lets the pointer cross from
+  // the name into the peek (which is portaled, so it is not a DOM child of this header).
+  const [peekAt, setPeekAt] = useState<DOMRect | null>(null);
+  const closeTimer = useRef<number | undefined>(undefined);
+  const holdPeek = () => window.clearTimeout(closeTimer.current);
+  const dropPeek = () => { holdPeek(); closeTimer.current = window.setTimeout(() => setPeekAt(null), 120); };
+  useEffect(() => () => window.clearTimeout(closeTimer.current), []);
+  // The peek is placed from a rect measured on hover, so any scroll would leave it floating
+  // away from its stage name: drop it instead.
   useEffect(() => {
-    if (!showCriteria) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowCriteria(false); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [showCriteria]);
+    if (!peekAt) return;
+    const onScroll = () => setPeekAt(null);
+    window.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    return () => window.removeEventListener('scroll', onScroll, { capture: true });
+  }, [peekAt]);
+  const showPeek = peek && !pinned && peekAt !== null && criteria !== undefined;
 
   return (
     // Sticky since #129, because the desktop board scrolls vertically and this header sits above
@@ -1889,16 +1947,24 @@ function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onT
           />
         )}
         <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: color }} />
-        {criteria ? (
+        {criteria && onTogglePin ? (
           <button
             type="button"
-            onClick={() => setShowCriteria(v => !v)}
-            aria-expanded={showCriteria}
-            title={`What belongs in ${stageLabel(stage)}?`}
+            aria-expanded={pinned}
+            aria-label={`${stageLabel(stage)} stage checklist`}
+            onMouseEnter={e => { holdPeek(); setPeekAt(e.currentTarget.getBoundingClientRect()); }}
+            onMouseLeave={dropPeek}
+            onClick={() => {
+              // Drop the peek too: a tap fires an emulated mouseenter that would otherwise leave
+              // it open under the panel, to reappear on close.
+              holdPeek();
+              setPeekAt(null);
+              onTogglePin(stage);
+            }}
             style={{
               fontFamily: FONT_DISPLAY,
               fontSize: 15, letterSpacing: '-0.01em',
-              color: INK, cursor: 'help', padding: 0,
+              color: INK, cursor: 'pointer', padding: 0,
               background: 'none', border: 'none',
               borderBottom: `1px dashed ${LINE_STRONG}`,
             }}
@@ -1923,27 +1989,8 @@ function StageHeader({ stage, count, total, columnDealIds = [], selectedIds, onT
           >×</button>
         )}
       </div>
-      {showCriteria && criteria && (
-        // Rendered INLINE rather than absolutely positioned: the board is a horizontal
-        // `overflow-x: auto` scroller, which clips an absolutely-positioned popover no matter
-        // what z-index it carries. Expanding the header instead is immune to that.
-        <div style={{
-          marginTop: 8, padding: 12, borderRadius: 6,
-          background: BG_ELEV, border: `1px solid ${LINE_STRONG}`,
-          boxShadow: `0 8px 40px ${SHADOW}`,
-        }}>
-          <p style={{ fontSize: 12, color: INK_MUTE, margin: 0, lineHeight: 1.5 }}>{criteria.summary}</p>
-          <p style={{ fontSize: 12, color: INK, margin: '10px 0 6px', fontWeight: 500 }}>
-            Criteria to enter this stage:
-          </p>
-          <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {criteria.checklist.map(item => (
-              <li key={item} style={{ fontSize: 12, color: INK_MUTE, lineHeight: 1.45, display: 'flex', gap: 6 }}>
-                <span style={{ color: INK_DIM, flexShrink: 0 }}>☐</span>{item}
-              </li>
-            ))}
-          </ul>
-        </div>
+      {showPeek && peekAt && criteria && (
+        <StageCriteriaPeek stage={stage} criteria={criteria} anchor={peekAt} onEnter={holdPeek} onLeave={dropPeek} />
       )}
     </div>
   );

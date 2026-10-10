@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { STAGE_CRITERIA } from './stageCriteria';
 import { STAGE_ORDER } from './constants';
+import type { StageCriteria } from './stageCriteria';
+// The standard copy's single home since #289: the server merges it with an install's own
+// overrides, so it lives beside the backend and this test reads it from there.
+import STANDARD from '../../../backend/crm/stage_criteria_standard.json';
+
+const STAGE_CRITERIA: Record<string, StageCriteria> = STANDARD;
 
 describe('STAGE_CRITERIA covers exactly the stages the board renders', () => {
   it('every stage has a summary and a non-empty checklist', () => {
