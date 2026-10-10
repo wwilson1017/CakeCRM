@@ -1,7 +1,7 @@
 ---
 title: Pipeline stages
 description: The six deal stages, how a deal moves between them, and why Won and Lost are hidden by default.
-aliases: pipeline, stages, kanban, board, deals, won, lost, drag, close a deal, filters, hidden columns
+aliases: pipeline, stages, kanban, board, deals, won, lost, drag, close a deal, closed on, filters, hidden columns
 admin: false
 ---
 ## The six stages
@@ -38,9 +38,26 @@ so a closed deal never vanishes without explanation.
 
 Use the explicit close actions rather than dragging into Won or Lost:
 
-- `crm_mark_deal_won` sets the stage to won and the probability to 100.
+- `crm_mark_deal_won` sets the stage to won and the probability to 100, and records the
+  day it closed (closed on, default today).
 - `crm_mark_deal_lost` sets the stage to lost and the probability to 0, records the reason,
   and writes the reason into the deal's notes thread.
+
+## The Closed on date
+
+When a deal is won, the day it actually closed is kept as its **Closed on** date. The forecasted
+close date is a guess; this is the fact, and wins are often recorded a few days late. The Mark Won
+action asks for it: the day defaults to today, an earlier day is fine, and a future day is
+refused. Any other way into Won (a drag, a bulk move, the stage field) records today.
+
+The date shows on the deal, in the List view's Closed on column, and in the **Closed on**
+filter. While a deal is Won you can correct it in the edit form, but you cannot blank it.
+Moving the deal out of Won clears it, and winning it again asks again. Every change leaves a
+"Closed on: old → new" note in the deal's notes thread. To fix a won deal's date, tell Baker the
+real day; `crm_mark_deal_won` with the corrected day fixes it. Pipeline velocity reports date a
+win by its Closed on day when there is one.
+
+## Capturing a lost reason
 
 In the interface, the Mark Lost action opens a dialog for the reason. **Only that action
 captures a reason.** Dragging a card into Lost, moving it in bulk, or changing the stage
@@ -54,7 +71,7 @@ clears the reason, so a reopened deal does not carry a stale one.
 
 ## What a card shows
 
-Title, value, the linked contact, probability if it is set, and the expected close date if
+Title, value, the linked contact, probability if it is set, and the forecasted close date if
 there is one — plus a lead score, an estimated touch count, and a temperature icon you can
 click through. On a **Won** card those three are replaced by when that account was last
 contacted, because after the sale the question changes from "is this closing" to "has this
@@ -62,15 +79,17 @@ gone quiet".
 
 ## Deal fields
 
-Value and a currency code, an expected close date, a probability, notes, and links to a
+Value and a currency code, a forecasted close date (the rep's guess), a Closed on date once
+won, a probability, notes, and links to a
 contact and a company. Currency is free text and everything else in the app sums as though
 one currency is in use — the company report is the one place that declines to add different
 currencies together.
 
 ## Filtering the board
 
-Six facets: **stage**, **owner** (including an Unassigned bucket), **value** range, **close
-date** (overdue, next 7 days, this month, no date), **deal activity** (active within 7 or 30
+Facets include **stage**, **owner** (including an Unassigned bucket), **value** range,
+**forecasted close date** (overdue, next 7 days, this month, no date), **closed on** (last 7
+days, this month, last month, or Won deals with no date yet), **deal activity** (active within 7 or 30
 days, silent 30+ days, nothing logged) and **archived**. Filters are remembered per browser
 tab. Dragging still works while a filter is on, because a drop only assigns a stage and never
 a position.
