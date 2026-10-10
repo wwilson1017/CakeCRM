@@ -4,7 +4,8 @@ Four independent scheduler jobs, split by one rule: bounded local SQL rides
 ``maintenance_tick``; network- or AI-bound work gets its OWN job, so a hung request
 never stalls the others.
   * ``maintenance_tick()`` (every 60s): stamps ``heartbeat_state.last_tick_at`` and
-    drives #5's dreaming pass and #18's lead-score refresh. Keyless — no AI turn, no
+    drives #5's dreaming pass, #18's lead-score refresh and #282's chat-turn sweep
+    (judge turns whose lease lapsed, prune turn logs a day old). Keyless — no AI turn, no
     network, so it always runs (locally too).
   * ``heartbeat_turn_tick()`` (every few minutes, throttled to ~30 min): runs ONE
     system heartbeat AI turn — env-gated (off locally) and provider-gated.
@@ -51,7 +52,7 @@ def maintenance_tick() -> dict:
     pg_execute("UPDATE heartbeat_state SET last_tick_at = now() WHERE id = 1")
     dreaming = _maybe_run_dreaming()
     scores = _maybe_refresh_scores()
-    return {"dreaming": dreaming, "score_refresh": scores}
+    return {"dreaming": dreaming, "score_refresh": scores, "turn_sweep": _maybe_sweep_turns()}
 
 
 def heartbeat_turn_tick() -> dict:
@@ -243,6 +244,18 @@ def _maybe_run_gmail_scan():
 # This stays a maintenance_tick sibling (the #5 dreaming pattern) rather than moving to a
 # dedicated job like #17's above: the refresh is local SQL — advisory-locked, due-guarded,
 # no network — so it can't stall the tick the way a hung inbox request can.
+
+def _maybe_sweep_turns():
+    """#282: judge detached chat turns whose owner died with nobody attached, and prune
+    turn logs that ended over a day ago. Local SQL only; never raises."""
+    try:
+        from assistant.turns import runner
+        judged, pruned = runner.sweep()
+        return {"judged": judged, "pruned": pruned}
+    except Exception:
+        logger.warning("chat turn sweep errored", exc_info=True)
+        return None
+
 
 def _maybe_refresh_scores():
     """Drive #18's daily lead-score refresh if present. Lazy ImportError-guarded so merge
