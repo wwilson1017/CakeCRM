@@ -246,6 +246,23 @@ describe('reattaching to a turn whose stream dropped', () => {
     expect(post.aborted()).toBe(true);
   });
 
+  it('retries a reattach that stalls before its first byte', async () => {
+    const chat = mountChat(root);
+    attaches = [
+      (_, init) => new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      }),
+      () => Promise.resolve(sseResponse([{ type: 'done', seq: 3 }])),
+    ];
+    await startTurn(chat);
+    await drop();
+    await advance(44_000);
+    expect(attachUrls()).toHaveLength(1);
+    await advance(1_600);
+    expect(attachUrls()).toHaveLength(2);
+    expect(chat.current().isStreaming).toBe(false);
+  });
+
   it('leaves a stream the server never acknowledged to its own devices', async () => {
     const chat = mountChat(root);
     await act(async () => { chat.current().sendMessage('hi'); });

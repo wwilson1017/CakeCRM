@@ -233,7 +233,7 @@ function fetchScope(turn: ActiveTurn) {
   const ctl = new AbortController();
   turn.ctl = ctl;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  return {
+  const scope = {
     signal: ctl.signal,
     // ANY bytes reset it, so a keepalive ping counts as proof of life.
     arm: () => {
@@ -243,6 +243,9 @@ function fetchScope(turn: ActiveTurn) {
     },
     close: () => { clearTimeout(timer); turn.quietSince = null; },
   };
+  // Armed from the start, so a reattach that stalls before its first byte is retried too.
+  scope.arm();
+  return scope;
 }
 
 const pastDeadline = (turn: ActiveTurn) => turn.deadline !== null && Date.now() >= turn.deadline;
