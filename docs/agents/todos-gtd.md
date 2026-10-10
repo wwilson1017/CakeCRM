@@ -159,6 +159,20 @@
   makes flipping every existing install acceptable.
   Neither no-login surface consults `todo_mode` (they gate on `todo_capture_token` /
   `todo_web_enabled`), so this flip does not widen them.
+- **Importing is Baker's job, not a screen** (#284, port of todo-gtd `293e263`, narrowed by
+  Will to the assistant only). `todo_bulk_create` creates up to `MAX_BULK_IDS` (500, the
+  `bulk_update` ceiling; upstream's 100 was an MCP payload guard) todos in ONE transaction,
+  all or nothing, and names the bad item (`todos[3]: …`). It is NOT routine (rule 4, bulk), so
+  the Approve card lists every item; `BulkItemList` collapses past 20 rows behind "Show all".
+  Single and bulk share one insert: `service._create_todo_cur` is the only todo INSERT and
+  `gtd_service._create_in` resolves the project on the same cursor, which also means a
+  refused single create no longer leaves its newly named project behind. An item takes
+  `TODO_FIELDS` minus `bring_back_on`; `owner_id`/`source` are server-bound and refused
+  inside an item. A `done` item is inserted completed and spawns no repeat (an insert is not
+  a transition). `GTD_GUIDE` gains one paragraph at its end (no block reorder) telling Baker
+  to map onto existing projects, show the plan, then make ONE call; `todos/import` is the help
+  topic, and `.json` joined the upload allow-list. Deliberately not built: a quick-add paste,
+  a bulk HTTP route, an import screen, MCP wiring. Zero-key installs have no import path.
 - **A project's name and notes are click-to-edit on its detail page** (#232), through the same
   `InlineTitle` the triage card uses, whose `body` variant serves the notes (Enter is a
   newline; blur and Escape are the only exits; clearing notes is a real save; text is kept

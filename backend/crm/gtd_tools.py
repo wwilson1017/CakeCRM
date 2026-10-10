@@ -11,9 +11,9 @@ the assistant's confirmation gate. The four reads are `writes: False` and are
 therefore inside the background-turn allowlist, so the heartbeat can consult the
 todo list — see the note on untrusted text below.
 
-Four of the seven writes also carry `confirm_tier: ROUTINE` (#186), so normal ("Ask")
+Four of the eight writes also carry `confirm_tier: ROUTINE` (#186), so normal ("Ask")
 mode runs them with no Approve card. The rule is #180's, in `assistant/confirm_tier.py`;
-this is how the ten came out against it:
+this is how the twelve came out against it:
 
   * `todo_create` — ROUTINE. Capture into the inbox, and the very same
     `crm.service.create_todo` that `crm_create_todo` (routine since #180) calls, so
@@ -26,6 +26,8 @@ this is how the ten came out against it:
   * `todo_update_project` — ROUTINE, minus `status='dropped'`, for the same reason.
     `completed` is completion, not removal, exactly as `'done'` is on a todo.
   * `todo_bulk_update` — NOT routine. Rule 4: bulk by construction (up to 500 ids).
+  * `todo_bulk_create` — NOT routine (#284). Rule 4: an import of up to 500 todos, so the
+    Approve card lists every item before anything is written.
   * `todo_delete` / `todo_delete_project` — NOT routine. Rule 3: a hard DELETE.
   * `todo_list` / `todo_get` / `todo_list_projects` / `todo_weekly_review` — not
     eligible; the tier is write-only and `ToolRegistry` fails loud on one declared on a read.
@@ -42,6 +44,7 @@ from collections.abc import Callable
 from assistant.confirm_tier import ROUTINE
 from crm import gtd_service, service
 from crm.gtd_common import (
+    MAX_BULK_IDS,
     PROJECT_STATUSES,
     REPEAT_OPTIONS,
     TODO_STATUSES,
@@ -96,6 +99,11 @@ def _todo_create(title: str, **kwargs) -> dict:
         return {"error": "Todo could not be created"}
     # Every write names the record it wrote (#236) — see crm.tools._with_target.
     return _with_target(todo, "todo", todo.get("id"), record=todo)
+
+
+def _todo_bulk_create(todos: list[dict], **server_args) -> dict:
+    result = gtd_service.bulk_create(todos, **server_args)
+    return _with_targets(result, "todo", result["ids"])
 
 
 def _todo_list(**kwargs) -> dict:
@@ -303,6 +311,47 @@ GTD_TOOL_DEFS: list[dict] = [
         "kind": "integration",
     },
     {
+        "name": "todo_bulk_create",
+        # NOT routine (#284): a bulk write, so the Approve card lists every item.
+        "writes": True,
+        "description": (
+            "Create many todos at once — importing a list or an export from another app, "
+            f"or a long brain dump. Up to {MAX_BULK_IDS} per call, in one transaction: if any "
+            "item is invalid nothing is created and the error names it by position "
+            "(todos[3]). Fix that item and send the batch again. Use this, never a loop of "
+            "todo_create, whenever there are several items to add."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "todos": {
+                    "type": "array",
+                    "maxItems": MAX_BULK_IDS,
+                    "description": "The todos, in order",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "description": "A physical, visible next action"},
+                            "notes": {"type": "string"},
+                            "project": {"type": "string", "description": "Project name (created if new)"},
+                            "project_id": {"type": "integer", "description": "Existing project id"},
+                            "context": {"type": "string", "description": "e.g. @calls, @office, @errands"},
+                            "tags": {"type": "array", "items": {"type": "string"}},
+                            "status": {"type": "string", "description": f"One of: {_STATUS_LIST}. Default inbox"},
+                            "star": {"type": "boolean"},
+                            "due_date": {"type": "string", "description": "Real deadline only (YYYY-MM-DD)"},
+                            "repeat": {"type": "string", "description": f"One of: {_REPEAT_LIST}"},
+                            "auto_star_on_due": {"type": "boolean"},
+                        },
+                        "required": ["title"],
+                    },
+                },
+            },
+            "required": ["todos"],
+        },
+        "kind": "integration",
+    },
+    {
         "name": "todo_delete",
         "writes": True,
         "description": (
@@ -414,6 +463,7 @@ GTD_TOOL_EXECUTORS: dict[str, Callable[..., dict]] = {
     "todo_get": _wrap(_todo_get),
     "todo_update": _wrap(_todo_update),
     "todo_bulk_update": _wrap(_todo_bulk_update),
+    "todo_bulk_create": _wrap(_todo_bulk_create),
     "todo_delete": _wrap(_todo_delete),
     "todo_list_projects": _wrap(_todo_list_projects),
     "todo_weekly_review": _wrap(_todo_weekly_review),
@@ -448,6 +498,9 @@ def get_gtd_tools(user: dict | None = None) -> tuple[list[dict], dict[str, Calla
         # `source` is the server's to stamp, never the model's (#260).
         "todo_create": bind_server_args(
             GTD_TOOL_EXECUTORS["todo_create"], owner_id=user_id, source="agent",
+        ),
+        "todo_bulk_create": bind_server_args(
+            GTD_TOOL_EXECUTORS["todo_bulk_create"], owner_id=user_id, source="agent",
         ),
         "todo_list": bind_owner_filter(GTD_TOOL_EXECUTORS["todo_list"], user),
     }

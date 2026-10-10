@@ -550,3 +550,49 @@ def test_a_rename_onto_an_existing_context_writes_nothing_until_merge(pg_db):
     after = _context_rows()
     assert after[a["id"]][0] == after[b["id"]][0] == "@calls"
     assert after[a["id"]][3] == before[a["id"]][3]
+
+
+# ── #284: bulk create through Baker ───────────────────────────────────────────
+
+def test_bulk_create_is_all_or_nothing_in_a_real_transaction(pg_db):
+    """A bad item late in the batch must leave NO todo and NO project behind — the
+    project row the first item's name created is inside the same transaction."""
+    from core.postgres import pg_fetchone
+    from crm import gtd_service
+    from crm.gtd_common import ValidationError
+
+    with pytest.raises(ValidationError, match=r"^todos\[2\]: "):
+        gtd_service.bulk_create([
+            {"title": "Plant beds", "project": "Garden"},
+            {"title": "Order mulch", "project": "Garden"},
+            {"title": "x", "status": "not-a-status"},
+        ])
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM todos")["c"] == 0
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM todo_projects")["c"] == 0
+
+
+def test_bulk_create_at_the_cap_lands_every_row_and_one_past_it_lands_none(pg_db):
+    from core.postgres import pg_fetchall, pg_fetchone
+    from crm import gtd_service
+    from crm.gtd_common import MAX_BULK_IDS, ValidationError
+
+    items = [{"title": f"Item {i}", "project": "Import", "context": "@home"}
+             for i in range(MAX_BULK_IDS)]
+    items[0]["status"] = "done"
+    items[0]["repeat"] = "weekly"
+    out = gtd_service.bulk_create(items, owner_id=None)
+    assert out["created"] == MAX_BULK_IDS == len(set(out["ids"]))
+    rows = pg_fetchall(
+        "SELECT t.status, t.completed, t.completed_at, t.source, p.name AS project "
+        "FROM todos t JOIN todo_projects p ON p.id = t.project_id ORDER BY t.id"
+    )
+    assert len(rows) == MAX_BULK_IDS
+    assert {r["project"] for r in rows} == {"Import"}
+    assert {r["source"] for r in rows} == {"agent"}
+    # A done import is stamped completed and spawns no next occurrence.
+    assert rows[0]["status"] == "done" and rows[0]["completed"] == 1 and rows[0]["completed_at"]
+    assert {r["status"] for r in rows[1:]} == {"inbox"}
+
+    with pytest.raises(ValidationError, match=f"max {MAX_BULK_IDS}"):
+        gtd_service.bulk_create([{"title": "x"}] * (MAX_BULK_IDS + 1))
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM todos")["c"] == MAX_BULK_IDS

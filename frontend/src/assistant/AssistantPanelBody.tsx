@@ -34,7 +34,7 @@ import { useConversations } from './useConversations';
 // Client-side pre-check mirrors backend/assistant/uploads.py (ALLOWED_EXTENSIONS
 // / MAX_FILES / MAX_FILE_SIZE). Keep in sync — the backend re-validates and is
 // authoritative, so a drift here only affects the pre-submit UX, never safety.
-const ALLOWED = ['csv', 'xlsx', 'md', 'txt', 'pdf', 'docx'];
+const ALLOWED = ['csv', 'json', 'xlsx', 'md', 'txt', 'pdf', 'docx'];
 const MAX_FILES = 5;
 const MAX_BYTES = 10 * 1024 * 1024;
 

@@ -17,7 +17,7 @@ from assistant import delimiters
 
 # These limits are the authoritative gate; frontend/src/assistant/AssistantPanelBody.tsx
 # mirrors them for a pre-submit UX check. Keep the two in sync.
-ALLOWED_EXTENSIONS = {"csv", "xlsx", "md", "txt", "pdf", "docx"}
+ALLOWED_EXTENSIONS = {"csv", "json", "xlsx", "md", "txt", "pdf", "docx"}
 MAX_FILES = 5
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 MAX_CHARS = 50_000  # per-file extracted-text cap
@@ -130,7 +130,7 @@ def _extract_by_ext(ext: str, data: bytes, max_chars: int) -> str:
         return extract_docx_text(data, max_chars)
     if ext == "xlsx":
         return extract_xlsx_text(data, max_chars)
-    # csv / md / txt
+    # csv / json / md / txt
     return extract_plain(data, max_chars)
 
 
