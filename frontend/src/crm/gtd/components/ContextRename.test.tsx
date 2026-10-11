@@ -108,6 +108,24 @@ describe('ContextRename', () => {
     expect(renamed).toEqual([]);
   });
 
+  it('cannot be cancelled once the write is in flight', async () => {
+    // Closing then would look like calling the rename off while it still landed (#292).
+    let land!: (v: unknown) => void;
+    renameMock.mockReturnValueOnce(new Promise(r => { land = r; }));
+    mount();
+    await click('Rename');
+    type('@calls');
+    await click('Save');
+    expect(button('Cancel')!.disabled).toBe(true);
+    act(() => {
+      input().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(input()).not.toBeNull();
+
+    await act(async () => { land({ count: 1, todo_ids: [1], merged: false }); });
+    expect(renamed).toEqual(['@calls']);
+  });
+
   it('refuses an empty name without calling the server', async () => {
     mount();
     await click('Rename');

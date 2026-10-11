@@ -10,7 +10,9 @@ import { renameContext } from '../api';
  * which cannot be told apart afterwards, so its sentence is shown with a Merge button and
  * nothing is written until that is pressed. The confirmation is held WITH the name it was
  * given for and counts only while the box still reads that name — an answer that lands
- * after the user typed something else must not arm Merge for the new text.
+ * after the user typed something else must not arm Merge for the new text. Cancel and
+ * Escape are off while a write is in flight: closing then would look like calling it off,
+ * and the rename (or merge) would still land.
  *
  * Authed CRM only; callers hide it under `isTodoPublicMode` (the web mount has no route).
  */
@@ -71,7 +73,7 @@ export function ContextRename({ context, onRenamed }: {
         value={name}
         maxLength={500}
         onChange={e => { setName(e.target.value); setConfirm(null); setError(''); }}
-        onKeyDown={e => { if (e.key === 'Escape') close(); }}
+        onKeyDown={e => { if (e.key === 'Escape' && !busy) close(); }}
         aria-label={`New name for context ${context}`}
         className="min-w-0 grow rounded-lg border border-line bg-cream px-2 py-1.5 text-base sm:text-sm text-charcoal focus:border-brand focus:outline-none"
       />
@@ -86,7 +88,8 @@ export function ContextRename({ context, onRenamed }: {
           Save
         </button>
       )}
-      <button type="button" onClick={close} className="px-2 py-1.5 text-muted hover:text-charcoal">
+      <button type="button" disabled={busy} onClick={close}
+              className="px-2 py-1.5 text-muted hover:text-charcoal disabled:opacity-40">
         Cancel
       </button>
       {(confirming || error) && (
