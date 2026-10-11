@@ -516,15 +516,19 @@ describe('ProjectDetailPage — add a next action (#292)', () => {
     addBox().form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
   });
 
-  it('keeps the typed text and says why when the add is refused', async () => {
-    createTodoMock.mockRejectedValue(refusal('title too long (max 20000 characters)'));
+  // The no-login app's raw fetch throws a plain Error whose message carries the reason.
+  it.each([
+    ['signed in', refusal('title too long (max 20000 characters)'), 'title too long (max 20000 characters)'],
+    ['no-login', new Error('API error 400: title too long'), 'API error 400: title too long'],
+  ])('keeps the typed text and says why when the add is refused (%s)', async (_mode, error, said) => {
+    createTodoMock.mockRejectedValue(error);
     await render();
     setValue(addBox(), 'Email the caterer');
     await submit();
 
     expect(createTodoMock).toHaveBeenCalledTimes(1);
     expect(addBox().value).toBe('Email the caterer');
-    expect(getToasts().map(t => t.message)).toEqual(['title too long (max 20000 characters)']);
+    expect(getToasts().map(t => t.message)).toEqual([said]);
   });
 
   it('keeps text typed while the previous add is still sending', async () => {

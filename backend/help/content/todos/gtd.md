@@ -75,7 +75,9 @@ next action and clears it out of the inbox — so agree the context before writi
 
 Today, Inbox (with a live count), To Do, Projects, Waiting, Someday, Done, Review, and a
 search page across contexts. Each tab has its own filters; the shell carries a search box and
-a quick-add composer.
+a quick-add composer. On the search page the box shows what you searched for. Quick add and a
+project's "Add a next action" box clear only what was sent: text typed while an add is still
+saving stays, and an add that fails keeps your text and says why.
 
 "Today" always means today in the install's time zone, the one configured for the
 whole install, not the clock of the browser you are using. Today's Overdue and Due today

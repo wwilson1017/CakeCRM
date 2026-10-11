@@ -115,8 +115,10 @@ function ProjectDetail({ projectId }: { projectId: number }) {
     try {
       await createTodo({ title, status: 'next_action', project_id: projectId });
     } catch (e) {
-      // Keep the typed text: a refused add must not eat it.
-      toast.error(e instanceof ApiError && e.detail ? e.detail : 'Could not add that. Try again.');
+      // Keep the typed text: a refused add must not eat it. Same unwrapping as `saveField`
+      // below — the no-login app's raw fetch throws a plain Error, not an ApiError.
+      toast.error(e instanceof ApiError && e.detail ? e.detail
+        : e instanceof Error ? e.message : 'Could not add that. Try again.');
       return;
     }
     // Clear only what was sent, never text typed while the add was in flight.
