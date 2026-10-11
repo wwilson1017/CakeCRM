@@ -81,6 +81,28 @@ def test_filter_scrubs_dict_args_and_tracebacks():
     assert not any(t in text for t in ALL_TOKENS)
 
 
+def test_filter_scrubs_a_message_that_is_not_a_string():
+    """`log.error(exc)` hands the logger the exception itself, and `getMessage()` prints
+    it — so a message is judged by what it PRINTS, exactly as an argument is (#292)."""
+    record = logging.LogRecord(
+        "crm.todo_web", logging.ERROR, __file__, 1,
+        RuntimeError(f"refused /todo/{WEB_TOKEN}/inbox"), None, None,
+    )
+    logscrub.ScrubTokens().filter(record)
+    assert record.getMessage() == "refused /todo/<redacted>/inbox"
+
+    # With arguments it is still %-formatted, and one with nothing to hide keeps its type.
+    templated = logging.LogRecord(
+        "crm.todo_web", logging.ERROR, __file__, 1,
+        ValueError("refused /capture/%s"), (CAPTURE_TOKEN,), None,
+    )
+    logscrub.ScrubTokens().filter(templated)
+    assert templated.getMessage() == "refused /capture/<redacted>"
+    plain = logging.LogRecord("x", logging.ERROR, __file__, 1, KeyError("status"), None, None)
+    logscrub.ScrubTokens().filter(plain)
+    assert isinstance(plain.msg, KeyError)
+
+
 def test_trace_level_scope_dump_is_scrubbed():
     """`uvicorn --log-level trace` logs the whole ASGI scope on `uvicorn.asgi`: a dict
     carrying the path as text and as bytes. Its logger must be one install() covers."""
