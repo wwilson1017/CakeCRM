@@ -2339,11 +2339,11 @@ def _create_todo_cur(
             contact_id, deal_id, priority,
             owner_id,
             status,
-            bool(star),
+            gtd_common.validate_flag(star, "star"),
             gtd_common.validate_short(context, "context"),
             json.dumps(gtd_common.validate_tags(tags)),
             gtd_common.validate_repeat(repeat),
-            bool(auto_star_on_due),
+            gtd_common.validate_flag(auto_star_on_due, "auto_star_on_due"),
             project_id,
             source,
             status,
@@ -2536,7 +2536,7 @@ def _apply_todo_update_cur(cur, todo_id: int, fields: dict) -> bool:
         params.append(json.dumps(gtd_common.validate_tags(fields["tags"])))
     if "star" in fields:
         sets.append("star = %s")
-        params.append(bool(fields["star"]))
+        params.append(gtd_common.validate_flag(fields["star"], "star"))
     if "repeat" in fields:
         sets.append("repeat = %s")
         params.append(gtd_common.validate_repeat(fields["repeat"]))
@@ -2547,7 +2547,9 @@ def _apply_todo_update_cur(cur, todo_id: int, fields: dict) -> bool:
         params.append(gtd_common.validate_bring_back(fields["bring_back_on"]))
     if "auto_star_on_due" in fields:
         sets.append("auto_star_on_due = %s")
-        params.append(bool(fields["auto_star_on_due"]))
+        params.append(
+            gtd_common.validate_flag(fields["auto_star_on_due"], "auto_star_on_due")
+        )
 
     just_completed = False
     if "status" in fields:

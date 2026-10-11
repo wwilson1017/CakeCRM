@@ -43,6 +43,7 @@ export function QuickAdd({ onAdded }: Props) {
     if (!parsed.title.trim() || busy) return;
     setBusy(true);
     setError('');
+    const sent = input;
     try {
       await createTodo({
         title: parsed.title,
@@ -54,9 +55,12 @@ export function QuickAdd({ onAdded }: Props) {
         repeat: parsed.repeat ?? '',
         auto_star_on_due: parsed.repeat ? autoStar : false,
       });
-      setInput('');
-      setIgnored([]);
-      setAutoStar(false);
+      // The box stays editable while the add is in flight: clear only the draft that was sent.
+      if ((inputRef.current?.value ?? sent) === sent) {
+        setInput('');
+        setIgnored([]);
+        setAutoStar(false);
+      }
       onAdded();
       inputRef.current?.focus(); // rapid-fire capture
     } catch (e) {

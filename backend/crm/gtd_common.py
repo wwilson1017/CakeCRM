@@ -139,6 +139,14 @@ def validate_bring_back(value) -> str | None:
     return validate_due(value, "bring_back_on") or None
 
 
+def validate_flag(value, field: str) -> bool:
+    """A true/false field. `bulk_update`'s `fields` dict and the agent tools are untyped, so
+    a string like "false" reaches here — truthiness would silently turn it ON (#292)."""
+    if value is None or value in (0, 1):  # True == 1, False == 0
+        return bool(value)
+    raise ValidationError(f"{field} must be true or false")
+
+
 def validate_repeat(repeat) -> str:
     r = str(repeat or "").strip().lower()
     if r == "none":

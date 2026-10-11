@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../../core/api/client';
+import { toast } from '../../shared/toast';
 import { createTodo, deleteProject, listProjects, listTodos, updateProject } from './api';
 import { InlineTitle } from './components/InlineTitle';
 import { TodoEditSheet } from './components/TodoEditSheet';
@@ -109,10 +110,17 @@ function ProjectDetail({ projectId }: { projectId: number }) {
   const { toggleDone, toggleStar, after } = useRowActions(reload);
 
   const addNextAction = async () => {
-    if (!newAction.trim()) return;
-    await createTodo({ title: newAction.trim(), status: 'next_action', project_id: projectId })
-      .catch(() => undefined);
-    setNewAction('');
+    const title = newAction.trim();
+    if (!title) return;
+    try {
+      await createTodo({ title, status: 'next_action', project_id: projectId });
+    } catch (e) {
+      // Keep the typed text: a refused add must not eat it.
+      toast.error(e instanceof ApiError && e.detail ? e.detail : 'Could not add that. Try again.');
+      return;
+    }
+    // Clear only what was sent, never text typed while the add was in flight.
+    setNewAction(cur => (cur.trim() === title ? '' : cur));
     after();
   };
 

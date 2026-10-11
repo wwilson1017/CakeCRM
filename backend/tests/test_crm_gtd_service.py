@@ -257,6 +257,25 @@ def test_bulk_update_requires_ids():
         gtd_service.bulk_update([], {"status": "done"})
 
 
+@pytest.mark.parametrize("field", ["star", "auto_star_on_due"])
+def test_bulk_update_refuses_text_where_a_flag_belongs(txn, monkeypatch, field):
+    """`fields` is an untyped dict, and bool("false") is True — truthiness would turn the
+    flag ON for every listed todo (#292)."""
+    cur = txn()
+    monkeypatch.setattr(gtd_service, "get_connection", service.get_connection)
+    with pytest.raises(gtd_service.ValidationError, match=f"{field} must be true or false"):
+        gtd_service.bulk_update([1, 2], {field: "false"})
+    assert not any("UPDATE todos SET" in s for s in cur.statements())
+
+
+@pytest.mark.parametrize("value, stored", [(True, True), (False, False), (1, True), (0, False)])
+def test_a_real_flag_still_writes(txn, value, stored):
+    cur = txn()
+    service.update_todo(1, star=value)
+    sql, params = next((s, p) for s, p in cur.executed if "UPDATE todos SET" in s)
+    assert "star = %s" in sql and params[0] is stored
+
+
 # ── Query shapes ──────────────────────────────────────────────────────────────
 
 class _Rec:
