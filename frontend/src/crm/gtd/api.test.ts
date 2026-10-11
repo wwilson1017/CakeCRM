@@ -56,6 +56,19 @@ describe('listTodos({ all: true })', () => {
     expect(apiMock).toHaveBeenCalledTimes(1);
   });
 
+  it('stops walking once its signal is aborted', async () => {
+    const ctl = new AbortController();
+    // Like fetch: an aborted signal rejects the request. The first page aborts the walk.
+    apiMock.mockImplementation(async (_path: string, init: RequestInit) => {
+      if (init.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      ctl.abort();
+      return { todos: Array.from({ length: 500 }, (_, i) => ({ id: i + 1, created_at: at(0) })) };
+    });
+
+    await expect(listTodos({ status: 'inbox', all: true }, ctl.signal)).rejects.toThrow('Aborted');
+    expect(apiMock.mock.calls.map(c => c[1].signal)).toEqual([ctl.signal, ctl.signal]);
+  });
+
   it('fails instead of spinning when the server ignores the cursor', async () => {
     const page = Array.from({ length: 500 }, (_, i) => ({ id: i + 1, created_at: at(0) }));
     apiMock.mockResolvedValue({ todos: page });

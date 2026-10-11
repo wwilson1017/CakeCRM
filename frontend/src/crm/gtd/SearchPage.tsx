@@ -39,9 +39,10 @@ export function SearchPage() {
 
   useEffect(() => {
     let cancelled = false;
+    const ctl = new AbortController();
     const fetchAll = query
       ? listTodos({ search: query, limit: 500 })
-      : Promise.all(OPEN_STATUSES.map(s => listTodos({ status: s, all: true })))
+      : Promise.all(OPEN_STATUSES.map(s => listTodos({ status: s, all: true }, ctl.signal)))
           .then(lists => lists.flat());
     fetchAll
       .then(results => {
@@ -50,7 +51,7 @@ export function SearchPage() {
         setFailed(false);
       })
       .catch(() => { if (!cancelled) setFailed(true); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; ctl.abort(); };
   }, [query, loadSeq]);
 
   const { toggleDone, toggleStar, after } = useRowActions(reload);

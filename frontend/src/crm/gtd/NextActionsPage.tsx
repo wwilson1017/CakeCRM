@@ -25,7 +25,7 @@ const NO_CONTEXT = 'No context';
  * batching this page exists for.
  */
 export function NextActionsPage() {
-  const { todos, failed, reload } = useTodos(() => listTodos({ status: 'next_action', all: true }));
+  const { todos, failed, reload } = useTodos(signal => listTodos({ status: 'next_action', all: true }, signal));
   const { toggleDone, toggleStar, after } = useRowActions(reload);
   const { projects, filters, refreshMeta } = useTodoMeta();
   const [search, setSearch] = useState('');

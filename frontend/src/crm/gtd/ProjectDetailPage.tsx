@@ -91,11 +91,12 @@ function ProjectDetail({ projectId }: { projectId: number }) {
 
   useEffect(() => {
     let cancelled = false;
+    const ctl = new AbortController();
     Promise.all([
       listProjects(),
       // A project's own page shows its deferred todos too (#261), each saying when it
       // comes back — this is a record view, not a working list.
-      listTodos({ project: String(projectId), all: true, include_deferred: true }),
+      listTodos({ project: String(projectId), all: true, include_deferred: true }, ctl.signal),
     ]).then(([allProjects, items]) => {
       if (cancelled) return;
       const p = allProjects.find(x => x.id === projectId) ?? null;
@@ -103,7 +104,7 @@ function ProjectDetail({ projectId }: { projectId: number }) {
       setTodos(items);
       setFailed(!p);
     }).catch(() => { if (!cancelled) setFailed(true); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; ctl.abort(); };
   }, [projectId, loadSeq]);
 
   const { toggleDone, toggleStar, after } = useRowActions(reload);

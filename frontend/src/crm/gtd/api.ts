@@ -55,13 +55,13 @@ export interface TodoListParams {
   include_deferred?: boolean;
 }
 
-function fetchTodos(params: object): Promise<Todo[]> {
+function fetchTodos(params: object, signal?: AbortSignal): Promise<Todo[]> {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== '') q.set(k, String(v));
   }
   const qs = q.toString();
-  return todoFetch<{ todos: Todo[] }>(`/todos${qs ? `?${qs}` : ''}`).then(r => r.todos);
+  return todoFetch<{ todos: Todo[] }>(`/todos${qs ? `?${qs}` : ''}`, { signal }).then(r => r.todos);
 }
 
 /** Rows kept per sweep page. The route caps `limit` at 500 and the sweep asks for one more. */
@@ -73,13 +73,15 @@ const SWEEP_PAGE = 499;
  * A KEYSET walk on the immutable id (`sort=id` + `after_id`), never OFFSET, with "is there
  * more" read off one extra row rather than a count — the CRM list sweep's rules
  * (docs/agents/list-pages.md), restated here because this module also rides in the /todo
- * PWA, which may reach no CRM module.
+ * PWA, which may reach no CRM module. Aborting `signal` stops the walk at its next page.
  */
-async function sweepTodos(params: TodoListParams): Promise<Todo[]> {
+async function sweepTodos(params: TodoListParams, signal?: AbortSignal): Promise<Todo[]> {
   const all: Todo[] = [];
   let after: number | undefined;
   for (;;) {
-    const page = await fetchTodos({ ...params, sort: 'id', limit: SWEEP_PAGE + 1, after_id: after });
+    const page = await fetchTodos(
+      { ...params, sort: 'id', limit: SWEEP_PAGE + 1, after_id: after }, signal,
+    );
     // A server that ignores the cursor would hand back page one forever.
     if (after !== undefined && page.length > 0 && page[0].id <= after) {
       throw new Error('Todo list sweep did not advance');
@@ -94,8 +96,10 @@ async function sweepTodos(params: TodoListParams): Promise<Todo[]> {
     parseUTC(a.created_at).getTime() - parseUTC(b.created_at).getTime() || a.id - b.id);
 }
 
-export function listTodos({ all, ...params }: TodoListParams = {}): Promise<Todo[]> {
-  return all ? sweepTodos(params) : fetchTodos(params);
+export function listTodos(
+  { all, ...params }: TodoListParams = {}, signal?: AbortSignal,
+): Promise<Todo[]> {
+  return all ? sweepTodos(params, signal) : fetchTodos(params, signal);
 }
 
 export function todayTodos(): Promise<Todo[]> {

@@ -83,9 +83,12 @@ export function useInboxFocus(focus: (id: number) => void) {
 /**
  * Load todos for a page. `refetchKey` re-runs the fetch when a page-level input
  * changes (e.g. the Done page's done|dropped toggle); reload() re-runs it after a
- * mutation. Unmounted or superseded responses are dropped.
+ * mutation. Unmounted or superseded responses are dropped, and the fetcher's signal is
+ * aborted so a multi-page sweep (#295) stops fetching.
  */
-export function useTodos(fetcher: () => Promise<Todo[]>, refetchKey: unknown = null) {
+export function useTodos(
+  fetcher: (signal: AbortSignal) => Promise<Todo[]>, refetchKey: unknown = null,
+) {
   const [todos, setTodos] = useState<Todo[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [loadSeq, setLoadSeq] = useState(0);
@@ -95,14 +98,15 @@ export function useTodos(fetcher: () => Promise<Todo[]>, refetchKey: unknown = n
 
   useEffect(() => {
     let cancelled = false;
-    fetcherRef.current()
+    const ctl = new AbortController();
+    fetcherRef.current(ctl.signal)
       .then(result => {
         if (cancelled) return;
         setTodos(result);
         setFailed(false);
       })
       .catch(() => { if (!cancelled) setFailed(true); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; ctl.abort(); };
   }, [loadSeq, refetchKey]);
 
   const reload = useCallback(() => { setLoadSeq(s => s + 1); }, []);
