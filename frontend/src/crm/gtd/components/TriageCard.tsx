@@ -351,7 +351,15 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
    */
   const commitDue = useSerialCommit(async (): Promise<void> => {
     const { pendingDue: pending, row: live } = stateRef.current;
-    if (pending === null || pending === live.due_date) return;
+    if (pending === null) return;
+    // Released only while the box still holds this value: a date typed during the write is
+    // the trailing run's to send, and releasing it here would drop it unsent.
+    const release = () => {
+      if (stateRef.current.pendingDue === pending) apply({ type: 'due', value: null });
+    };
+    // Typed back to the date the row already holds: nothing to write, so stop shadowing the
+    // row — a pinned override hides every later change and is written back over it.
+    if (pending === live.due_date) { release(); return; }
     setError('');
     try {
       apply({ type: 'adopt', row: await updateTodo(live.id, { due_date: pending }) });
@@ -361,9 +369,9 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       setError(msg);
       toast.error(msg); // same unmount reasoning as the notes save
     } finally {
-      // Released either way: on success the adopted response carries the date, and on failure
-      // the field must not go on showing one the server never took.
-      apply({ type: 'due', value: null });
+      // Either way: on success the adopted response carries the date, and on failure the
+      // field must not go on showing one the server never took.
+      release();
     }
   });
 
@@ -374,7 +382,11 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
    */
   const commitBack = useSerialCommit(async (): Promise<void> => {
     const { pendingBack: pending, row: live } = stateRef.current;
-    if (pending === null || pending === (live.bring_back_on ?? '')) return;
+    if (pending === null) return;
+    const release = () => {
+      if (stateRef.current.pendingBack === pending) apply({ type: 'back', value: null });
+    };
+    if (pending === (live.bring_back_on ?? '')) { release(); return; }
     setError('');
     try {
       apply({ type: 'adopt', row: await updateTodo(live.id, { bring_back_on: pending || null }) });
@@ -384,7 +396,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       setError(msg);
       toast.error(msg); // same unmount reasoning as the notes save
     } finally {
-      apply({ type: 'back', value: null });
+      release();
     }
   });
 
