@@ -41,7 +41,7 @@ export function SearchPage() {
     let cancelled = false;
     const fetchAll = query
       ? listTodos({ search: query, limit: 500 })
-      : Promise.all(OPEN_STATUSES.map(s => listTodos({ status: s, limit: 500 })))
+      : Promise.all(OPEN_STATUSES.map(s => listTodos({ status: s, all: true })))
           .then(lists => lists.flat());
     fetchAll
       .then(results => {

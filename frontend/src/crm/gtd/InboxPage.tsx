@@ -24,7 +24,7 @@ import { matchesFilter } from './util';
  * bar survives anywhere in the app.
  */
 export function InboxPage() {
-  const { todos, failed, reload } = useTodos(() => listTodos({ status: 'inbox', limit: 500 }));
+  const { todos, failed, reload } = useTodos(() => listTodos({ status: 'inbox', all: true }));
   const { projects, filters } = useTodoMeta();
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [editTodo, setEditTodo] = useState<Todo | null>(null);
