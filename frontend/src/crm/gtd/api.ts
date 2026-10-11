@@ -74,6 +74,9 @@ const SWEEP_PAGE = 499;
  * more" read off one extra row rather than a count — the CRM list sweep's rules
  * (docs/agents/list-pages.md), restated here because this module also rides in the /todo
  * PWA, which may reach no CRM module. Aborting `signal` stops the walk at its next page.
+ *
+ * simplification: the whole list is held and rendered at once. A list of tens of thousands
+ * of open todos needs server-side filtering and a virtualized list, not a bigger page.
  */
 async function sweepTodos(params: TodoListParams, signal?: AbortSignal): Promise<Todo[]> {
   const all: Todo[] = [];
