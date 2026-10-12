@@ -63,6 +63,20 @@ describe('QuickAdd', () => {
     expect(box().value).toBe('Buy seed');
   });
 
+  it('keeps a draft retyped to the same words while the previous add is still sending', async () => {
+    // The next todo can start the way the last one did, so the box can read exactly like the
+    // draft in flight at the moment it lands. Edits are counted, not text compared.
+    let land!: () => void;
+    createTodoMock.mockReturnValue(new Promise<void>(resolve => { land = resolve; }));
+    type('Buy seed');
+    await submit();
+    type('Buy');
+    type('Buy seed');
+    await act(async () => { land(); });
+
+    expect(box().value).toBe('Buy seed');
+  });
+
   it('locks the chips and the auto-star box while an add is in flight', async () => {
     // Landing clears the chips' dismissals and the auto-star tick along with the text that
     // was sent, so a change made to either mid-request would be thrown away unsaved.

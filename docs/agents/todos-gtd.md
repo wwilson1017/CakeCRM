@@ -493,8 +493,9 @@
   star every listed todo. (`completed` keeps its truthiness: normal mode sends it as an int
   and `test_update_todo_writes_completed_and_status_together` pins that.) **Quick Add and a project's "Add a next action" clear only
   the draft that was sent**: both boxes stay editable while the add is in flight, so text typed
-  meanwhile survives the add landing (Quick Add's chips and auto-star tick are disabled for that
-  stretch, since landing resets them and only the text is compared); a refused "Add a next action" keeps the text and raises a
+  meanwhile survives the add landing. Each box counts its edits and clears only if untouched
+  since the send — a text compare would clear a next todo that starts with the same words —
+  and Quick Add's chips and auto-star tick are disabled for that stretch; a refused "Add a next action" keeps the text and raises a
   toast (it used to swallow the error and clear the box). **The header search box starts in
   step with `?q=`**: `TodoShell` mounts fresh per page, so its adjust-during-render baseline
   starts at `''` rather than the URL value, which made a deep link a no-change first render.

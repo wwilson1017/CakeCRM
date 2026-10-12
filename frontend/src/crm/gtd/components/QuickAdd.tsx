@@ -31,6 +31,8 @@ export function QuickAdd({ onAdded }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  // Edits to the box, so a landed add can tell whether the draft moved under it.
+  const edits = useRef(0);
 
   // The install's day, not the browser's: "tomorrow" must agree with Today (#259).
   const tz = useListTz();
@@ -43,7 +45,7 @@ export function QuickAdd({ onAdded }: Props) {
     if (!parsed.title.trim() || busy) return;
     setBusy(true);
     setError('');
-    const sent = input;
+    const sent = edits.current;
     try {
       await createTodo({
         title: parsed.title,
@@ -55,9 +57,10 @@ export function QuickAdd({ onAdded }: Props) {
         repeat: parsed.repeat ?? '',
         auto_star_on_due: parsed.repeat ? autoStar : false,
       });
-      // The box stays editable while the add is in flight: clear only the draft that was sent.
+      // The box stays editable while the add is in flight: clear only a draft not touched
+      // since it was sent. Counted, not compared — the next todo can start with the same words.
       // The chips and the auto-star tick are locked meanwhile, so the text is all that can move.
-      if ((inputRef.current?.value ?? sent) === sent) {
+      if (edits.current === sent) {
         setInput('');
         setIgnored([]);
         setAutoStar(false);
@@ -77,7 +80,7 @@ export function QuickAdd({ onAdded }: Props) {
         <input
           ref={inputRef}
           value={input}
-          onChange={e => { setInput(e.target.value); setIgnored([]); }}
+          onChange={e => { edits.current += 1; setInput(e.target.value); setIgnored([]); }}
           placeholder="Add to inbox — try “call Val tomorrow #Website @calls !”"
           aria-label="Add to inbox"
           className="min-w-0 flex-1 rounded-lg border border-line bg-cream px-3 py-2 text-base sm:text-sm text-charcoal placeholder:text-muted focus:border-brand focus:outline-none"

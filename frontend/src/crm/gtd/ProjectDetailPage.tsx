@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../../core/api/client';
 import { toast } from '../../shared/toast';
@@ -50,6 +50,7 @@ function ProjectDetail({ projectId }: { projectId: number }) {
   const [todos, setTodos] = useState<Todo[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [newAction, setNewAction] = useState('');
+  const newActionEdits = useRef(0);
   const [editTodo, setEditTodo] = useState<Todo | null>(null);
   /**
    * ONE failure line for both click-to-edit fields, TAGGED with the field it belongs to.
@@ -112,6 +113,7 @@ function ProjectDetail({ projectId }: { projectId: number }) {
   const addNextAction = async () => {
     const title = newAction.trim();
     if (!title) return;
+    const sent = newActionEdits.current;
     try {
       await createTodo({ title, status: 'next_action', project_id: projectId });
     } catch (e) {
@@ -121,8 +123,9 @@ function ProjectDetail({ projectId }: { projectId: number }) {
         : e instanceof Error ? e.message : 'Could not add that. Try again.');
       return;
     }
-    // Clear only what was sent, never text typed while the add was in flight.
-    setNewAction(cur => (cur.trim() === title ? '' : cur));
+    // Clear only a box not touched since it was sent, never text typed while the add was in
+    // flight. Counted, not compared — the next action can start with the same words.
+    if (newActionEdits.current === sent) setNewAction('');
     after();
   };
 
@@ -302,7 +305,7 @@ function ProjectDetail({ projectId }: { projectId: number }) {
               placeholder="Add a next action…"
               aria-label="Add a next action"
               value={newAction}
-              onChange={e => setNewAction(e.target.value)}
+              onChange={e => { newActionEdits.current += 1; setNewAction(e.target.value); }}
             />
             <button
               type="submit"

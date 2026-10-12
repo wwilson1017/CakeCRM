@@ -543,6 +543,19 @@ describe('ProjectDetailPage — add a next action (#292)', () => {
     expect(addBox().value).toBe('Book the hall');
   });
 
+  it('keeps text retyped to the same words while the previous add is still sending', async () => {
+    let land!: () => void;
+    createTodoMock.mockReturnValue(new Promise<void>(resolve => { land = resolve; }));
+    await render();
+    setValue(addBox(), 'Book the hall');
+    await submit();
+    setValue(addBox(), 'Book');
+    setValue(addBox(), 'Book the hall');
+    await act(async () => { land(); });
+
+    expect(addBox().value).toBe('Book the hall');
+  });
+
   it('clears the box once the text that was sent has landed', async () => {
     createTodoMock.mockResolvedValue({});
     await render();
