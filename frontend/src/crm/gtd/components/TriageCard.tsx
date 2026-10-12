@@ -235,6 +235,8 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
   // native editor while a date is being picked.
   const [dueFocused, setDueFocused] = useState(false);
   const [backFocused, setBackFocused] = useState(false);
+  // Edits made to each date box, so a write can tell whether the box moved under it.
+  const dateEdits = useRef({ due: 0, back: 0 });
   // Opening the sheet waits on the notes flush, which is a round trip on a slow link.
   const [editPending, setEditPending] = useState(false);
   // Everything a write can move, in one reducer — see `CardState` for why a reducer and not
@@ -351,7 +353,17 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
    */
   const commitDue = useSerialCommit(async (): Promise<void> => {
     const { pendingDue: pending, row: live } = stateRef.current;
-    if (pending === null || pending === live.due_date) return;
+    if (pending === null) return;
+    // Released only if the box was not edited meanwhile: a date typed during the write is the
+    // trailing run's to send, and releasing it here would drop it unsent. Counted, not compared
+    // — a date typed away and back reads the same as the one a failed write was carrying.
+    const edit = dateEdits.current.due;
+    const release = () => {
+      if (dateEdits.current.due === edit) apply({ type: 'due', value: null });
+    };
+    // Typed back to the date the row already holds: nothing to write, so stop shadowing the
+    // row — a pinned override hides every later change and is written back over it.
+    if (pending === live.due_date) { release(); return; }
     setError('');
     try {
       apply({ type: 'adopt', row: await updateTodo(live.id, { due_date: pending }) });
@@ -361,9 +373,9 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       setError(msg);
       toast.error(msg); // same unmount reasoning as the notes save
     } finally {
-      // Released either way: on success the adopted response carries the date, and on failure
-      // the field must not go on showing one the server never took.
-      apply({ type: 'due', value: null });
+      // Either way: on success the adopted response carries the date, and on failure the
+      // field must not go on showing one the server never took.
+      release();
     }
   });
 
@@ -374,7 +386,12 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
    */
   const commitBack = useSerialCommit(async (): Promise<void> => {
     const { pendingBack: pending, row: live } = stateRef.current;
-    if (pending === null || pending === (live.bring_back_on ?? '')) return;
+    if (pending === null) return;
+    const edit = dateEdits.current.back;
+    const release = () => {
+      if (dateEdits.current.back === edit) apply({ type: 'back', value: null });
+    };
+    if (pending === (live.bring_back_on ?? '')) { release(); return; }
     setError('');
     try {
       apply({ type: 'adopt', row: await updateTodo(live.id, { bring_back_on: pending || null }) });
@@ -384,7 +401,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       setError(msg);
       toast.error(msg); // same unmount reasoning as the notes save
     } finally {
-      apply({ type: 'back', value: null });
+      release();
     }
   });
 
@@ -700,7 +717,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               onBlur={() => { setDueFocused(false); void commitDue(); }}
               // Shown immediately, written on blur — `commitDue` says why. Nothing here
               // disables the input, so the user can finish typing the date.
-              onChange={e => apply({ type: 'due', value: e.target.value })}
+              onChange={e => { dateEdits.current.due += 1; apply({ type: 'due', value: e.target.value }); }}
               className={`${inputCls} min-w-40`}
               aria-label="Due date"
             />
@@ -725,7 +742,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               disabled={busy}
               onFocus={() => setBackFocused(true)}
               onBlur={() => { setBackFocused(false); void commitBack(); }}
-              onChange={e => apply({ type: 'back', value: e.target.value })}
+              onChange={e => { dateEdits.current.back += 1; apply({ type: 'back', value: e.target.value }); }}
               className={`${inputCls} min-w-40`}
               aria-label="Bring back on"
               title="Hidden from your lists until this day, then on Today. Not a deadline."

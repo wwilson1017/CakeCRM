@@ -17,11 +17,14 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { listProjectsMock, listTodosMock, updateProjectMock, getFiltersMock } = vi.hoisted(() => ({
+const {
+  listProjectsMock, listTodosMock, updateProjectMock, getFiltersMock, createTodoMock,
+} = vi.hoisted(() => ({
   listProjectsMock: vi.fn(),
   listTodosMock: vi.fn(),
   updateProjectMock: vi.fn(),
   getFiltersMock: vi.fn(),
+  createTodoMock: vi.fn(),
 }));
 
 // Every export of ./api is named so a page reaching for a new one fails loudly, not as
@@ -29,7 +32,7 @@ const { listProjectsMock, listTodosMock, updateProjectMock, getFiltersMock } = v
 vi.mock('./api', () => ({
   listTodos: listTodosMock,
   todayTodos: vi.fn().mockResolvedValue([]),
-  createTodo: vi.fn(),
+  createTodo: createTodoMock,
   updateTodo: vi.fn(),
   deleteTodo: vi.fn(),
   bulkUpdate: vi.fn(),
@@ -44,6 +47,7 @@ vi.mock('./api', () => ({
 
 import { ProjectDetailPage } from './ProjectDetailPage';
 import { ApiError } from '../../core/api/client';
+import { _resetForTesting as resetToasts, getToasts } from '../../shared/toast';
 import { __resetTodoMeta } from './useTodoMeta';
 import type { TodoProject } from './types';
 
@@ -73,6 +77,8 @@ beforeEach(() => {
   listProjectsMock.mockReset().mockResolvedValue([project()]);
   listTodosMock.mockReset().mockResolvedValue([]);
   updateProjectMock.mockReset();
+  createTodoMock.mockReset();
+  resetToasts();
   getFiltersMock.mockReset().mockResolvedValue({ contexts: [], tags: [], status_counts: {} });
   __resetTodoMeta();
 });
@@ -500,5 +506,65 @@ describe('ProjectDetailPage — purpose and outcome (#262)', () => {
 
     expect(alertText()).toBe('purpose too long (max 500 characters)');
     expect(editor('purpose')?.value).toBe('x'.repeat(10));
+  });
+});
+
+describe('ProjectDetailPage — add a next action (#292)', () => {
+  const addBox = () =>
+    container.querySelector<HTMLInputElement>('input[aria-label="Add a next action"]')!;
+  const submit = () => act(async () => {
+    addBox().form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
+
+  // The no-login app's raw fetch throws a plain Error whose message carries the reason.
+  it.each([
+    ['signed in', refusal('title too long (max 20000 characters)'), 'title too long (max 20000 characters)'],
+    ['no-login', new Error('API error 400: title too long'), 'API error 400: title too long'],
+  ])('keeps the typed text and says why when the add is refused (%s)', async (_mode, error, said) => {
+    createTodoMock.mockRejectedValue(error);
+    await render();
+    setValue(addBox(), 'Email the caterer');
+    await submit();
+
+    expect(createTodoMock).toHaveBeenCalledTimes(1);
+    expect(addBox().value).toBe('Email the caterer');
+    expect(getToasts().map(t => t.message)).toEqual([said]);
+  });
+
+  it('keeps text typed while the previous add is still sending', async () => {
+    let land!: () => void;
+    createTodoMock.mockReturnValue(new Promise<void>(resolve => { land = resolve; }));
+    await render();
+    setValue(addBox(), 'Email the caterer');
+    await submit();
+    setValue(addBox(), 'Book the hall');
+    await act(async () => { land(); });
+
+    expect(addBox().value).toBe('Book the hall');
+  });
+
+  it('keeps text retyped to the same words while the previous add is still sending', async () => {
+    let land!: () => void;
+    createTodoMock.mockReturnValue(new Promise<void>(resolve => { land = resolve; }));
+    await render();
+    setValue(addBox(), 'Book the hall');
+    await submit();
+    setValue(addBox(), 'Book');
+    setValue(addBox(), 'Book the hall');
+    await act(async () => { land(); });
+
+    expect(addBox().value).toBe('Book the hall');
+  });
+
+  it('clears the box once the text that was sent has landed', async () => {
+    createTodoMock.mockResolvedValue({});
+    await render();
+    setValue(addBox(), 'Email the caterer');
+    await submit();
+
+    expect(createTodoMock).toHaveBeenCalledWith(
+      { title: 'Email the caterer', status: 'next_action', project_id: 7 },
+    );
+    expect(addBox().value).toBe('');
   });
 });

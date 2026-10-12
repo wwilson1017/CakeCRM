@@ -92,6 +92,7 @@ def test_a_done_item_is_inserted_completed(conn):
     ({"title": "x", "owner_id": 9}, "Unknown fields: owner_id"),
     ({"title": "x", "source": "capture_web"}, "Unknown fields: source"),
     ({"title": "x", "bring_back_on": "2026-11-01"}, "Unknown fields: bring_back_on"),
+    ({"title": "x", "star": "false"}, "star must be true or false"),
     ("just a string", "must be an object"),
 ])
 def test_one_bad_item_rolls_back_the_batch_and_is_named(conn, bad, needle):

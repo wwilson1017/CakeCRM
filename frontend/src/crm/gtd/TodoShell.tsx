@@ -49,7 +49,9 @@ export function TodoShell({ active, hideQuickAdd, inlineUndo, onAdded, children 
   // carries the router basename in public mode, so a literal path check would miss.
   const onSearchPage = active === 'search';
   const urlQuery = onSearchPage ? (searchParams.get('q') ?? '') : '';
-  const [prevUrlQuery, setPrevUrlQuery] = useState(urlQuery);
+  // Starts '' (the box's own initial value), not urlQuery: the shell mounts fresh per
+  // page, so a deep link's ?q= has to count as a change on the first render too.
+  const [prevUrlQuery, setPrevUrlQuery] = useState('');
   if (prevUrlQuery !== urlQuery) {
     setPrevUrlQuery(urlQuery);
     setQuery(urlQuery);

@@ -13,6 +13,8 @@ Use **Rename** beside a context's heading on the **To Do** list or the **Context
 the context you want has no heading there, pick it in the context filter and the Rename link
 appears beside the filter. That covers a context that only finished todos still carry.
 
+While a rename or a merge is being saved, Cancel and Escape wait until it finishes.
+
 Every todo carrying exactly that name changes, finished ones included. None of them counts
 as freshly edited, so the weekly review's stale list and Waiting's ages stay as they were.
 

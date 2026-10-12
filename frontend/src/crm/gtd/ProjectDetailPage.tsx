@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ApiError } from '../../core/api/client';
+import { toast } from '../../shared/toast';
 import { createTodo, deleteProject, listProjects, listTodos, updateProject } from './api';
 import { InlineTitle } from './components/InlineTitle';
 import { TodoEditSheet } from './components/TodoEditSheet';
@@ -49,6 +50,7 @@ function ProjectDetail({ projectId }: { projectId: number }) {
   const [todos, setTodos] = useState<Todo[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [newAction, setNewAction] = useState('');
+  const newActionEdits = useRef(0);
   const [editTodo, setEditTodo] = useState<Todo | null>(null);
   /**
    * ONE failure line for both click-to-edit fields, TAGGED with the field it belongs to.
@@ -109,10 +111,21 @@ function ProjectDetail({ projectId }: { projectId: number }) {
   const { toggleDone, toggleStar, after } = useRowActions(reload);
 
   const addNextAction = async () => {
-    if (!newAction.trim()) return;
-    await createTodo({ title: newAction.trim(), status: 'next_action', project_id: projectId })
-      .catch(() => undefined);
-    setNewAction('');
+    const title = newAction.trim();
+    if (!title) return;
+    const sent = newActionEdits.current;
+    try {
+      await createTodo({ title, status: 'next_action', project_id: projectId });
+    } catch (e) {
+      // Keep the typed text: a refused add must not eat it. Same unwrapping as `saveField`
+      // below — the no-login app's raw fetch throws a plain Error, not an ApiError.
+      toast.error(e instanceof ApiError && e.detail ? e.detail
+        : e instanceof Error ? e.message : 'Could not add that. Try again.');
+      return;
+    }
+    // Clear only a box not touched since it was sent, never text typed while the add was in
+    // flight. Counted, not compared — the next action can start with the same words.
+    if (newActionEdits.current === sent) setNewAction('');
     after();
   };
 
@@ -292,7 +305,7 @@ function ProjectDetail({ projectId }: { projectId: number }) {
               placeholder="Add a next action…"
               aria-label="Add a next action"
               value={newAction}
-              onChange={e => setNewAction(e.target.value)}
+              onChange={e => { newActionEdits.current += 1; setNewAction(e.target.value); }}
             />
             <button
               type="submit"

@@ -440,6 +440,8 @@
   `logscrub.py`). `core/logscrub.ScrubTokens`, installed by `main.py` right after
   `basicConfig`, replaces the segment after `/todo/`, `/capture/` or `/todo-web/` with
   `<redacted>` in a record's message, its tuple or dict args and its rendered traceback.
+  The message is judged by what it PRINTS, like an argument: `log.error(exc)` passes the
+  exception itself, which a string-only check let through unscrubbed until #292.
   It sits on the five server loggers by NAME (`uvicorn.access`/`.error`/`.asgi`, the last being
   the trace-level ASGI-scope dump, and `gunicorn.access`/`.error` — a logger filter survives
   gunicorn's UvicornWorker swapping their handlers) and on root's HANDLERS, because a logger filter never sees a record
@@ -483,3 +485,26 @@
   change is 23 or 25 hours long. `listTimeZone.test.tsx` pins the issue's acceptance case
   verbatim (browser zone switched to UTC through `process.env.TZ`, install in Chicago, 23:30)
   and the opposite direction (install in Tokyo, runner in Chicago).
+- **A batch of small fixes ported together** (#292, port of todo-gtd `fafb2e3`, `4e785ba`,
+  `9c8f1ad`, `3c2a3a6`, `e40fd47`, `63e58eb`). **Flags are validated, not coerced**: `gtd_common.validate_flag` accepts a real
+  boolean, 0/1 or None and refuses everything else, and `service._create_todo_cur` /
+  `_apply_todo_update_cur` use it for `star` and `auto_star_on_due`. `bulk_update`'s `fields`
+  dict and the assistant's tools reach those functions untyped, so `bool("false")` used to
+  star every listed todo. (`completed` keeps its truthiness: normal mode sends it as an int
+  and `test_update_todo_writes_completed_and_status_together` pins that.) **Quick Add and a project's "Add a next action" clear only
+  the draft that was sent**: both boxes stay editable while the add is in flight, so text typed
+  meanwhile survives the add landing. Each box counts its edits and clears only if untouched
+  since the send — a text compare would clear a next todo that starts with the same words —
+  and Quick Add's chips and auto-star tick are disabled for that stretch; a refused "Add a next action" keeps the text and raises a
+  toast (it used to swallow the error and clear the box). **The header search box starts in
+  step with `?q=`**: `TodoShell` mounts fresh per page, so its adjust-during-render baseline
+  starts at `''` rather than the URL value, which made a deep link a no-change first render.
+  **`ContextRename` cannot be closed mid-write**: Cancel is disabled and Escape ignored while
+  `busy`, because closing looked like calling the rename off while it still landed. **The
+  triage card's date overrides are released by edit count**: `commitDue` and `commitBack` clear
+  `pendingDue`/`pendingBack` only if the box was not edited since the run began (`dateEdits`,
+  bumped in each box's `onChange`): a date retyped mid-write is the trailing run's to send,
+  and used to be dropped. Counted rather than compared, because a date typed away and back
+  reads the same as the one a failed write was carrying. They also clear it when the box was
+  typed back to the row's own date (the early return used to leave it pinned, hiding every
+  later change and writing itself back over it on the next blur).

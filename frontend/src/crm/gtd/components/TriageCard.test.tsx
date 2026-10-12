@@ -418,6 +418,58 @@ describe('step 2 — the due-date cue', () => {
     expect(onEdit).toHaveBeenCalledTimes(1);
     expect(onEdit.mock.calls[0][0].due_date).toBe('2026-09-10');
   });
+
+  it('writes nothing for a date typed back to what it was, and does not pin it', async () => {
+    // Nothing to write is not a reason to keep shadowing the row: a pinned override hides
+    // every later change to the date and is written back over it on the next blur (#292).
+    render({ due_date: '2026-09-01' });
+    setValue(dueInput(), '2026-09-02');
+    setValue(dueInput(), '2026-09-01');
+    unfocus(dueInput());
+    await settle();
+    expect(updateTodoMock).not.toHaveBeenCalled();
+
+    render({ due_date: '2026-09-05' }); // the sheet moved it, and the parent reloaded
+    expect(dueInput().value).toBe('2026-09-05');
+  });
+
+  it('sends a date retyped during the first write as ONE trailing write', async () => {
+    // The first write answering must not release the newer date still in the box (#292).
+    let land!: (t: Todo) => void;
+    updateTodoMock.mockReturnValueOnce(new Promise<Todo>(r => { land = r; }));
+    render();
+    setValue(dueInput(), '2026-09-01');
+    unfocus(dueInput());
+    setValue(dueInput(), '2026-09-10');
+    unfocus(dueInput()); // a second commit while the first write is still in flight
+    expect(updateTodoMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => { land({ ...TODO, due_date: '2026-09-01', updated_at: nextStamp() }); });
+
+    expect(updateTodoMock.mock.calls.map(c => c[1])).toEqual(
+      [{ due_date: '2026-09-01' }, { due_date: '2026-09-10' }]);
+    expect(dueInput().value).toBe('2026-09-10');
+  });
+
+  it('still sends a date typed away and back while a write of that same date fails', async () => {
+    // The value alone cannot tell the newer edit from the one that failed, so a write
+    // releases only if the box was not edited meanwhile — and the trailing run sends it.
+    vi.spyOn(toast, 'error').mockImplementation(() => {});
+    let fail!: (e: Error) => void;
+    updateTodoMock.mockReturnValueOnce(new Promise<Todo>((_, reject) => { fail = reject; }));
+    render();
+    setValue(dueInput(), '2026-09-01');
+    unfocus(dueInput());
+    setValue(dueInput(), '2026-09-10');
+    setValue(dueInput(), '2026-09-01');
+    unfocus(dueInput());
+
+    await act(async () => { fail(new Error('offline')); });
+
+    expect(updateTodoMock.mock.calls.map(c => c[1])).toEqual(
+      [{ due_date: '2026-09-01' }, { due_date: '2026-09-01' }]);
+    expect(dueInput().value).toBe('2026-09-01');
+  });
 });
 
 describe('the bring-back date (#261)', () => {
@@ -460,6 +512,54 @@ describe('the bring-back date (#261)', () => {
     click(button('Edit'));
     await settle();
     expect(onEdit.mock.calls[0][0].bring_back_on).toBe('2026-11-02');
+  });
+
+  // The same two guards as the due date (#292) — this field commits the same way.
+  it('writes nothing for a date typed back to what it was, and does not pin it', async () => {
+    render({ bring_back_on: '2026-11-02' });
+    setValue(backInput(), '2026-11-03');
+    setValue(backInput(), '2026-11-02');
+    unfocus(backInput());
+    await settle();
+    expect(updateTodoMock).not.toHaveBeenCalled();
+
+    render({ bring_back_on: '2026-11-09' });
+    expect(backInput().value).toBe('2026-11-09');
+  });
+
+  it('sends a date retyped during the first write as ONE trailing write', async () => {
+    let land!: (t: Todo) => void;
+    updateTodoMock.mockReturnValueOnce(new Promise<Todo>(r => { land = r; }));
+    render();
+    setValue(backInput(), '2026-11-02');
+    unfocus(backInput());
+    setValue(backInput(), '2026-11-09');
+    unfocus(backInput());
+    expect(updateTodoMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => { land({ ...TODO, bring_back_on: '2026-11-02', updated_at: nextStamp() }); });
+
+    expect(updateTodoMock.mock.calls.map(c => c[1])).toEqual(
+      [{ bring_back_on: '2026-11-02' }, { bring_back_on: '2026-11-09' }]);
+    expect(backInput().value).toBe('2026-11-09');
+  });
+
+  it('still sends a date typed away and back while a write of that same date fails', async () => {
+    vi.spyOn(toast, 'error').mockImplementation(() => {});
+    let fail!: (e: Error) => void;
+    updateTodoMock.mockReturnValueOnce(new Promise<Todo>((_, reject) => { fail = reject; }));
+    render();
+    setValue(backInput(), '2026-11-02');
+    unfocus(backInput());
+    setValue(backInput(), '2026-11-09');
+    setValue(backInput(), '2026-11-02');
+    unfocus(backInput());
+
+    await act(async () => { fail(new Error('offline')); });
+
+    expect(updateTodoMock.mock.calls.map(c => c[1])).toEqual(
+      [{ bring_back_on: '2026-11-02' }, { bring_back_on: '2026-11-02' }]);
+    expect(backInput().value).toBe('2026-11-02');
   });
 });
 
