@@ -63,6 +63,23 @@ describe('QuickAdd', () => {
     expect(box().value).toBe('Buy seed');
   });
 
+  it('locks the chips and the auto-star box while an add is in flight', async () => {
+    // Landing clears the chips' dismissals and the auto-star tick along with the text that
+    // was sent, so a change made to either mid-request would be thrown away unsaved.
+    let land!: () => void;
+    createTodoMock.mockReturnValue(new Promise<void>(resolve => { land = resolve; }));
+    type('Water the plants daily');
+    const chip = () => container.querySelector<HTMLButtonElement>('button[title^="Remove"]')!;
+    const autoStar = () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect([chip().disabled, autoStar().disabled]).toEqual([false, false]);
+
+    await submit();
+    expect([chip().disabled, autoStar().disabled]).toEqual([true, true]);
+
+    await act(async () => { land(); });
+    expect(box().value).toBe('');
+  });
+
   it('clears the box once the draft that was sent has landed', async () => {
     createTodoMock.mockResolvedValue({});
     type('Call the vet');

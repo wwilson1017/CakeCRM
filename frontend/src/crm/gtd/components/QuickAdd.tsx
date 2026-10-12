@@ -56,6 +56,7 @@ export function QuickAdd({ onAdded }: Props) {
         auto_star_on_due: parsed.repeat ? autoStar : false,
       });
       // The box stays editable while the add is in flight: clear only the draft that was sent.
+      // The chips and the auto-star tick are locked meanwhile, so the text is all that can move.
       if ((inputRef.current?.value ?? sent) === sent) {
         setInput('');
         setIgnored([]);
@@ -95,9 +96,10 @@ export function QuickAdd({ onAdded }: Props) {
             <button
               key={`${chip.raw}-${i}`}
               type="button"
+              disabled={busy}
               onClick={() => setIgnored(prev => [...prev, chip.raw.trim()])}
               title="Remove — keeps the words in the title"
-              className={`rounded-full px-2 py-0.5 text-xs ${CHIP_STYLES[chip.kind]}`}
+              className={`rounded-full px-2 py-0.5 text-xs disabled:opacity-40 ${CHIP_STYLES[chip.kind]}`}
             >
               {chip.label} ✕
             </button>
@@ -109,6 +111,7 @@ export function QuickAdd({ onAdded }: Props) {
           <input
             type="checkbox"
             checked={autoStar}
+            disabled={busy}
             onChange={e => setAutoStar(e.target.checked)}
             className="h-3.5 w-3.5 accent-amber-500"
           />
