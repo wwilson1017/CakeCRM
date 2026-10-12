@@ -297,6 +297,22 @@
   public app's download grew by the layer and `@dnd-kit` — the measured delta is in
   `docs/agents/frontend-boot-split.md`.
 
+- **The open lists read past the 500-row window** (#295). One `GET …/todos` is at most 500
+  rows, and the open lists sort oldest first, so a list past 500 used to hide its NEWEST
+  todos with no way to reach them. `listTodos({ all: true })` (`crm/gtd/api.ts`) now walks
+  the whole list: `sort=id` + `after_id` on `gtd_service.list_todos` and the list route — the
+  keyset contract of `docs/agents/list-pages.md` (never OFFSET, a cursor refused under any
+  other order, "more?" read off one extra row) — then re-sorts to created order, because the
+  walk returns id order and the sample data backdates `created_at`. Inbox, To Do, Waiting,
+  Someday, the Contexts tab without a query and the project page use it, each passing an
+  `AbortSignal` (`useTodos` hands its fetcher one) that is aborted on unmount and on reload, so
+  a superseded multi-page walk stops instead of running beside its replacement. **Still one window on
+  purpose**: Done/Dropped (newest-finished first, so the newest is what shows), a search
+  (open todos first, newest first), and the next-action reads behind the stalled-project
+  checks on Projects and Review, which already treat a full window as "cannot tell". Baker's
+  `todo_list` is unchanged. Deliberately not todo-gtd's `offset` (`99fe0c1`): an OFFSET
+  window skips or repeats a row whenever one leaves the list mid-walk.
+
 - **Every row says who added it unless a person did** (#260). `todos.source` already
   recorded provenance; `crm/gtd/sourceLabel.ts` maps it to a visible word (`agent` →
   Baker, `observer` → Observer, `capture_web` → Capture link, `telegram` → Telegram) and

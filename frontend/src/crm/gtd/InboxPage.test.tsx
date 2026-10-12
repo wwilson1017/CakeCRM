@@ -75,6 +75,8 @@ async function render() {
   });
 }
 
+const signalOf = (call: number) => listTodosMock.mock.calls[call][1] as AbortSignal;
+
 /** The item currently on the big triage card. Its click-to-rename title is the one
  *  rename affordance on the page — the queue rows below are promote-only. */
 const onCard = () =>
@@ -268,5 +270,19 @@ describe('InboxPage — the undo block sits inline (#265)', () => {
     listTodosMock.mockResolvedValue([FIRST, SECOND]);
     await clickUndoFiling('first captured');
     expect(updateTodoMock).toHaveBeenLastCalledWith(1, { status: 'inbox', context: '' });
+  });
+});
+
+describe('InboxPage — loading the whole inbox (#295)', () => {
+  it('sweeps the list, and a reload abandons the sweep it replaces', async () => {
+    await render();
+    expect(listTodosMock.mock.calls[0][0]).toEqual({ status: 'inbox', all: true });
+    expect(signalOf(0).aborted).toBe(false);
+
+    await act(async () => { notifyTodosChanged(); });
+
+    expect(listTodosMock).toHaveBeenCalledTimes(2);
+    expect(signalOf(0).aborted).toBe(true);
+    expect(signalOf(1).aborted).toBe(false);
   });
 });

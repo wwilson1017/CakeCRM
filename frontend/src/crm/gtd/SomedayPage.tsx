@@ -18,7 +18,7 @@ const NO_TODOS: Todo[] = [];
  * `collectionConfig.ts` for why this page moved and Inbox/Next/Waiting did not.
  */
 export function SomedayPage() {
-  const { todos, failed, reload } = useTodos(() => listTodos({ status: 'someday_maybe', limit: 500 }));
+  const { todos, failed, reload } = useTodos(signal => listTodos({ status: 'someday_maybe', all: true }, signal));
   const { toggleDone, toggleStar, setStatus, after } = useRowActions(reload);
   const { projects, filters } = useTodoMeta();
   const [editTodo, setEditTodo] = useState<Todo | null>(null);

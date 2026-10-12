@@ -135,12 +135,15 @@ def build_router(guard) -> APIRouter:
         search: str | None = None,
         limit: int = Query(default=200, ge=1, le=500),
         include_deferred: bool = False,
+        # #295: `sort=id` + `after_id` is the lists' keyset sweep past the 500-row window.
+        sort: str | None = None,
+        after_id: int | None = Query(default=None, ge=0, le=2_147_483_647),
     ):
         todos = _call(
             gtd_service.list_todos,
             status=status, project=project, context=context, tag=tag, starred=starred,
             due_before=due_before, due_after=due_after, search=search, limit=limit,
-            include_deferred=include_deferred,
+            include_deferred=include_deferred, sort=sort, after_id=after_id,
         )
         return {"todos": todos}
 

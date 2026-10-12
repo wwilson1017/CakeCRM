@@ -324,6 +324,21 @@ def test_open_lists_are_ordered_oldest_first(rec):
     assert "ORDER BY t.created_at ASC" in rec.sql("FROM todos")
 
 
+def test_the_sweep_walks_by_id_after_the_cursor(rec):
+    """#295: a list past the 500-row window is read in id order, page after page."""
+    gtd_service.list_todos(status="inbox", sort="id", after_id=40)
+    sql = rec.sql("FROM todos")
+    assert "t.id > %s" in sql and sql.endswith("ORDER BY t.id ASC LIMIT %s")
+    assert rec.calls[-1][1][-2:] == [40, 100]
+
+
+def test_a_cursor_is_refused_under_any_other_order(rec):
+    """`after_id` under created_at or newest-finished order would skip and repeat rows."""
+    with pytest.raises(gtd_service.ValidationError, match="after_id is only valid with sort='id'"):
+        gtd_service.list_todos(status="inbox", after_id=40)
+    assert not rec.calls
+
+
 def test_lists_exclude_todos_on_archived_deals(rec):
     """Work items follow the deal out of view in GTD mode too, matching list_todos."""
     gtd_service.list_todos(status="inbox")

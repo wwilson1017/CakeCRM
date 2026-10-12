@@ -25,9 +25,9 @@ import { formatAge, matchesFilter } from './util';
  */
 export function WaitingPage() {
   const { todos: waiting, failed: f1, reload: r1 } =
-    useTodos(() => listTodos({ status: 'waiting_for', limit: 500 }));
+    useTodos(signal => listTodos({ status: 'waiting_for', all: true }, signal));
   const { todos: delegated, failed: f2, reload: r2 } =
-    useTodos(() => listTodos({ status: 'delegated', limit: 500 }));
+    useTodos(signal => listTodos({ status: 'delegated', all: true }, signal));
   const reload = () => { r1(); r2(); };
   const { setStatus, after } = useRowActions(reload);
   const { projects, filters } = useTodoMeta();

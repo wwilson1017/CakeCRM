@@ -253,10 +253,19 @@ def list_todos(
     limit: int = 100,
     owner_id: int | str | None = None,
     include_deferred: bool = False,
+    sort: str | None = None,
+    after_id: int | None = None,
 ) -> list[dict]:
     """``include_deferred`` keeps todos waiting on a bring-back date (#261) in the result.
     The working lists leave it off; a record view or a project-health check turns it on,
-    because a scheduled return is still that project's next action."""
+    because a scheduled return is still that project's next action.
+
+    ``sort='id'`` with ``after_id`` is the keyset sweep (#295) a client walks to read a
+    list past the 500-row window — the same contract as `service.list_todos`."""
+    try:
+        service._check_assembly_cursor(after_id, sort or "")
+    except ValueError as e:
+        raise ValidationError(str(e)) from None
     where: list[str] = []
     params: list = []
     # Same three values as every other owner filter (#190): an id, None for everyone, or
@@ -316,8 +325,15 @@ def list_todos(
             "(t.status IN ('done','dropped') OR "
             f"{service.brought_back_sql('t.bring_back_on', params)})"
         )
+    if after_id is not None:
+        where.append("t.id > %s")
+        params.append(after_id)
     sql = _SELECT_TODO + " WHERE " + " AND ".join(where)
-    if status in gtd_common.FINISHED_STATUSES:
+    if sort == "id":
+        # Immutable and append-only: a row inserted mid-sweep sorts past the window
+        # instead of displacing it.
+        sql += " ORDER BY t.id ASC LIMIT %s"
+    elif status in gtd_common.FINISHED_STATUSES:
         # Finished lists grow forever — newest-finished first, or the LIMIT window
         # would freeze on the oldest rows and hide new completions. (Dropped rows
         # have no completed_at; updated_at marks the drop.)

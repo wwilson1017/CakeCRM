@@ -596,3 +596,36 @@ def test_bulk_create_at_the_cap_lands_every_row_and_one_past_it_lands_none(pg_db
     with pytest.raises(ValidationError, match=f"max {MAX_BULK_IDS}"):
         gtd_service.bulk_create([{"title": "x"}] * (MAX_BULK_IDS + 1))
     assert pg_fetchone("SELECT COUNT(*) AS c FROM todos")["c"] == MAX_BULK_IDS
+
+
+# ── #295: a list past the 500-row window ──────────────────────────────────────
+
+def test_a_list_past_the_cap_is_reachable_by_the_id_sweep(pg_db):
+    """One window is the 500 OLDEST rows, so the newest todo was unreachable. The sweep
+    walks `sort=id` + `after_id` through the real route and gets every row once."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from crm import gtd_router, gtd_service
+
+    gtd_service.bulk_create([{"title": f"Item {i}"} for i in range(500)])
+    newest = gtd_service.create_todo("The newest one")["id"]
+    window = gtd_service.list_todos(status="inbox", limit=500)
+    assert len(window) == 500 and newest not in {t["id"] for t in window}
+
+    app = FastAPI()
+    app.include_router(gtd_router.build_router(lambda: None), prefix="/api/crm/gtd")
+    client = TestClient(app)
+    seen: list[int] = []
+    for _ in range(3):  # bounded: a server ignoring the cursor must fail, not hang
+        params = {"status": "inbox", "sort": "id", "limit": 300}
+        if seen:
+            params["after_id"] = seen[-1]
+        page = client.get("/api/crm/gtd/todos", params=params).json()["todos"]
+        seen += [t["id"] for t in page]
+        if len(page) < 300:
+            break
+    assert len(seen) == 501 == len(set(seen)) and seen[-1] == newest
+
+    refused = client.get("/api/crm/gtd/todos", params={"status": "inbox", "after_id": 1})
+    assert refused.status_code == 400

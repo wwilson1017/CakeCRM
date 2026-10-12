@@ -10,6 +10,7 @@
 import { api } from '../../core/api/client';
 import { TODO_API_BASE, isTodoPublicMode } from './publicMode';
 import type { Todo, TodoFilters, TodoProject, TodoStatus } from './types';
+import { parseUTC } from './util';
 
 /** Path relative to the todo API root (e.g. '/todos', '/today', '/projects/3'). */
 function todoFetch<T = unknown>(sub: string, options: RequestInit = {}): Promise<T> {
@@ -46,18 +47,62 @@ export interface TodoListParams {
   due_after?: string;
   search?: string;
   limit?: number;
+  /** Every match instead of one `limit` window (#295): a list page has no "load more", and
+   * one window is only the 500 OLDEST rows. Oldest first; `limit` is ignored. */
+  all?: boolean;
   /** Keep todos waiting on a bring-back date (#261). Record views and project-health
    * checks only — the working lists leave them out until their day. */
   include_deferred?: boolean;
 }
 
-export function listTodos(params: TodoListParams = {}): Promise<Todo[]> {
+function fetchTodos(params: object, signal?: AbortSignal): Promise<Todo[]> {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== '') q.set(k, String(v));
   }
   const qs = q.toString();
-  return todoFetch<{ todos: Todo[] }>(`/todos${qs ? `?${qs}` : ''}`).then(r => r.todos);
+  return todoFetch<{ todos: Todo[] }>(`/todos${qs ? `?${qs}` : ''}`, { signal }).then(r => r.todos);
+}
+
+/** Rows kept per sweep page. The route caps `limit` at 500 and the sweep asks for one more. */
+const SWEEP_PAGE = 499;
+
+/**
+ * Every todo matching `params`, in the lists' own oldest-first order (#295).
+ *
+ * A KEYSET walk on the immutable id (`sort=id` + `after_id`), never OFFSET, with "is there
+ * more" read off one extra row rather than a count — the CRM list sweep's rules
+ * (docs/agents/list-pages.md), restated here because this module also rides in the /todo
+ * PWA, which may reach no CRM module. Aborting `signal` stops the walk at its next page.
+ *
+ * simplification: the whole list is held and rendered at once. A list of tens of thousands
+ * of open todos needs server-side filtering and a virtualized list, not a bigger page.
+ */
+async function sweepTodos(params: TodoListParams, signal?: AbortSignal): Promise<Todo[]> {
+  const all: Todo[] = [];
+  let after: number | undefined;
+  for (;;) {
+    const page = await fetchTodos(
+      { ...params, sort: 'id', limit: SWEEP_PAGE + 1, after_id: after }, signal,
+    );
+    // A server that ignores the cursor would hand back page one forever.
+    if (after !== undefined && page.length > 0 && page[0].id <= after) {
+      throw new Error('Todo list sweep did not advance');
+    }
+    const kept = page.slice(0, SWEEP_PAGE);
+    all.push(...kept);
+    if (page.length <= SWEEP_PAGE) break;
+    after = kept[kept.length - 1].id;
+  }
+  // The walk comes back in id order; the lists show created order (the server's default).
+  return all.sort((a, b) =>
+    parseUTC(a.created_at).getTime() - parseUTC(b.created_at).getTime() || a.id - b.id);
+}
+
+export function listTodos(
+  { all, ...params }: TodoListParams = {}, signal?: AbortSignal,
+): Promise<Todo[]> {
+  return all ? sweepTodos(params, signal) : fetchTodos(params, signal);
 }
 
 export function todayTodos(): Promise<Todo[]> {
