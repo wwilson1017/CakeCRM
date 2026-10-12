@@ -493,14 +493,17 @@
   star every listed todo. (`completed` keeps its truthiness: normal mode sends it as an int
   and `test_update_todo_writes_completed_and_status_together` pins that.) **Quick Add and a project's "Add a next action" clear only
   the draft that was sent**: both boxes stay editable while the add is in flight, so text typed
-  meanwhile survives the add landing; a refused "Add a next action" keeps the text and raises a
+  meanwhile survives the add landing (Quick Add's chips and auto-star tick are disabled for that
+  stretch, since landing resets them and only the text is compared); a refused "Add a next action" keeps the text and raises a
   toast (it used to swallow the error and clear the box). **The header search box starts in
   step with `?q=`**: `TodoShell` mounts fresh per page, so its adjust-during-render baseline
   starts at `''` rather than the URL value, which made a deep link a no-change first render.
   **`ContextRename` cannot be closed mid-write**: Cancel is disabled and Escape ignored while
   `busy`, because closing looked like calling the rename off while it still landed. **The
-  triage card's date overrides are released by value**: `commitDue` and `commitBack` clear
-  `pendingDue`/`pendingBack` only while the box still holds the value they sent (a date
-  retyped mid-write is the trailing run's to send, and used to be dropped), and they clear it
-  when the box was typed back to the row's own date (the early return used to leave it
-  pinned, hiding every later change and writing itself back over it on the next blur).
+  triage card's date overrides are released by edit count**: `commitDue` and `commitBack` clear
+  `pendingDue`/`pendingBack` only if the box was not edited since the run began (`dateEdits`,
+  bumped in each box's `onChange`): a date retyped mid-write is the trailing run's to send,
+  and used to be dropped. Counted rather than compared, because a date typed away and back
+  reads the same as the one a failed write was carrying. They also clear it when the box was
+  typed back to the row's own date (the early return used to leave it pinned, hiding every
+  later change and writing itself back over it on the next blur).
