@@ -256,3 +256,38 @@ describe('LostReasonModal', () => {
     expect(field().maxLength).toBe(500);
   });
 });
+
+// ── #301: the archive variant ───────────────────────────────────────────────────────────────────
+
+describe('LostReasonModal variant="archive"', () => {
+  function renderArchive(onConfirm = vi.fn(), onCancel = vi.fn()) {
+    act(() => {
+      root.render(
+        <LostReasonModal variant="archive" dealTitle="Wholesale order" onConfirm={onConfirm} onCancel={onCancel} />,
+      );
+    });
+    return { onConfirm, onCancel };
+  }
+
+  it('asks why and will not confirm without a reason, by button or by chord', () => {
+    const { onConfirm } = renderArchive();
+    expect(document.body.textContent).toContain('Archive deal');
+    expect(button('Archive').disabled).toBe(true);
+    act(() => { button('Archive').click(); });
+    pressEnter({ metaKey: true });
+    expect(onConfirm).not.toHaveBeenCalled();
+    type('   ');
+    expect(button('Archive').disabled).toBe(true);
+  });
+
+  it('confirms once with the typed reason, at the archive cap', () => {
+    const { onConfirm } = renderArchive();
+    expect(field().maxLength).toBe(500);
+    type('Test record');
+    expect(button('Archive').disabled).toBe(false);
+    act(() => { button('Archive').click(); });
+    act(() => { button('Archive').click(); });
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onConfirm).toHaveBeenCalledWith('Test record');
+  });
+});

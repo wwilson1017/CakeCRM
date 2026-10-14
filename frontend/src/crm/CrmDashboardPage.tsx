@@ -668,6 +668,7 @@ export function CrmDashboardPage() {
               // dashboard numbers.
               // Patching only — the body dismisses itself, and only while it is still on screen.
               onRestored={() => reload()}
+              onArchived={() => reload()}
               onClose={() => setSelectedDealId(null)}
             />
           ),
