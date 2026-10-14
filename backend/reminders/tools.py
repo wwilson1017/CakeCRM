@@ -132,7 +132,8 @@ REMINDER_TOOL_DEFS: list[dict] = [
             "Set a reminder: a fixed note delivered at a date (and optional time) to one "
             "or more teammates, as an in-app notification (plus browser push or Telegram "
             "where they turned those on). It is delivered verbatim with no AI involved, "
-            "and never by email. A date-only reminder for today is sent on the next minute."
+            "and never by email. A date-only reminder is sent at 09:00; one for today set after "
+            "09:00 is sent within a minute."
         ),
         "input_schema": {
             "type": "object",

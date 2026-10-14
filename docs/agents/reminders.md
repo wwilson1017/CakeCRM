@@ -47,7 +47,7 @@
 - **When.** A date-only reminder fires at 09:00 install-local (`recurrence.DEFAULT_FIRE_TIME`,
   a marked simplification; a per-install setting is the upgrade path). A date before today
   is refused, and so is a TIMED instant already past; a date-only reminder for today is
-  accepted at any hour and fires on the next tick. The schedule is re-validated only when a
+  accepted at any hour (after 09:00 it fires on the next tick). The schedule is re-validated only when a
   patch touches the date or time, so a note edit on an overdue-but-unfired row works (the
   page sends only changed fields for the same reason).
 

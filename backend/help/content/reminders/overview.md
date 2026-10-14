@@ -18,7 +18,7 @@ these people this, then".
 
 - **Date and time** — sent at that time, in the install's timezone, within a minute.
 - **Date only** — sent at 9:00 in the morning. A date-only reminder for today is accepted
-  at any hour and is sent within a minute.
+  at any hour: after 9:00 it is sent within a minute.
 - A date before today, or a time today that has already passed, is refused.
 
 ## Who gets it, and how

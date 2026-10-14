@@ -94,7 +94,8 @@ def _when(due_date, due_time, *, now: datetime, zone) -> tuple[date, object, dat
     """Validate a date + optional time and return (date, time | None, utc instant).
 
     A date before today is refused, and so is a TIMED instant already past. A date-only
-    reminder for today is accepted at any hour and simply fires on the next tick."""
+    reminder for today is accepted at any hour: after the default hour it simply fires on
+    the next tick."""
     day = validate_due(due_date)
     if not day:
         raise ValidationError("due_date is required")
