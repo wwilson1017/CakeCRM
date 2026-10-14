@@ -198,9 +198,14 @@ def update_reminder(reminder_id: int, fields: dict, *, now: datetime | None = No
         if "due_date" in fields or "due_time" in fields:
             d, t, at = _when(fields.get("due_date", row["due_date"]),
                              fields.get("due_time", row["due_time"]), now=_now(now), zone=zone)
-            # A new date re-anchors the series; the series id is kept.
-            sets += ["due_date = %s", "due_time = %s", "due_at = %s", "anchor_date = %s"]
-            params += [d, t, at, d]
+            sets += ["due_date = %s", "due_time = %s", "due_at = %s"]
+            params += [d, t, at]
+            # A MOVED date re-anchors the series (the series id is kept). An unchanged date
+            # keeps the anchor, so a time edit on a clamped occurrence (the Feb 28 of a
+            # Jan 31 monthly) cannot drag every later month onto the 28th.
+            if d.isoformat() != row["due_date"]:
+                sets.append("anchor_date = %s")
+                params.append(d)
         if not sets:
             return row
         try:

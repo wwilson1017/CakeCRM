@@ -310,3 +310,20 @@ def test_the_today_panel_reads_due_today_reminders_for_the_scope(sent):
     assert [(r["id"], r["due_time"]) for r in rows] == [(kept["id"], "15:00")]
     assert today_service._fetch_today_reminders("2026-10-14", _user("Cy")) == []
     assert [r["id"] for r in today_service._fetch_today_reminders("2026-10-14", None)] == [kept["id"]]
+
+
+def test_a_time_only_edit_keeps_the_series_anchor(sent):
+    """Codex review: the Feb 28 row of a Jan 31 monthly series must not re-anchor on the
+    28th when only its time changes, or March would land on the 28th too."""
+    from reminders import service
+
+    a = _user("Ada")
+    service.create_reminder(note="Invoice run", due_date="2026-01-31", repeat="monthly",
+                            owner_id=a, created_by=a, now=_utc(2026, 1, 1))
+    service.fire_due(now=_utc(2026, 1, 31, 15))
+    feb = _rows()[-1]
+    out = service.update_reminder(feb["id"], {"due_date": "2026-02-28", "due_time": "11:00"},
+                                  now=_utc(2026, 2, 1))
+    assert out["anchor_date"] == "2026-01-31"
+    service.fire_due(now=_utc(2026, 2, 28, 18))
+    assert _rows()[-1]["due_date"] == "2026-03-31"
