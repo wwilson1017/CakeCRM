@@ -31,7 +31,7 @@ Click the ✕ on a chip if it guessed wrong. The words go back into the title. E
 
 ## The fields on a todo
 
-- **Status** — Inbox, next action, waiting for, delegated, someday/maybe, done or dropped. Dropped means abandoned but recoverable.
+- **Status** — Inbox, next action, waiting for, delegated, someday/maybe, done or dropped. Dropped means abandoned but recoverable; a todo is never deleted.
 - **Context** — where or how you can do it, such as @calls, @computer or @errands.
 - **Project** — an outcome that needs more than one action.
 - **Due date** — for a real deadline only.
@@ -41,7 +41,7 @@ Click the ✕ on a chip if it guessed wrong. The words go back into the title. E
 - **Tags** and **Notes** — anything else.
 - **Links** — a todo can point at a contact and a deal.
 
-Click a todo's title to open it and change any of these.
+Click a todo's title to open it and change any of these. For long notes, **Open larger** beside the box gives you a window-sized editor; Save puts the text back, Esc leaves it as it was.
 
 ## Where a todo came from
 

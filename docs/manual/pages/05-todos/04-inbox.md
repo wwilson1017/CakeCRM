@@ -29,7 +29,7 @@ If the whole thing takes under two minutes, just do it and press **Took 2 minute
 - **Add due date** — only for a real deadline.
 - **Bring back on…** — hides the todo until that day, then shows it on Today.
 - **Notes** — links, numbers, anything you will want when you do it.
-- **Edit** opens the full editor. **Delete** removes the item for good.
+- **Edit** opens the full editor, once any note or date you just changed has saved. **Drop** removes the item: it moves to Done → Dropped, where you can reopen it. A todo is never deleted.
 
 ## 03 Last step — set context
 

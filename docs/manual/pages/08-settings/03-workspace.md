@@ -1,6 +1,6 @@
 ---
 title: Workspace settings
-summary: Admin-only settings for your company name and logo, your team, and custom fields.
+summary: Admin-only settings for your company name and logo, your team, custom fields, and exporting your data.
 shots: [settings-workspace]
 ---
 
@@ -40,3 +40,9 @@ There is no seat limit.
 ## Custom fields
 
 Pick **Contacts**, **Companies** or **Deals**, then **+ Add custom field**. Give it a name and a type: text, number, boolean, date or select. Deleting a field deletes its values everywhere, with no undo. See [Custom fields](../04-contacts-and-companies/10-custom-fields.md).
+
+## Export data
+
+**Download CSV export** on the Export data card downloads everything in the CRM as one ZIP, with a CSV file per table: companies, contacts, deals and their stage history, activity, todos and projects, notes, custom fields, saved views, Baker's memory, and a users file for looking up owner names. Archived deals are included. Passwords, two-factor secrets, API keys, connection tokens, note attachments and Baker conversations are never exported.
+
+It is a snapshot, not a sync: download again for fresh numbers. Take one before a big change, such as clearing data or a large import.

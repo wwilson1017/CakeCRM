@@ -15,7 +15,9 @@ Never archive a deal that genuinely closed. Use **Mark Lost** instead.
 
 ## How to archive a deal
 
-There is no archive button. Ask Baker, once an AI provider is connected. In Ask mode Baker shows an Approve card before it archives anything; see [Approvals](../07-baker/03-approvals.md). Archiving always needs a reason; if you do not give one, Baker asks for it. The reason and your name are saved on the deal and written into its notes as "Archived — reason".
+Open the deal and press **Archive**, next to Mark Won and Mark Lost. It is there on any deal that is not already archived, open or closed. Archiving always needs a reason: the dialog will not submit without one. The reason and your name are saved on the deal and written into its notes as "Archived — reason".
+
+Baker can archive a deal too, once an AI provider is connected. In Ask mode it shows an Approve card first; see [Approvals](../07-baker/03-approvals.md).
 
 Merging two deals archives the one merged away, with the reason "Merged into deal #N".
 

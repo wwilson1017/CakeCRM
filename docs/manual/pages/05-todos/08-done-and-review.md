@@ -14,7 +14,7 @@ The **Done** tab lists finished todos.
 - **Search finished todos…**, **Filters** (by context) and **Views** work as on the other lists.
 - Untick a todo to reopen it.
 
-Dropping a todo, rather than deleting it, keeps it here where you can recover it.
+A todo is never deleted. Dropping one is how you remove it, and it stays here where you can reopen it.
 
 ## Review
 

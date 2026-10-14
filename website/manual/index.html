@@ -534,9 +534,13 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <td>Mark Lost</td>
 <td>Closes the deal as lost, asking for a reason</td>
 </tr>
+<tr>
+<td>Archive</td>
+<td>Hides a duplicate or junk deal, asking for a reason. See <a href="#/pipeline/archived-deals">Archived deals</a></td>
+</tr>
 </tbody>
 </table></div>
-<p><strong>Mark Won</strong> and <strong>Mark Lost</strong> only appear while the deal is in an open stage. See <a href="#/pipeline/stages-and-closing">Stages and closing a deal</a>.</p>
+<p><strong>Mark Won</strong> and <strong>Mark Lost</strong> only appear while the deal is in an open stage. <strong>Archive</strong> appears on any deal that is not already archived. See <a href="#/pipeline/stages-and-closing">Stages and closing a deal</a>.</p>
 <h2>The details</h2>
 <p>Under the title and value you see the stage, then the Deal ID, Contact, Company, Owner, Temperature, Probability, Lead Score, Forecasted close date and Closed on. A lost deal also shows its LOST REASON.</p>
 <p>Click the temperature icon to cycle the deal through hot, warm, cold and not set. Once an AI provider is connected, an estimated touch count also appears here, and you can open the line-by-line reasons behind it. See <a href="#/pipeline/deal-health-and-scores">Deal health and scores</a>.</p>
@@ -611,7 +615,8 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 </ul>
 <p>Never archive a deal that genuinely closed. Use <strong>Mark Lost</strong> instead.</p>
 <h2>How to archive a deal</h2>
-<p>There is no archive button. Ask Baker, once an AI provider is connected. In Ask mode Baker shows an Approve card before it archives anything; see <a href="#/baker/approvals">Approvals</a>. Archiving always needs a reason; if you do not give one, Baker asks for it. The reason and your name are saved on the deal and written into its notes as "Archived — reason".</p>
+<p>Open the deal and press <strong>Archive</strong>, next to Mark Won and Mark Lost. It is there on any deal that is not already archived, open or closed. Archiving always needs a reason: the dialog will not submit without one. The reason and your name are saved on the deal and written into its notes as "Archived — reason".</p>
+<p>Baker can archive a deal too, once an AI provider is connected. In Ask mode it shows an Approve card first; see <a href="#/baker/approvals">Approvals</a>.</p>
 <p>Merging two deals archives the one merged away, with the reason "Merged into deal #N".</p>
 <h2>Where an archived deal goes</h2>
 <p>It leaves the board, the dashboard, analytics, the deal lists, and the contact and company pages. Its open todos drop out of your todo lists too.</p>
@@ -1114,7 +1119,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <p>Click the ✕ on a chip if it guessed wrong. The words go back into the title. Everything you add this way lands in the inbox. "Today" and "tomorrow" follow the install's time zone, not your computer's clock.</p>
 <h2>The fields on a todo</h2>
 <ul>
-<li><strong>Status</strong> — Inbox, next action, waiting for, delegated, someday/maybe, done or dropped. Dropped means abandoned but recoverable.</li>
+<li><strong>Status</strong> — Inbox, next action, waiting for, delegated, someday/maybe, done or dropped. Dropped means abandoned but recoverable; a todo is never deleted.</li>
 <li><strong>Context</strong> — where or how you can do it, such as @calls, @computer or @errands.</li>
 <li><strong>Project</strong> — an outcome that needs more than one action.</li>
 <li><strong>Due date</strong> — for a real deadline only.</li>
@@ -1124,7 +1129,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <li><strong>Tags</strong> and <strong>Notes</strong> — anything else.</li>
 <li><strong>Links</strong> — a todo can point at a contact and a deal.</li>
 </ul>
-<p>Click a todo's title to open it and change any of these.</p>
+<p>Click a todo's title to open it and change any of these. For long notes, <strong>Open larger</strong> beside the box gives you a window-sized editor; Save puts the text back, Esc leaves it as it was.</p>
 <h2>Where a todo came from</h2>
 <p>A todo nobody typed into the app carries a small label: <strong>Baker</strong>, <strong>Observer</strong> (Baker noticed a promise in a conversation and filed it), <strong>Capture link</strong> or <strong>Telegram</strong>. Read a <strong>Capture link</strong> item before you act on it, because anyone with that link could have written it.</p>
 <h2>Undo</h2>
@@ -1191,7 +1196,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <li><strong>Add due date</strong> — only for a real deadline.</li>
 <li><strong>Bring back on…</strong> — hides the todo until that day, then shows it on Today.</li>
 <li><strong>Notes</strong> — links, numbers, anything you will want when you do it.</li>
-<li><strong>Edit</strong> opens the full editor. <strong>Delete</strong> removes the item for good.</li>
+<li><strong>Edit</strong> opens the full editor, once any note or date you just changed has saved. <strong>Drop</strong> removes the item: it moves to Done → Dropped, where you can reopen it. A todo is never deleted.</li>
 </ul>
 <h2>03 Last step — set context</h2>
 <p>Choose a context from <strong>Set context…</strong>, or <strong>+ New context…</strong>. Choosing one files the item into the list you picked in step 01 and clears it out of the inbox. That is why it comes last.</p>
@@ -1281,7 +1286,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <li><strong>Search finished todos…</strong>, <strong>Filters</strong> (by context) and <strong>Views</strong> work as on the other lists.</li>
 <li>Untick a todo to reopen it.</li>
 </ul>
-<p>Dropping a todo, rather than deleting it, keeps it here where you can recover it.</p>
+<p>A todo is never deleted. Dropping one is how you remove it, and it stays here where you can reopen it.</p>
 <h2>Review</h2>
 <p>The <strong>Review</strong> tab supports the weekly review: empty the inbox, give every active project a next action, follow up on stale waiting-fors and prune someday/maybe.</p>
 <figure class="shot"><img data-shot="todos-review" width="1400" height="954" alt="Done and Review screenshot"></figure>
@@ -1468,7 +1473,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <p>Baker can read and change CRM records, work your todos, keep its own memory and knowledge files, search and read connected Gmail, and put drafts in your Gmail Drafts folder. It cannot send email, cannot change install settings, and cannot act outside CakeCRM.</p>
 <h2>CRM records and todos</h2>
 <p>Baker can search, create and update contacts, companies and deals, move a deal's stage, mark a deal won or lost, log activities, and create, update and complete todos. Whether each change runs straight away or waits for your <strong>Approve</strong> depends on the mode you pick. See <a href="#/baker/approvals">Approvals</a>.</p>
-<p>Deleting a contact, a company or a todo is permanent; there is no recycle bin. Deals cannot be deleted at all: archiving is the way to remove one, and it can be restored. A todo can be dropped instead of deleted.</p>
+<p>Deleting a contact or a company is permanent; there is no recycle bin. Deals cannot be deleted at all: archiving is the way to remove one, and it can be restored. A todo is never deleted either: when you ask Baker to delete one, it drops it, and you can reopen it from Done → Dropped.</p>
 <p>One turn can make at most 20 changes. Past that, Baker's further changes are refused.</p>
 <h2>Email</h2>
 <p>Gmail is <strong>read and create-draft only</strong>. Baker can search your mail, read a thread and write a draft into your Gmail Drafts folder. It can never send an email. No tool in CakeCRM sends mail, and a test fails the build if one is ever added. You review and send every draft yourself, from Gmail. See <a href="#/integrations/gmail">Gmail</a>.</p>
@@ -1759,8 +1764,8 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <p><strong>Copy</strong> puts a link on your clipboard. These links are shown on this card and nowhere else. Treat them like passwords. See <a href="#/todos/no-login-links">No-login links</a>.</p>
 <h2>AI provider keys</h2>
 <p>Connecting an AI provider is not on this tab. Admins use <strong>AI Setup</strong> in the top bar. See <a href="#/baker/ai-setup">AI setup</a>.</p><nav class="pn"><a href="#/settings/personal"><small>Previous</small>Personal settings</a><a class="next" href="#/settings/workspace"><small>Next</small>Workspace settings</a></nav></article>
-<article data-route="settings/workspace" data-title="Workspace settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Workspace settings</h1><p class="lead">Admin-only settings for your company name and logo, your team, and custom fields.</p><p>The <strong>Workspace</strong> tab is for admins only. Members do not see it.</p>
-<figure class="shot"><img data-shot="settings-workspace" width="1400" height="1494" alt="Workspace settings screenshot"></figure>
+<article data-route="settings/workspace" data-title="Workspace settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Workspace settings</h1><p class="lead">Admin-only settings for your company name and logo, your team, custom fields, and exporting your data.</p><p>The <strong>Workspace</strong> tab is for admins only. Members do not see it.</p>
+<figure class="shot"><img data-shot="settings-workspace" width="1400" height="1733" alt="Workspace settings screenshot"></figure>
 
 <h2>Branding</h2>
 <ul>
@@ -1786,7 +1791,10 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <p>Accounts are never deleted, so a past colleague's name still shows on the records they owned. You cannot deactivate yourself, remove your own admin role, or demote or deactivate the last active admin. To change your own password, use <a href="#/settings/personal">Personal settings</a>.</p>
 <p>There is no seat limit.</p>
 <h2>Custom fields</h2>
-<p>Pick <strong>Contacts</strong>, <strong>Companies</strong> or <strong>Deals</strong>, then <strong>+ Add custom field</strong>. Give it a name and a type: text, number, boolean, date or select. Deleting a field deletes its values everywhere, with no undo. See <a href="#/contacts-and-companies/custom-fields">Custom fields</a>.</p><nav class="pn"><a href="#/settings/assistant"><small>Previous</small>Assistant settings</a><a class="next" href="#/settings/integrations"><small>Next</small>Integrations settings</a></nav></article>
+<p>Pick <strong>Contacts</strong>, <strong>Companies</strong> or <strong>Deals</strong>, then <strong>+ Add custom field</strong>. Give it a name and a type: text, number, boolean, date or select. Deleting a field deletes its values everywhere, with no undo. See <a href="#/contacts-and-companies/custom-fields">Custom fields</a>.</p>
+<h2>Export data</h2>
+<p><strong>Download CSV export</strong> on the Export data card downloads everything in the CRM as one ZIP, with a CSV file per table: companies, contacts, deals and their stage history, activity, todos and projects, notes, custom fields, saved views, Baker's memory, and a users file for looking up owner names. Archived deals are included. Passwords, two-factor secrets, API keys, connection tokens, note attachments and Baker conversations are never exported.</p>
+<p>It is a snapshot, not a sync: download again for fresh numbers. Take one before a big change, such as clearing data or a large import.</p><nav class="pn"><a href="#/settings/assistant"><small>Previous</small>Assistant settings</a><a class="next" href="#/settings/integrations"><small>Next</small>Integrations settings</a></nav></article>
 <article data-route="settings/integrations" data-title="Integrations settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Integrations settings</h1><p class="lead">Admin-only cards for connecting the team&#x27;s Telegram bot and a Gmail mailbox.</p><p>The <strong>Integrations</strong> tab is for admins only. Members do not see it. It holds two cards.</p>
 <figure class="shot"><img data-shot="settings-integrations" width="1400" height="1331" alt="Integrations settings screenshot"></figure>
 

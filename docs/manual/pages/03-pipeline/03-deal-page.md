@@ -16,8 +16,9 @@ Click a deal anywhere in CakeCRM (a board card, a list row, a Top deals row on t
 | Edit | Turns the panel into a form so you can change the deal's fields |
 | Mark Won | Closes the deal as won, asking which day it closed |
 | Mark Lost | Closes the deal as lost, asking for a reason |
+| Archive | Hides a duplicate or junk deal, asking for a reason. See [Archived deals](06-archived-deals.md) |
 
-**Mark Won** and **Mark Lost** only appear while the deal is in an open stage. See [Stages and closing a deal](04-stages-and-closing.md).
+**Mark Won** and **Mark Lost** only appear while the deal is in an open stage. **Archive** appears on any deal that is not already archived. See [Stages and closing a deal](04-stages-and-closing.md).
 
 ## The details
 
