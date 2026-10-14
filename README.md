@@ -9,7 +9,7 @@ The CRM is fully usable with zero AI configuration — add any AI provider API k
 (Anthropic, OpenAI, Google Gemini, Together AI, or local models via Ollama) and it comes
 with a sales assistant that works your pipeline for you.
 
-**Website:** [mycakecrm.com](https://mycakecrm.com)
+**Website:** [mycakecrm.com](https://mycakecrm.com) · **Manual:** [mycakecrm.com/manual](https://mycakecrm.com/manual/)
 
 > **Status: v0.1.** Everything below is built and running on the public demo the
 > screenshots come from. Found a bug, or want something it doesn't do yet? Open an

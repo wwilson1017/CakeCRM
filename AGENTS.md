@@ -13,7 +13,7 @@ Before pushing, run what CI runs:
 
 ```bash
 # backend/ (venv active)
-ruff check --config ruff.toml . ../scripts
+ruff check --config ruff.toml . ../scripts ../docs/manual
 python -m pytest -q                  # hermetic: no database needed
 python -m pytest -m integration      # real Postgres; TEST_ADMIN_DSN defaults to the compose DB
 
@@ -112,7 +112,8 @@ These are product trust guarantees; each is also stated in `SECURITY.md` or pinn
   `saved_views` is deliberately outside them.
 - A new upload route needs a row in `main._ROUTE_REQUEST_LIMIT_SPECS`.
 - API keys are entered in the app and encrypted via `core/secret_store.py`, never read from env.
-- A PR that changes a user-facing flow updates its `backend/help/content/` topic.
+- A PR that changes a user-facing flow updates its `backend/help/content/` topic and its
+  `docs/manual/pages/` page, then rebuilds the manual (`docs/manual/build.py`; see `website.md`).
 
 ## Frontend rules
 

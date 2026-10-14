@@ -19,3 +19,6 @@ frontend/dist/
 # OS / editor
 .DS_Store
 *.swp
+
+# Manual: raw PNGs re-made by docs/manual/shoot.mjs; the framed webps in website/manual/shots are committed
+docs/manual/shots/

@@ -43,7 +43,7 @@ jobs:
       # all — `.` is backend/ here).
       - name: Lint (ruff)
         working-directory: backend
-        run: ruff check --config ruff.toml . ../scripts
+        run: ruff check --config ruff.toml . ../scripts ../docs/manual
 
       - name: Import check — verify modules load without a database
         working-directory: backend

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CakeCRM Manual</title>
+<meta name="description" content="How to use CakeCRM, screen by screen: the pipeline, contacts, todos, reports, Baker the assistant, settings and self-hosting.">
+<meta name="theme-color" content="#fbfaf6">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="canonical" href="https://mycakecrm.com/manual/">
+<style>
+/* Light only, like the rest of mycakecrm.com. Tokens are a literal copy of website/style.css :root
+   (itself a copy of the app's light --color-ck-*): re-copy them when the site palette changes. */
+@font-face { font-family:"Geist"; src:url(../fonts/geist-latin-wght-normal.woff2) format("woff2-variations"); font-weight:100 900; font-display:swap }
+:root {
+  --bg:#fbfaf6; --card:#fff; --ink:#1d1a17; --muted:#58504a; --line:#e8e4d9; --soft:#f3f1ea;
+  --accent:#be123c; --hl:#f3f1ea; --shadow:0 1px 2px rgba(60,40,20,.05),0 6px 24px rgba(60,40,20,.05);
+  --sans:"Geist",system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+* { box-sizing:border-box }
+html { scroll-padding-top:72px }
+body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.65 var(--sans); -webkit-font-smoothing:antialiased }
+a { color:inherit }
+header.top { position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:14px; padding:0 20px; height:60px;
+  background:var(--card); border-bottom:1px solid var(--line) }
+.brand { display:flex; align-items:center; gap:10px; text-decoration:none; white-space:nowrap }
+.brand svg { flex:none }
+.brand b { font:650 19px/1 var(--sans); letter-spacing:-.01em }
+.brand span { color:var(--muted); font-size:13px; letter-spacing:.08em; text-transform:uppercase }
+.search { margin-left:auto; position:relative; width:min(340px,40vw) }
+.search input { width:100%; height:38px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); padding:0 12px; font:inherit; font-size:14px }
+#menuBtn { display:none; height:38px; border:1px solid var(--line); background:var(--bg); color:var(--ink); border-radius:8px; padding:0 12px; font:inherit; font-size:14px; cursor:pointer }
+.layout { display:grid; grid-template-columns:290px minmax(0,1fr); max-width:1320px; margin:0 auto }
+aside { position:sticky; top:60px; height:calc(100vh - 60px); overflow-y:auto; padding:22px 14px 40px 20px; border-right:1px solid var(--line) }
+aside .home { display:block; padding:6px 10px; margin-bottom:8px; border-radius:6px; text-decoration:none; font-weight:600 }
+aside details { margin:2px 0 }
+aside summary { cursor:pointer; list-style:none; padding:7px 10px; border-radius:6px; font:700 15px/1.3 var(--sans); display:flex; gap:10px; align-items:baseline }
+aside summary::-webkit-details-marker { display:none }
+aside summary::after { content:"›"; margin-left:auto; color:var(--muted); transition:transform .15s }
+aside details[open] summary::after { transform:rotate(90deg) }
+aside summary:hover, aside .home:hover { background:var(--hl) }
+.n { font:600 12px/1 var(--sans); color:var(--muted); min-width:16px }
+aside ul { list-style:none; margin:2px 0 8px; padding:0 0 0 26px; border-left:1px solid var(--line); margin-left:17px }
+aside li a { display:block; padding:4px 10px; font-size:14px; text-decoration:none; color:var(--muted); border-radius:6px; line-height:1.4 }
+aside li a:hover { color:var(--ink); background:var(--hl) }
+aside a.on { color:var(--ink); background:var(--hl); font-weight:600 }
+main { min-width:0; padding:36px 48px 80px }
+article { max-width:860px }
+h1 { font:680 40px/1.1 var(--sans); margin:6px 0 10px; letter-spacing:-.035em }
+h2 { font:650 23px/1.3 var(--sans); letter-spacing:-.02em; margin:40px 0 10px; padding-top:20px; border-top:1px solid var(--line) }
+h3 { font:700 18px/1.35 var(--sans); margin:28px 0 6px }
+p { margin:0 0 14px }
+.lead { font-size:18px; color:var(--muted); margin-bottom:24px }
+.eyebrow, .crumb { font-size:13px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:0 }
+.crumb a { text-decoration:none } .crumb a:hover { text-decoration:underline }
+ul, ol { padding-left:24px } li { margin-bottom:6px }
+code { background:var(--soft); padding:1px 6px; border-radius:4px; font-size:88% }
+pre { overflow-x:auto; margin:14px 0 20px; padding:12px 14px; background:var(--soft); border:1px solid var(--line); border-radius:8px; font-size:14px; line-height:1.5 }
+pre code { padding:0; background:none; font-size:inherit }
+strong { font-weight:650 }
+blockquote { margin:18px 0; padding:12px 18px; background:var(--card); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:0 8px 8px 0 }
+blockquote p:last-child { margin:0 }
+.wrap { overflow-x:auto; margin:14px 0 20px; border:1px solid var(--line); border-radius:8px; background:var(--card) }
+table { border-collapse:collapse; width:100%; font-size:14.5px }
+th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top }
+tr:last-child td { border-bottom:0 }
+th { background:var(--soft); font-weight:650; white-space:nowrap }
+figure.shot { margin:22px 0 26px; }
+figure.shot img { display:block; max-width:100%; height:auto; border-radius:12px; cursor:zoom-in }
+.cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:14px; margin:8px 0 36px }
+.card { display:flex; flex-direction:column; gap:4px; padding:16px 18px; background:var(--card); border:1px solid var(--line); border-radius:10px; text-decoration:none; box-shadow:var(--shadow); transition:transform .12s, border-color .12s }
+.card:hover { transform:translateY(-2px); border-color:var(--muted) }
+.card strong { font:700 18px/1.3 var(--sans) }
+.card .count { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em }
+.card .list { font-size:13.5px; color:var(--muted); line-height:1.5 }
+.pn { display:flex; justify-content:space-between; gap:14px; margin-top:48px; padding-top:20px; border-top:1px solid var(--line) }
+.pn a { display:flex; flex-direction:column; padding:12px 16px; border:1px solid var(--line); border-radius:10px; background:var(--card); text-decoration:none; max-width:48%; font-weight:600 }
+.pn a:hover { border-color:var(--muted) }
+.pn a.next { text-align:right; margin-left:auto }
+.pn small { font-weight:400; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.06em }
+#results a { display:block; padding:12px 14px; margin:8px 0; border:1px solid var(--line); border-radius:8px; background:var(--card); text-decoration:none }
+#results a span { display:block; color:var(--muted); font-size:14px }
+#results a em { display:block; font-style:normal; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em }
+footer { margin-top:56px; font-size:13px; color:var(--muted) }
+#lightbox { position:fixed; inset:0; z-index:50; background:rgba(0,0,0,.85); display:none; overflow:auto; cursor:zoom-out; padding:24px }
+#lightbox.open { display:block }
+#lightbox img { display:block; margin:0 auto; max-width:min(100%,1600px); height:auto; border-radius:8px }
+@media (max-width: 900px) {
+  #menuBtn { display:block }
+  .brand span { display:none }
+  .search { width:auto; flex:1 }
+  .layout { grid-template-columns:1fr }
+  aside { display:none; position:fixed; top:60px; left:0; right:0; bottom:0; z-index:15; height:auto; background:var(--bg); border:0 }
+  body.nav-open aside { display:block }
+  main { padding:24px 16px 64px }
+  h1 { font-size:31px }
+  .pn a { max-width:none; flex:1 }
+}
+@media print { header.top, aside, .pn { display:none } .layout { display:block } main { padding:0 } article[hidden] { display:none } }
+</style>
+</head>
+<body>
+<header class="top">
+  <button id="menuBtn" aria-label="Contents">☰</button>
+  <a class="brand" href="../" title="mycakecrm.com">
+    <img src="../img/logo-mark.svg" width="28" height="28" alt="">
+    <b>CakeCRM</b><span>Manual</span>
+  </a>
+  <div class="search"><input id="q" type="search" placeholder="Search the manual…" autocomplete="off"></div>
+</header>
+<div class="layout">
+  <aside id="nav"><a class="home" href="#/" data-route="">Manual home</a>{{NAV}}</aside>
+  <main>
+    <div id="results" hidden></div>
+    {{ARTICLES}}
+    <footer>Screenshots show fictional sample data. Found a mistake? <a href="https://github.com/wwilson1017/CakeCRM/issues">Open an issue</a>. CakeCRM is free software under the <a href="https://github.com/wwilson1017/CakeCRM/blob/main/LICENSE">AGPL-3.0</a>.</footer>
+  </main>
+</div>
+<div id="lightbox"><img alt=""></div>
+<script id="shots" type="application/json">{{SHOTS}}</script>
+<script>
+const SHOTS = JSON.parse(document.getElementById('shots').textContent);
+const arts = [...document.querySelectorAll('main article')];
+const navLinks = [...document.querySelectorAll('aside a[data-route]')];
+const results = document.getElementById('results'), q = document.getElementById('q');
+function show(route) {
+  let hit = arts.find(a => a.dataset.route === route) || arts[0];
+  results.hidden = true;
+  arts.forEach(a => a.hidden = a !== hit);
+  hit.querySelectorAll('img[data-shot]:not([src])').forEach(img => img.src = SHOTS[img.dataset.shot]);
+  navLinks.forEach(a => a.classList.toggle('on', a.dataset.route === hit.dataset.route));
+  const sec = hit.dataset.route.split('/')[0];
+  document.querySelectorAll('aside details').forEach(d => { if (d.dataset.sec === sec) d.open = true; });
+  document.querySelector('aside a.on')?.scrollIntoView({ block: 'nearest' });
+  document.title = (hit.dataset.route ? hit.dataset.title + ' · ' : '') + 'CakeCRM Manual';
+  document.body.classList.remove('nav-open');
+}
+function route() { show(decodeURIComponent(location.hash.replace(/^#\/?/, ''))); window.scrollTo(0, 0); }
+addEventListener('hashchange', route); route();
+document.getElementById('menuBtn').onclick = () => document.body.classList.toggle('nav-open');
+const lb = document.getElementById('lightbox');
+document.addEventListener('click', e => {
+  if (e.target.matches('figure.shot img')) { lb.querySelector('img').src = e.target.src; lb.classList.add('open'); }
+  else if (lb.contains(e.target)) lb.classList.remove('open');
+});
+addEventListener('keydown', e => { if (e.key === 'Escape') lb.classList.remove('open'); });
+const index = arts.filter(a => a.dataset.route).map(a => ({ a, route: a.dataset.route, title: a.dataset.title,
+  lead: a.querySelector('.lead')?.textContent || '', sec: a.querySelector('.crumb a:last-child')?.textContent || '', text: a.textContent.toLowerCase() }));
+q.addEventListener('input', () => {
+  const s = q.value.trim().toLowerCase();
+  if (!s) return route();
+  const words = s.split(/\s+/);
+  const hits = index.filter(i => words.every(w => i.text.includes(w)))
+    .sort((x, y) => (y.title.toLowerCase().includes(s) - x.title.toLowerCase().includes(s)));
+  arts.forEach(a => a.hidden = true);
+  results.hidden = false;
+  results.innerHTML = `<p class="eyebrow">${hits.length} page${hits.length === 1 ? '' : 's'} match “${s.replace(/[<>&]/g, '')}”</p>` +
+    hits.map(i => `<a href="#/${i.route}"><em>${i.sec}</em><strong>${i.title}</strong><span>${i.lead}</span></a>`).join('');
+});
+results.addEventListener('click', e => { if (e.target.closest('a')) { q.value = ''; setTimeout(route); } });
+</script>
+</body>
+</html>
