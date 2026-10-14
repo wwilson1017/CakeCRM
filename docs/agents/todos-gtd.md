@@ -524,7 +524,13 @@
   and used to be dropped. Counted rather than compared, because a date typed away and back
   reads the same as the one a failed write was carrying. They also clear it when the box was
   typed back to the row's own date (the early return used to leave it pinned, hiding every
-  later change and writing itself back over it on the next blur).
+  later change and writing itself back over it on the next blur). **The triage card's Edit
+  waits for the notes AND both date commits** (#297) before the sheet opens, and every
+  control on the card reads `locked` (`busy || editPending`) for that wait: the sheet saves
+  every field it is handed, so a date write landing after its Save, or a star or project
+  changed mid-wait, was silently reverted. The notes box is locked too, so the sheet opens
+  on exactly what the card holds when the wait ends, except that a date whose write failed is
+  handed over as it was on screen at the click (a failed write releases its override).
 - **Todos are dropped, never permanently deleted** (#299, port of cake_os `67e2f740d`).
   Product decision: `dropped` is the only way off the lists, in both modes and on every
   surface. Gone: `service.delete_todo`, `gtd_service.delete_todo`, `DELETE /api/crm/todos/{id}`,

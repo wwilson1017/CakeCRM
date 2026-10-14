@@ -673,21 +673,21 @@ describe('step 2 — notes without leaving triage', () => {
     expect(onEdit.mock.calls[0][0].notes).toBe('the long version');
   });
 
-  it('opens the sheet on the notes as they stand when the flush finishes', async () => {
-    // Opening waits on the flush, which is a round trip, and the textarea stays editable
-    // throughout. A payload captured at click time would hand the sheet text the card has
-    // since replaced — and the sheet writes back every field it is given.
+  it('locks the notes box while Edit waits on its flush', async () => {
+    // Text typed during the wait would race the sheet (#297), so the box takes no input
+    // until the sheet has what the card holds.
     let release: (v: Todo) => void = () => {};
     updateTodoMock.mockImplementationOnce(() => new Promise<Todo>(res => { release = res; }));
     render();
     setValue(notesBox(), 'first');
     click(button('Edit'));
-    setValue(notesBox(), 'first, then more');
+    expect(notesBox().disabled).toBe(true);
     await act(async () => { release({ ...TODO, notes: 'first', updated_at: nextStamp() }); });
     await settle();
 
+    expect(notesBox().disabled).toBe(false);
     expect(onEdit).toHaveBeenCalledTimes(1);
-    expect(onEdit.mock.calls[0][0].notes).toBe('first, then more');
+    expect(onEdit.mock.calls[0][0].notes).toBe('first');
   });
 
   it('toasts a failed save, because this card can unmount before the message is read', async () => {
@@ -1112,5 +1112,100 @@ describe("step 2 — the picked project's purpose and outcome (#262)", () => {
     render({ project_id: 3, project_name: 'Kitchen remodel' }, undefined, [PURPOSED]);
     setValue(container.querySelector('select[aria-label="Project"]')!, 'new');
     expect(lines()).toBeNull();
+  });
+});
+
+describe('Edit waits for every write the sheet would race (#297)', () => {
+  const backInput = () =>
+    container.querySelector<HTMLInputElement>('input[aria-label="Bring back on"]')!;
+  const star = () =>
+    container.querySelector<HTMLButtonElement>('button[aria-label="Star as today priority"]')!;
+  const hold = () => {
+    let land!: (t: Todo) => void;
+    updateTodoMock.mockReturnValueOnce(new Promise<Todo>(r => { land = r; }));
+    return (t: Partial<Todo>) => act(async () => { land({ ...TODO, ...t, updated_at: nextStamp() }); });
+  };
+
+  it('does not open the sheet until an in-flight due-date write lands', async () => {
+    const land = hold();
+    render();
+    setValue(dueInput(), '2026-09-10');
+    unfocus(dueInput());
+    click(button('Edit'));
+    await settle();
+    expect(onEdit).not.toHaveBeenCalled();
+
+    await land({ due_date: '2026-09-10' });
+    await settle();
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    expect(onEdit.mock.calls[0][0].due_date).toBe('2026-09-10');
+    expect(updateTodoMock).toHaveBeenCalledTimes(1); // the wait re-sends nothing
+  });
+
+  it('does not open the sheet until an in-flight bring-back write lands', async () => {
+    const land = hold();
+    render();
+    setValue(backInput(), '2026-11-02');
+    unfocus(backInput());
+    click(button('Edit'));
+    await settle();
+    expect(onEdit).not.toHaveBeenCalled();
+
+    await land({ bring_back_on: '2026-11-02' });
+    await settle();
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    expect(onEdit.mock.calls[0][0].bring_back_on).toBe('2026-11-02');
+  });
+
+  it('locks every control on the card while Edit waits', async () => {
+    const land = hold();
+    render();
+    setValue(notesBox(), 'slow note');
+    click(button('Edit'));
+
+    const controls = [...container.querySelectorAll<HTMLButtonElement | HTMLInputElement |
+      HTMLSelectElement | HTMLTextAreaElement>('button, input, select, textarea')];
+    expect(controls.length).toBeGreaterThan(5);
+    expect(controls.filter(c => !c.disabled).map(c => c.outerHTML.slice(0, 60))).toEqual([]);
+    // The span title editor is not a form control; it opens nothing while locked.
+    click(container.querySelector('span[role="button"]')!);
+    expect(container.querySelector('input[aria-label="Todo title"]')).toBeNull();
+    click(star());
+    expect(updateTodoMock).toHaveBeenCalledTimes(1); // only the note
+
+    await land({ notes: 'slow note' });
+    await settle();
+    expect(star().disabled).toBe(false);
+    expect(projectPicker().disabled).toBe(false);
+  });
+
+  it('hands the sheet a date whose write failed, so the sheet can rescue it', async () => {
+    vi.spyOn(toast, 'error').mockImplementation(() => {});
+    let fail!: (e: Error) => void;
+    updateTodoMock.mockReturnValueOnce(new Promise<Todo>((_, reject) => { fail = reject; }));
+    render();
+    setValue(backInput(), '2026-11-02');
+    unfocus(backInput());
+    click(button('Edit'));
+    await act(async () => { fail(new Error('offline')); });
+    await settle();
+
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    expect(onEdit.mock.calls[0][0].bring_back_on).toBe('2026-11-02');
+    expect(star().disabled).toBe(false); // the failure does not leave the card locked
+  });
+
+  it('hands the sheet the card as it stands when the wait ends', async () => {
+    // The flush's own response can carry a field someone else changed meanwhile; the sheet
+    // saves every field it is given, so it must open on that, not on the click-time view.
+    const land = hold();
+    render({ star: false, project_id: null });
+    setValue(notesBox(), 'slow note');
+    click(button('Edit'));
+    await land({ notes: 'slow note', star: true, project_id: 3 });
+    await settle();
+
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    expect(onEdit.mock.calls[0][0]).toMatchObject({ notes: 'slow note', star: true, project_id: 3 });
   });
 });
