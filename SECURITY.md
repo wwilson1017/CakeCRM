@@ -209,7 +209,8 @@ of those: capturing a todo, updating one, and creating or updating a project.
 tool nobody has classified confirms, so a capability added later is never silently
 exempt. Deletes, archives, merges, bulk moves, lead-score recomputation, Gmail drafts,
 notifications, memory facts, and any write to `soul.md` or `MEMORY.md` all
-keep their Approve card. Bulk todo updates and both todo deletes are in that group too.
+keep their Approve card. Bulk todo updates and project deletes are in that group too. A todo is never deleted: the
+assistant has no todo delete tool, and dropping one keeps its card.
 Five of the twenty can take a record out of your lists by setting its `status` —
 archiving a contact or a company, or dropping a todo or a project; that
 particular call keeps its card even though the tool is routine. Giving a todo a
