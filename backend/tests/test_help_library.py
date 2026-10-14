@@ -84,10 +84,11 @@ def _registered_tool_names() -> set[str]:
     from gmail.tools import GMAIL_TOOL_DEFS
     from memory.tools import get_memory_tools
     from notifications.tools import get_notification_tools
+    from reminders.tools import REMINDER_TOOL_DEFS
 
     names: set[str] = set()
     for defs in (CRM_TOOL_DEFS, GTD_TOOL_DEFS, GMAIL_TOOL_DEFS, CONTEXT_FILE_TOOL_DEFS,
-                 HELP_TOOL_DEFS, get_memory_tools()[0],
+                 HELP_TOOL_DEFS, REMINDER_TOOL_DEFS, get_memory_tools()[0],
                  get_notification_tools(ToolRegistry())[0]):
         names |= {d["name"] for d in defs}
     names |= set(TOOL_EXECUTORS) | set(GTD_TOOL_EXECUTORS) | set(CONTEXT_FILE_TOOL_EXECUTORS)

@@ -356,6 +356,7 @@ def test_every_query_ends_its_order_by_on_id(rec, pinned_today):
     today_service.get_today()
     assert rec.sql_containing("FROM todos").endswith("ORDER BY (due_date = '') ASC, due_date ASC, id ASC")
     assert rec.sql_containing(HOT_DEALS).endswith("ORDER BY idle_seconds DESC, d.id ASC")
+    assert rec.sql_containing("FROM reminders").endswith("ORDER BY due_at ASC, id ASC")
 
 
 def test_hot_deals_query_imports_its_predicates_rather_than_retyping_them(rec, pinned_today):
@@ -397,6 +398,46 @@ def test_get_today_feeds_the_fetched_deals_into_the_ladder(rec, pinned_today):
     assert (item["kind"], item["id"], item["rank"]) == ("deal", 8, 2)
 
 
+def test_get_today_feeds_the_fetched_reminders_into_the_ladder(rec, pinned_today):
+    """#283: the same defaulted-parameter hazard as deals, held the same way."""
+    rec.fetchall_queue = [[], [], [{"id": 4, "note": "Call back", "owner_id": 3,
+                                    "due_time": "15:00", "status": "upcoming"}]]
+    (item,) = today_service.get_today()["items"]
+    assert (item["kind"], item["id"], item["rank"], item["why"]) == ("reminder", 4, None, "reminder")
+    assert item["title"] == "Call back"
+
+
+def test_a_due_today_reminder_joins_the_tail_after_brought_back_todos_and_before_hot_deals():
+    items = today_service.build_today_items(
+        [todo(1, due=TODAY), {**todo(2), "bring_back_on": TODAY}], TODAY,
+        deals=[deal(8, idle_days=1, stale=False, value=1.0)],
+        reminders=[{"id": 5, "note": "n", "owner_id": 1, "due_time": None, "status": "fired"}],
+    )
+    assert [(i["kind"], i["id"], i["rank"]) for i in items] == [
+        ("todo", 1, 4), ("todo", 2, None), ("reminder", 5, None), ("deal", 8, None)]
+
+
+def test_reminders_sort_timed_first_then_by_id():
+    def r(i, t):
+        return {"id": i, "note": "n", "owner_id": 1, "due_time": t, "status": "upcoming"}
+    items = today_service.build_today_items([], TODAY, reminders=[r(3, None), r(2, "16:00"),
+                                                                  r(1, None), r(9, "08:30")])
+    assert [i["id"] for i in items] == [9, 2, 1, 3]
+
+
+def test_reminders_query_scopes_on_owner_or_people_and_excludes_voided(rec, pinned_today):
+    today_service.get_today(owner_id=3)
+    sql = rec.sql_containing("FROM reminders")
+    assert "status IN ('upcoming', 'fired')" in sql
+    assert "(owner_id = %s OR %s = ANY(people))" in sql
+    assert rec.params_for("FROM reminders") == [TODAY, 3, 3]
+
+
+def test_reminders_query_without_an_owner_filters_nothing(rec, pinned_today):
+    today_service.get_today()
+    assert rec.params_for("FROM reminders") == [TODAY]
+
+
 def test_owner_scope_includes_unassigned_todos(rec, pinned_today):
     """The issue's rule: unowned work appears in 'my' view because someone has to catch
     it. Deliberately wider than list_todos' strict owner filter."""
@@ -424,7 +465,7 @@ def test_one_clock_bounds_the_todos_read_and_the_refresh_boundary(rec, pinned_to
 
 
 def test_payload_envelope(rec, pinned_today):
-    # Two reads, in call order: todos, hot deals.
+    # Three reads, in call order: todos, hot deals, reminders.
     rec.fetchall_queue = [[todo(1, due=TODAY)], []]
     out = today_service.get_today(owner_id=3)
     assert out["date"] == TODAY

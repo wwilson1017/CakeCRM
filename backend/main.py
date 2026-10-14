@@ -48,6 +48,7 @@ from heartbeat.router import router as heartbeat_router
 from memory.router import router as memory_router
 from notifications.router import router as notifications_router
 from providers.router import router as providers_router, setup_router as ai_setup_router
+from reminders.router import router as reminders_router
 from saved_views.router import router as saved_views_router
 from telegram import poller as telegram_poller
 from telegram.router import router as telegram_router
@@ -352,6 +353,7 @@ app.include_router(heartbeat_router, prefix="/api/heartbeat", tags=["heartbeat"]
 app.include_router(context_files_router, prefix="/api/context-files", tags=["context-files"])
 app.include_router(memory_router, prefix="/api/memory", tags=["memory"])
 app.include_router(gtd_router, prefix="/api/crm/gtd", tags=["todo-gtd"])
+app.include_router(reminders_router, prefix="/api/crm/reminders", tags=["reminders"])
 
 # ── No-login todo surfaces (#70) ──────────────────────────────────────────────
 # All four mounts MUST come before the SPA catch-all at the bottom of this file, or

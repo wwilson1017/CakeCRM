@@ -4,10 +4,11 @@ description: Normal is a simple todo list; GTD is the full workflow. Same record
 aliases: todo mode, normal mode, gtd mode, todos, switch, follow ups
 admin: false
 ---
-## Todos are the one follow-up primitive
+## Todos are your follow-up list
 
-Everything you want to come back to lives in one place: the todo store. There is no second,
-parallel follow-up mechanism to keep in step with it.
+Everything you need to do lives in one place: the todo store. A reminder is a different
+thing: a fixed note delivered to chosen people at a time (see `reminders/overview`). It is
+not a todo and never appears in todo lists.
 
 ## The two modes
 
