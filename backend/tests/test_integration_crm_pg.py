@@ -1884,3 +1884,37 @@ def test_report_rollup_caps_activities_per_record_not_globally(pg_db, monkeypatc
     assert by_title["Busy"]["activities_truncated"] is True
     assert len(by_title["Quiet"]["activities"]) == 1
     assert by_title["Quiet"]["activities_truncated"] is False
+
+
+def test_archive_route_writes_the_same_audit_as_the_assistant_tool(pg_db):
+    """#301: the panel's Archive button and Baker's `crm_archive_deal` go through the same
+    service call, so on real SQL they leave the same row (who + why) and the same
+    "Archived — <reason>" note crediting the actor. A blank reason writes nothing."""
+    from core.postgres import pg_fetchall
+    from crm import service
+    from crm.tools import crm_archive_deal
+
+    uid = FAKE_ADMIN["id"]
+    by_route = service.create_deal("Route", stage="lead")["id"]
+    by_tool = service.create_deal("Tool", stage="lead")["id"]
+    client = _client()
+
+    assert client.post(f"/api/crm/deals/{by_route}/archive", json={"reason": "  "}).status_code == 400
+    assert service.get_deal(by_route)["archived_at"] is None
+
+    res = client.post(f"/api/crm/deals/{by_route}/archive", json={"reason": "test record"})
+    assert res.status_code == 200
+    assert crm_archive_deal(by_tool, reason="test record", actor_id=uid)["ok"] is True
+
+    def audit(deal_id):
+        row = service.get_deal(deal_id)
+        notes = pg_fetchall(
+            "SELECT message, author_id FROM crm_chatter WHERE entity_type = 'deal' "
+            "AND entity_id = %s ORDER BY id", (deal_id,))
+        return (row["archived_at"] is not None, row["archived_by"], row["archived_reason"],
+                [(n["message"], n["author_id"]) for n in notes])
+
+    assert audit(by_route) == audit(by_tool) == (
+        True, uid, "test record", [("Archived — test record", uid)])
+    assert res.json()["archived_reason"] == "test record"
+    assert client.post("/api/crm/deals/999999/archive", json={"reason": "x"}).status_code == 404
