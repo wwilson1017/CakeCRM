@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import type { CrmTodayDealItem, CrmTodayTodoItem } from '../core/types';
+import type { CrmTodayDealItem, CrmTodayReminderItem, CrmTodayTodoItem } from '../core/types';
 import {
-  TODAY_COLLAPSED, coerceTodayScope, collapseToday, dealEvidence, msUntilRefresh, whyBadge,
+  TODAY_COLLAPSED, coerceTodayScope, collapseToday, dealEvidence, msUntilRefresh,
+  reminderEvidence, whyBadge,
 } from './todayPanel';
 
 function todo(id: number, why: 'starred' | 'overdue' | 'due_today' = 'due_today'): CrmTodayTodoItem {
@@ -137,5 +138,24 @@ describe('msUntilRefresh', () => {
 
   it('falls back to an hour when the timestamp is unparseable', () => {
     expect(msUntilRefresh('not-a-date', now)).toBe(60 * 60 * 1000);
+  });
+});
+
+function reminderItem(id: number, over: Partial<CrmTodayReminderItem> = {}): CrmTodayReminderItem {
+  return { kind: 'reminder', id, rank: null, why: 'reminder', title: `r${id}`, due_time: null,
+           status: 'upcoming', owner_id: null, ...over };
+}
+
+describe('reminders on the Today panel (#283)', () => {
+  it('stay behind the expander, like every unranked row', () => {
+    const { visible, hiddenCount } = collapseToday([todo(1), reminderItem(2)], false);
+    expect(visible.map(i => i.kind)).toEqual(['todo']);
+    expect(hiddenCount).toBe(1);
+  });
+
+  it('say when they go out, or that they went', () => {
+    expect(reminderEvidence(reminderItem(1, { due_time: '15:00' }))).toBe('15:00');
+    expect(reminderEvidence(reminderItem(1))).toBe('morning');
+    expect(reminderEvidence(reminderItem(1, { status: 'fired', due_time: '08:00' }))).toBe('sent');
   });
 });

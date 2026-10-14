@@ -5,7 +5,7 @@
  * panel renders it as given. What lives here is only what the client decides: how many
  * rows the collapsed card shows, and which owner scope it is asking for.
  */
-import type { CrmTodayItem, CrmTodayTodoItem } from '../core/types';
+import type { CrmTodayItem, CrmTodayReminderItem, CrmTodayTodoItem } from '../core/types';
 import { CORAL_TEXT, GOLD_TEXT, INK_MUTE, formatNumber } from '../shared/styles';
 
 /** Rows the collapsed panel shows before the "+N more today" expander. */
@@ -80,6 +80,11 @@ export function whyBadge(item: CrmTodayTodoItem): { label: string; color: string
     default:
       return { label: 'DUE TODAY', color: INK_MUTE };
   }
+}
+
+/** A reminder's right-hand text on the Today panel (#283): sent, or when it goes out. */
+export function reminderEvidence(item: CrmTodayReminderItem): string {
+  return item.status === 'fired' ? 'sent' : (item.due_time ?? 'morning');
 }
 
 /**

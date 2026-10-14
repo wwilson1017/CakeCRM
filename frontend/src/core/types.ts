@@ -328,7 +328,49 @@ export interface CrmTodayDealItem {
   owner_id: number | null;
 }
 
-export type CrmTodayItem = CrmTodayTodoItem | CrmTodayDealItem;
+/** A reminder due today (#283), on the panel's unranked tail: never in the collapsed five. */
+export interface CrmTodayReminderItem {
+  kind: 'reminder';
+  id: number;
+  rank: null;
+  why: 'reminder';
+  /** The reminder's note. */
+  title: string;
+  /** 'HH:MM', or null for a date-only (morning) reminder. */
+  due_time: string | null;
+  status: 'upcoming' | 'fired';
+  owner_id: number | null;
+}
+
+export type CrmTodayItem = CrmTodayTodoItem | CrmTodayDealItem | CrmTodayReminderItem;
+
+export type ReminderRepeat = 'daily' | 'weekly' | 'monthly' | 'yearly';
+export type ReminderStatus = 'upcoming' | 'fired' | 'voided';
+
+/** A reminder (#283): a note delivered verbatim to `people` at a date and optional time. */
+export interface CrmReminder {
+  id: number;
+  owner_id: number | null;
+  created_by: number | null;
+  note: string;
+  /** User ids to notify. */
+  people: number[];
+  /** YYYY-MM-DD — build a Date from parts, never `new Date()`. */
+  due_date: string;
+  /** 'HH:MM', or null for a date-only reminder (sent in the morning). */
+  due_time: string | null;
+  /** TIMESTAMPTZ — parse with parseUTC. */
+  due_at: string;
+  repeat: ReminderRepeat | null;
+  anchor_date: string;
+  series_id: number | null;
+  status: ReminderStatus;
+  void_reason: string;
+  fired_at: string | null;
+  voided_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface CrmToday {
   /** The SERVER's local day (YYYY-MM-DD). Due labels render against this, not the

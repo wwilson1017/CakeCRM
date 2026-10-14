@@ -410,3 +410,23 @@ describe('TodayPanel hot deals', () => {
     expect(rowButton('Deal 42')!.textContent).not.toContain('Unassigned');
   });
 });
+
+// ── Reminder rows (issue #283) ───────────────────────────────────────────────
+
+describe('TodayPanel reminders', () => {
+  it('shows a reminder behind the expander with its badge, no checkbox, and opens the page', async () => {
+    api.mockResolvedValue(withItems([{
+      kind: 'reminder', id: 9, rank: null, why: 'reminder', title: 'Call the bakery',
+      due_time: '15:00', status: 'upcoming', owner_id: 3,
+    }]));
+    await render(<TodayPanel />);
+
+    await act(async () => { rowButton('more today')!.click(); });
+    const row = rowButton('Call the bakery')!;
+    expect(row.textContent).toContain('REMINDER');
+    expect(row.textContent).toContain('15:00');
+    expect(container.querySelector('button[aria-label^="Complete"]')).toBeNull();
+    await act(async () => { row.click(); });
+    expect(navigate).toHaveBeenCalledWith('/crm/reminders');
+  });
+});
