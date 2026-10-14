@@ -36,6 +36,7 @@ import {
 import { BrandingCard } from './components/BrandingCard';
 import { ChangePasswordCard } from './components/ChangePasswordCard';
 import { CustomFieldSettings } from './components/CustomFieldSettings';
+import { ExportCard } from './components/ExportCard';
 import { GmailCard } from './components/GmailCard';
 import { MemoryCard } from './components/MemoryCard';
 import { NotificationSettings } from './components/NotificationSettings';
@@ -57,6 +58,7 @@ const CARD_COMPONENTS: Record<SettingsCardId, ComponentType<{ isMobile: boolean 
   branding: BrandingCard,
   team: TeamSettings,
   custom_fields: CustomFieldSettings,
+  export: ExportCard,
   telegram: TelegramSettings,
   gmail: GmailCard,
 };

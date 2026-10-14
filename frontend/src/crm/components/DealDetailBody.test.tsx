@@ -860,6 +860,93 @@ describe('archived deals', () => {
   });
 });
 
+// ── Archive from the panel (#301) ───────────────────────────────────────────────────────────────
+//
+// Archive sits beside the close-out pair (#301). It asks for a reason first (the server refuses a
+// blank one), POSTs to the archive route, and hands the SERVER's row up exactly as Restore does,
+// so the host patches rather than refetches.
+
+describe('archive from the panel', () => {
+  async function typeReason(text: string) {
+    const field = document.body.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!
+        .set!.call(field, text);
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+  const dialogButton = (label: string) =>
+    [...document.body.querySelectorAll('button')]
+      .find(b => b.textContent?.trim() === label && !container.contains(b)) ?? null;
+
+  it('offers Archive on a live deal, including a closed one', async () => {
+    routeDetail(detailResponse({ stage: 'lost' }));
+    render({ deal: makeDeal({ stage: 'lost' }) });
+    await settle();
+    expect(buttonByText('Archive')).toBeTruthy();
+    expect(buttonByText('Mark Won')).toBeNull();
+  });
+
+  it('does not offer Archive on a deal that is already archived', async () => {
+    routeDetail(detailResponse({ archived_at: '2026-08-20T00:00:00+00:00' }));
+    render({ deal: makeDeal({ archived_at: '2026-08-20T00:00:00+00:00' }) });
+    await settle();
+    expect(buttonByText('Archive')).toBeNull();
+    expect(buttonByText('Restore')).toBeTruthy();
+  });
+
+  it('asks for a reason first and writes nothing until it has one', async () => {
+    routeDetail(detailResponse());
+    render({ deal: makeDeal() });
+    await settle();
+    await click(buttonByText('Archive'));
+    await settle();
+
+    expect(document.body.querySelector('[role="dialog"]')).toBeTruthy();
+    expect((dialogButton('Archive') as HTMLButtonElement).disabled).toBe(true);
+    expect(api.mock.calls.some(([p]) => String(p).endsWith('/archive'))).toBe(false);
+  });
+
+  it('archives through POST /archive with the reason and hands the SERVER row up', async () => {
+    const archived = detailResponse({ archived_at: '2026-10-13T00:00:00+00:00', archived_reason: 'test record' });
+    routeDetail(detailResponse(), path => (path === '/api/crm/deals/7/archive' ? archived : undefined));
+    const onArchived = vi.fn();
+    const props = render({ deal: makeDeal(), onArchived });
+    await settle();
+    await click(buttonByText('Archive'));
+    await settle();
+    await typeReason('test record');
+    await click(dialogButton('Archive'));
+    await settle();
+
+    expect(api).toHaveBeenCalledWith('/api/crm/deals/7/archive', {
+      method: 'POST', body: JSON.stringify({ reason: 'test record' }),
+    });
+    expect(onArchived).toHaveBeenCalledWith(archived);
+    expect(props.onClose).toHaveBeenCalled();
+  });
+
+  it('keeps the panel usable and says so when the archive fails', async () => {
+    routeDetail(detailResponse(), path => {
+      if (path === '/api/crm/deals/7/archive') throw new Error('boom');
+      return undefined;
+    });
+    const onArchived = vi.fn();
+    const props = render({ deal: makeDeal(), onArchived });
+    await settle();
+    await click(buttonByText('Archive'));
+    await settle();
+    await typeReason('dupe');
+    await click(dialogButton('Archive'));
+    await settle();
+
+    expect(onArchived).not.toHaveBeenCalled();
+    expect(props.onClose).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith('Failed to archive deal.');
+    expect((buttonByText('Archive') as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
 // ── Mark Lost captures a reason (#128) ───────────────────────────────────────────────────────
 
 const dialogButton = (label: string) =>

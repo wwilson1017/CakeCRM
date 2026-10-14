@@ -24,7 +24,7 @@ export type SettingsSectionId = 'personal' | 'assistant' | 'workspace' | 'integr
 export type SettingsCardId =
   | 'notifications' | 'change_password' | 'pipeline_board' | 'telegram_link'
   | 'memory' | 'todo_mode'
-  | 'branding' | 'team' | 'custom_fields'
+  | 'branding' | 'team' | 'custom_fields' | 'export'
   | 'telegram' | 'gmail';
 
 export interface SettingsCardDef {
@@ -76,6 +76,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
       { id: 'branding', adminOnly: true },
       { id: 'team', adminOnly: true },
       { id: 'custom_fields', adminOnly: true },
+      { id: 'export', adminOnly: true },
     ],
   },
   {

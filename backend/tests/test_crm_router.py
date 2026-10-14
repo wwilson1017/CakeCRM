@@ -10,7 +10,7 @@ import io
 
 import psycopg2
 import pytest
-from conftest import fake_admin
+from conftest import fake_admin, fake_member
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -824,10 +824,67 @@ def test_restore_path_is_not_shadowed_by_the_touch_count_routes(client, monkeypa
     assert client.post("/api/crm/deals/3/restore").json()["id"] == 3
 
 
-def test_there_is_no_archive_route(client):
-    """Scope ceiling: view + restore only. Archiving stays an assistant verb until a UI
-    affordance for it is designed — an unreachable write route is risk for nothing."""
-    assert client.post("/api/crm/deals/3/archive").status_code == 404
+# #301: the Archive button's route. This file used to pin the ABSENCE of this route
+# ("view + restore only"); the panel now ships the affordance, so these pin its contract.
+
+def test_archive_passes_reason_and_actor(client, monkeypatch):
+    seen = {}
+
+    def fake(deal_id, archived=True, *, reason=None, actor_id=None):
+        seen.update(deal_id=deal_id, archived=archived, reason=reason, actor_id=actor_id)
+        return {"id": deal_id, "archived_at": "2026-10-13T00:00:00+00:00"}
+
+    monkeypatch.setattr(service, "archive_deal", fake)
+    res = client.post("/api/crm/deals/7/archive", json={"reason": "test record"})
+    assert res.status_code == 200
+    assert res.json()["archived_at"]
+    assert seen == {"deal_id": 7, "archived": True, "reason": "test record", "actor_id": 1}
+
+
+def test_archive_without_a_reason_is_refused(client, monkeypatch):
+    """The service raises on a blank reason (#239); a missing one never reaches it."""
+    def boom(deal_id, archived=True, *, reason=None, actor_id=None):
+        raise ValueError("A reason is required to archive a deal")
+
+    monkeypatch.setattr(service, "archive_deal", boom)
+    res = client.post("/api/crm/deals/7/archive", json={"reason": "   "})
+    assert res.status_code == 400
+    assert "reason is required" in res.json()["detail"]
+    assert client.post("/api/crm/deals/7/archive", json={}).status_code == 422
+
+
+def test_a_member_can_archive_and_is_credited(monkeypatch):
+    """Record CRUD, not admin: `owner_id` is not access control, so any member may put a
+    junk deal away, and the audit row names THAT member."""
+    app = FastAPI()
+    app.include_router(crm_router, prefix="/api/crm")
+    app.dependency_overrides[get_current_user] = fake_member
+    seen = {}
+    monkeypatch.setattr(
+        service, "archive_deal",
+        lambda deal_id, archived=True, *, reason=None, actor_id=None:
+            seen.update(actor_id=actor_id) or {"id": deal_id},
+    )
+    assert TestClient(app).post("/api/crm/deals/7/archive", json={"reason": "dupe"}).status_code == 200
+    assert seen == {"actor_id": 2}
+
+
+def test_archive_missing_deal_404(client, monkeypatch):
+    monkeypatch.setattr(
+        service, "archive_deal", lambda deal_id, archived=True, *, reason=None, actor_id=None: None
+    )
+    assert client.post("/api/crm/deals/999/archive", json={"reason": "x"}).status_code == 404
+
+
+def test_archive_rejects_an_oversized_reason_instead_of_truncating(client, monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        service, "archive_deal",
+        lambda deal_id, archived=True, *, reason=None, actor_id=None: called.append(1),
+    )
+    over = "x" * (service.MAX_ARCHIVE_REASON + 1)
+    assert client.post("/api/crm/deals/7/archive", json={"reason": over}).status_code == 422
+    assert called == []
 
 
 def test_contact_id_zero_is_a_filter_not_a_fallthrough(client, monkeypatch):

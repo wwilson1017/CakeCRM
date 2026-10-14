@@ -8,7 +8,7 @@ writes go through ``get_connection`` and use the shared ``fake_conn`` fixture.
 
 import pytest
 
-from crm import scoring_service, service
+from crm import gtd_common, scoring_service, service
 
 
 class Recorder:
@@ -253,14 +253,25 @@ def test_list_todos_completed_as_int_and_due_before_guard(rec):
 
 def test_update_todo_writes_completed_and_status_together(monkeypatch, rec, todo_txn):
     """`completed` and `status` are two views of one fact, bound by a CHECK constraint
-    since #70 — a stray truthy value must still normalize to exactly 1, and the paired
-    status must be written in the SAME statement."""
+    since #70 — `completed` is written as exactly 1, with the paired status in the SAME
+    statement."""
+    for value in (True, 1):
+        cur = todo_txn(monkeypatch, prior_status="next_action")
+        rec.fetchone_queue = [{"id": 1, "completed": 1}]
+        service.update_todo(1, completed=value)
+        sql, params = next((s, p) for s, p in cur.executed if "UPDATE todos SET" in s)
+        assert "status = %s" in sql and "completed = %s" in sql
+        assert "done" in params and 1 in params
+
+
+@pytest.mark.parametrize("value", ["false", "true", 2, "1"])
+def test_update_todo_refuses_a_completed_that_is_not_true_or_false(monkeypatch, rec, todo_txn, value):
+    """#298: the agent tool is untyped, so the text "false" reached `bool()` and completed
+    the todo. Only a real true/false or 0/1 is accepted; anything else writes nothing."""
     cur = todo_txn(monkeypatch, prior_status="next_action")
-    rec.fetchone_queue = [{"id": 1, "completed": 1}]
-    service.update_todo(1, completed=2)  # stray truthy value must normalize to 1
-    sql, params = next((s, p) for s, p in cur.executed if "UPDATE todos SET" in s)
-    assert "status = %s" in sql and "completed = %s" in sql
-    assert "done" in params and 1 in params and 2 not in params
+    with pytest.raises(gtd_common.ValidationError, match="completed must be true or false"):
+        service.update_todo(1, completed=value)
+    assert not any("UPDATE todos SET" in s for s, _ in cur.executed)
 
 
 def test_update_todo_uncompleting_a_done_todo_reopens_it(monkeypatch, rec, todo_txn):
@@ -280,11 +291,11 @@ def test_complete_todo_locks_the_row_and_none_when_missing(monkeypatch, rec, tod
     assert not any("UPDATE todos SET" in s for s, _ in cur.executed)
 
 
-def test_delete_todo_rowcount(rec):
-    rec.execute_rowcount = 0
-    assert service.delete_todo(5) is False
-    rec.execute_rowcount = 1
-    assert service.delete_todo(5) is True
+def test_todos_have_no_delete(rec):
+    """#299: a todo is never permanently deleted — dropping is the only removal."""
+    from crm import gtd_service
+    assert not hasattr(service, "delete_todo")
+    assert not hasattr(gtd_service, "delete_todo")
 
 
 def test_delete_activity_returns_true_and_rescores_links(rec):
@@ -319,8 +330,11 @@ def test_delete_contact_existence_check_and_cascade_one_txn(monkeypatch, fake_co
     assert service.delete_contact(42) is True
     stmts = [sql for sql, _ in conn.executed]
     assert any("SELECT id FROM contacts WHERE id" in s for s in stmts)
-    # activity_log, todos, crm_chatter, crm_field_values, crm_field_provenance, contacts
-    assert sum("DELETE FROM" in s for s in stmts) == 6
+    # activity_log, crm_chatter, crm_field_values, crm_field_provenance, contacts —
+    # never todos (#299): the open ones are dropped and the FK unlinks them all.
+    assert sum("DELETE FROM" in s for s in stmts) == 5
+    assert not any("DELETE FROM todos" in s for s in stmts)
+    assert any("SELECT id FROM todos WHERE contact_id = %s AND completed = 0" in s for s in stmts)
     assert any("DELETE FROM crm_chatter WHERE entity_type = 'contact'" in s for s in stmts)
     assert any("DELETE FROM crm_field_values WHERE entity_type = 'contact'" in s for s in stmts)
     assert any("DELETE FROM crm_field_provenance WHERE entity_type = 'contact'" in s for s in stmts)

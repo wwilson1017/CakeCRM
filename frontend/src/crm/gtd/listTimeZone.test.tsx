@@ -25,7 +25,6 @@ vi.mock('./api', () => ({
   todayTodos: todayTodosMock,
   createTodo: createTodoMock,
   updateTodo: vi.fn(),
-  deleteTodo: vi.fn(),
   listTodos: vi.fn().mockResolvedValue([]),
   listProjects: vi.fn().mockResolvedValue([]),
   getFilters: getFiltersMock,

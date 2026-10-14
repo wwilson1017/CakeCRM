@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { toast } from '../../../shared/toast';
-import { createProject, deleteTodo, updateTodo } from '../api';
+import { createProject, updateTodo } from '../api';
 import type { Todo, TodoProject, TodoStatus } from '../types';
 import { todoSourceLabel } from '../sourceLabel';
 import { dropUndo, queueUndo } from '../undoQueue';
@@ -14,7 +14,7 @@ interface Props {
   projects: TodoProject[];
   /** Contexts already in use — the options for the final "set context" step. */
   contexts: string[];
-  /** After a write that takes the item OUT of the inbox (filed/done/deleted). */
+  /** After a write that takes the item OUT of the inbox (filed/done/dropped). */
   onProcessed: () => void;
   /** After an in-place change that leaves it in the inbox (title, project, …). */
   onChanged: () => void;
@@ -237,8 +237,12 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
   const [backFocused, setBackFocused] = useState(false);
   // Edits made to each date box, so a write can tell whether the box moved under it.
   const dateEdits = useRef({ due: 0, back: 0 });
-  // Opening the sheet waits on the notes flush, which is a round trip on a slow link.
+  // Opening the sheet waits on the notes and date writes, a round trip on a slow link.
   const [editPending, setEditPending] = useState(false);
+  // Every control reads this, not `busy` alone: the sheet is handed the card as it stands
+  // when the wait ends and saves every field it is given, so a star or project changed
+  // during the wait would be reverted by the sheet's Save (#297).
+  const locked = busy || editPending;
   // Everything a write can move, in one reducer — see `CardState` for why a reducer and not
   // a handful of `useState`s.
   const [state, dispatch] = useReducer(reduce, todo, initState);
@@ -271,10 +275,9 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
 
   // What the Edit sheet is handed: this card's best view of the record, never the lagging
   // prop. Built from `stateRef` at the moment it is needed rather than captured at click
-  // time, because opening waits on the notes flush — a round trip, during which the textarea
-  // stays editable AND the flush's own response can carry a star or project someone else
-  // changed. The sheet writes back every field it is given, so either kind of staleness is a
-  // silent revert.
+  // time, because opening waits on the notes and date writes — a round trip whose responses
+  // can carry a star or project someone else changed. The sheet writes back every field it
+  // is given, so a stale one is a silent revert.
   const payload = (): Todo => {
     const live = stateRef.current;
     return {
@@ -457,8 +460,8 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       // `fields.context !== undefined` on an inbox row is the filing write and nothing
       // else. Queued from `before`, which still holds the status AND context the row had
       // — both are restored, because an item that arrived carrying "@errands" from Quick
-      // Add must go back to '@errands' and not to empty. The Drop button (if one is ever
-      // added) and any other status write fall through to `dropUndo`: a later write that
+      // Add must go back to '@errands' and not to empty. The Drop button (#299) and any
+      // other status write fall through to `dropUndo`: a later write that
       // moves the todo retires an offer that no longer describes a pending change.
       if (fields.status === 'done' && before.status !== 'done') queueUndo(before);
       else if (fields.context !== undefined && before.status === 'inbox') queueUndo(before, 'filed');
@@ -568,33 +571,19 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
     }
   };
 
-  const remove = async () => {
-    if (busy) return;
-    if (!window.confirm('Delete this todo permanently?')) return;
-    setBusy(true);
-    setError('');
-    try {
-      await deleteTodo(todo.id);
-      onProcessed(); // stays busy, same reason as patch()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Delete failed');
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="rounded-xl border border-line bg-cream p-4 sm:p-5 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <InlineTitle
           title={pendingTitle ?? row.title}
           label="Todo title"
-          disabled={busy}
+          disabled={locked}
           onSave={saveTitle}
           className="font-heading text-lg font-semibold text-charcoal"
         />
         <button
           type="button"
-          disabled={busy}
+          disabled={locked}
           onClick={() => void patch({ star: !row.star }, false)}
           className={`shrink-0 text-xl leading-none disabled:opacity-50 ${
             row.star ? 'text-ck-amber-text' : 'text-line hover:text-ck-amber-text'
@@ -622,7 +611,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               <button
                 key={d.status}
                 type="button"
-                disabled={busy}
+                disabled={locked}
                 aria-pressed={on}
                 onClick={() => setDestination(d.status)}
                 className={`${destCls} ${on
@@ -636,7 +625,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
         </div>
         <button
           type="button"
-          disabled={busy}
+          disabled={locked}
           onClick={() => void patch({ status: 'done' }, true)}
           title="It took under 2 minutes — done"
           className="mt-2 rounded-lg border border-green-600 px-3 py-1.5 text-sm font-heading text-green-700 disabled:opacity-50 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-950/30"
@@ -652,7 +641,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
           {newProject === null ? (
             <select
               value={row.project_id ?? ''}
-              disabled={busy}
+              disabled={locked}
               onChange={e => {
                 const v = e.target.value;
                 if (v === NEW_PROJECT) { setNewProject(''); return; }
@@ -675,13 +664,13 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
                 onChange={e => setNewProject(e.target.value)}
                 placeholder="New project name"
                 autoFocus
-                disabled={busy}
+                disabled={locked}
                 className={`${inputCls} border-brand`}
                 aria-label="New project name"
               />
               <button
                 type="submit"
-                disabled={busy || !newProject.trim()}
+                disabled={locked || !newProject.trim()}
                 className="rounded-lg border border-line bg-cream px-3 py-1.5 text-sm font-heading text-charcoal hover:bg-sand disabled:opacity-50"
               >
                 Create
@@ -692,7 +681,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
                   reads as a failure of whatever comes next. */}
               <button
                 type="button"
-                disabled={busy}
+                disabled={locked}
                 onClick={() => { setNewProject(null); setError(''); }}
                 className={`${linkCls} text-muted hover:text-charcoal`}
               >
@@ -712,7 +701,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
             <input
               type="date"
               value={dueValue}
-              disabled={busy}
+              disabled={locked}
               onFocus={() => setDueFocused(true)}
               onBlur={() => { setDueFocused(false); void commitDue(); }}
               // Shown immediately, written on blur — `commitDue` says why. Nothing here
@@ -739,7 +728,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
             <input
               type="date"
               value={backValue}
-              disabled={busy}
+              disabled={locked}
               onFocus={() => setBackFocused(true)}
               onBlur={() => { setBackFocused(false); void commitBack(); }}
               onChange={e => { dateEdits.current.back += 1; apply({ type: 'back', value: e.target.value }); }}
@@ -758,18 +747,27 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
           </span>
           <button
             type="button"
-            disabled={busy || editPending}
+            disabled={locked}
             onClick={() => {
-              // Clicking Edit is what blurs the textarea, so a notes write is already in
-              // flight — and the sheet writes `notes` too. Without ordering them this
-              // card's older PUT can land after the sheet's Save and overwrite it. Opened
-              // regardless of the result: a draft the server rejected is exactly what the
-              // sheet is there to rescue, and `payload()` hands it over either way.
+              // Clicking Edit is what blurs the textarea or a date box, so a write may
+              // already be in flight — and the sheet writes `notes`, `due_date` and
+              // `bring_back_on` too. Without ordering them this card's older PUT can land
+              // after the sheet's Save and overwrite it (#297). Opened regardless of the
+              // result: a draft the server rejected is exactly what the sheet is there to
+              // rescue, and `payload()` hands it over either way.
+              //
+              // The dates on screen now, because a failed date write releases its override
+              // before the wait ends, and the sheet would open on the old date. Nothing can
+              // change them meanwhile: the card is locked.
+              const { pendingDue: due, pendingBack: back } = stateRef.current;
               setEditPending(true);
-              void flushNotes().then(() => {
+              void Promise.all([flushNotes(), commitDue(), commitBack()]).then(() => {
                 if (!mounted.current) return;
                 setEditPending(false);
-                onEdit(payload());
+                const sheet = payload();
+                if (due !== null) sheet.due_date = due;
+                if (back !== null) sheet.bring_back_on = back || null;
+                onEdit(sheet);
               });
             }}
             className={`${linkCls} text-muted hover:text-charcoal`}
@@ -778,8 +776,11 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
           </button>
           <button
             type="button"
-            disabled={busy}
-            onClick={() => void remove()}
+            disabled={locked}
+            // A todo is never deleted (#299): Drop is this card's discard, the same
+            // resolving write filing uses, so the item leaves the inbox for Done's
+            // Dropped tab, where it can be reopened. No confirm — it is recoverable.
+            onClick={() => void patch({ status: 'dropped' }, true)}
             // Underline, not a colour or opacity change (issue #119). `brand-dark` was
             // 2.18:1 as text on the dark card; `hover:opacity-80` — the obvious
             // replacement — is 3.83:1, because fading a token tuned to sit just over
@@ -787,7 +788,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
             // only kind these tokens can carry.
             className={`${linkCls} text-ck-accent-text hover:underline`}
           >
-            Delete
+            Drop
           </button>
         </div>
         {/* The picked project's purpose and outcome (#262), read-only: filing an item under a
@@ -816,7 +817,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
             the title. */}
         <textarea
           value={notesDraft}
-          disabled={busy}
+          disabled={locked}
           onChange={e => apply({ type: 'notes-draft', value: e.target.value })}
           onBlur={() => void flushNotes()}
           placeholder="Notes — links, numbers, anything you'll want when you do it"
@@ -838,7 +839,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
           <div className="flex flex-wrap items-center gap-2">
             <select
               value=""
-              disabled={busy}
+              disabled={locked}
               onChange={e => {
                 const v = e.target.value;
                 if (!v) return;
@@ -865,20 +866,20 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               onChange={e => setNewContext(e.target.value)}
               placeholder="@home, @calls, @errands…"
               autoFocus
-              disabled={busy}
+              disabled={locked}
               className={`${inputCls} border-brand`}
               aria-label="New context"
             />
             <button
               type="submit"
-              disabled={busy || !newContext.trim()}
+              disabled={locked || !newContext.trim()}
               className="rounded-lg bg-brand-dark px-4 py-1.5 text-sm font-heading text-white hover:bg-brand-deep disabled:opacity-50"
             >
               File →
             </button>
             <button
               type="button"
-              disabled={busy}
+              disabled={locked}
               onClick={() => { setNewContext(null); setError(''); }}
               className={`${linkCls} text-muted hover:text-charcoal`}
             >

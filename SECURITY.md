@@ -73,40 +73,6 @@ grep -rnE "messages\(\)\.send|drafts\(\)\.send|/messages/send|send_email|reply_t
 
 It returns nothing.
 
-## The sync-bot guarantee: metadata only, and never a push
-
-CakeCRM's CRM features are ported from a private upstream repo (CAKE OS), and a **sync
-bot** notifies this repo when upstream CRM code changes. Two properties of that bot are
-guarantees rather than settings.
-
-**It can never push.** The bot files issues. Every port becomes an ordinary pull request
-that a human reviews and merges. This is structural: the upstream credential is a
-fine-grained token holding *Actions: write* on this repository and nothing else, which
-cannot push a commit, cannot open a pull request, and cannot even create an issue. The
-intake issue is authored by `github-actions[bot]` through the receiving workflow's own
-token. The alternative transport (`repository_dispatch`) was rejected specifically because
-its credential would have required *Contents: write* — a push-capable token.
-
-**It carries no upstream text.** The wire format is merge **metadata only** — a commit
-SHA, a pull request number, a timestamp, and a changed-file list with line counts. There is
-no field for a diff, a title, a body, a commit message, or an author, so those cannot cross
-even by mistake.
-
-Upstream *paths* do not cross either, which is less obvious but matters more. A path is
-only constrained by its leading directory; the filename after it is free text chosen
-upstream and could carry a person's or customer's name. So an intake issue names **this
-repository's own files** — the counterpart path, and only when that file already exists
-here — and reduces everything else to a count.
-
-Enforced in `backend/tests/test_sync_intake.py`, which feeds sentinel-bearing paths through
-the renderer and fails CI if any sentinel appears in the output.
-
-To be precise about what that guarantee covers: it is *no verbatim upstream text*. An
-upstream repo whose credential had been **stolen** would still choose the numbers it sends,
-and numbers can encode a little data. What it could never do is push code, open a pull
-request, or put arbitrary chosen prose into this repository. The full contract, including
-the residual risks, is in `docs/SYNC.md`.
-
 ## Data handling
 
 - **The Gmail connection is install-wide; access to it is admin-only by default.**
@@ -209,8 +175,9 @@ of those: capturing a todo, updating one, and creating or updating a project.
 tool nobody has classified confirms, so a capability added later is never silently
 exempt. Deletes, archives, merges, bulk moves, lead-score recomputation, Gmail drafts,
 notifications, memory facts, and any write to `soul.md` or `MEMORY.md` all
-keep their Approve card. Bulk todo updates and both todo deletes are in that group too.
-So are setting, changing and voiding a reminder: a reminder notifies people later.
+keep their Approve card. Bulk todo updates and project deletes are in that group too. A todo is never deleted: the
+assistant has no todo delete tool, and dropping one keeps its card.
+Setting, changing and voiding a reminder keep their card too: a reminder notifies people later.
 Five of the twenty can take a record out of your lists by setting its `status` —
 archiving a contact or a company, or dropping a todo or a project; that
 particular call keeps its card even though the tool is routine. Giving a todo a

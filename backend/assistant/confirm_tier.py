@@ -47,15 +47,15 @@ ROUTINE = "routine"
 #     own description sells it as the stand-in for the delete tool we deliberately do
 #     not expose;
 #   * `crm_update_todo` — "dropped", which `list_todos` filters out unconditionally
-#     (`crm.service.NOT_DROPPED_TODO_T`), i.e. a soft delete. The def does not
-#     advertise `status`, but tool arguments are NOT validated against the schema at
-#     runtime and the executor forwards `**kwargs` into `service.update_todo`, whose
-#     allow-list accepts `status` — so an undeclared argument really does reach the
-#     column;
-#   * `todo_update` — "dropped" (#186). Here `status` IS advertised, and
-#     `todo_delete`'s own description sends the model this way: "to drop work the
-#     user has decided against, set status='dropped' so it stays recoverable". That
-#     makes dropping the product's delete gesture, so without this entry classifying
+#     (`crm.service.NOT_DROPPED_TODO_T`), i.e. a soft delete — and since #299 the
+#     only one: the def advertises `status` so the model drops instead of deleting.
+#     (Even undeclared, tool arguments are NOT validated against the schema at runtime
+#     and the executor forwards `**kwargs` into `service.update_todo`, whose allow-list
+#     accepts `status`.);
+#   * `todo_update` — "dropped" (#186). Here `status` IS advertised, and since #299
+#     a todo is never deleted — there is no delete tool, and `todo_update`'s own
+#     description tells the model to set status='dropped' to remove one. That makes
+#     dropping the product's only delete gesture, so without this entry classifying
 #     `todo_update` routine would hand the model an unconfirmed delete;
 #   * `todo_update_project` — "dropped", the same gesture one level up. Dropping a
 #     project does NOT cascade to its todos (`gtd_service.update_project` writes only

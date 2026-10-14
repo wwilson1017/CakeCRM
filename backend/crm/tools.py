@@ -640,7 +640,9 @@ CRM_TOOL_DEFS = [
         "description": (
             "Edit an existing CRM todo — retitle it, move its due date, change priority, "
             "re-link it to a contact or deal, or reopen a completed one. Use when the user "
-            "wants to change a todo they already have rather than create a new one."
+            "wants to change a todo they already have rather than create a new one. Todos "
+            "are never deleted: to remove one, even one created in error, set "
+            "status='dropped'; it stays recoverable."
         ),
         "input_schema": {
             "type": "object",
@@ -660,22 +662,10 @@ CRM_TOOL_DEFS = [
                 "deal_id": {"type": "integer", "description": "Re-link to this deal"},
                 "priority": {"type": "string", "description": "low, medium, or high"},
                 "completed": {"type": "boolean", "description": "true=done, false=reopen"},
-            },
-            "required": ["todo_id"],
-        },
-        "kind": "integration",
-    },
-    {
-        "name": "crm_delete_todo",
-        "writes": True,
-        "description": (
-            "Permanently delete a CRM todo. Use only when the todo was created in error — "
-            "to record that a todo is finished, complete it instead so it stays in the history."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "todo_id": {"type": "integer", "description": "Todo ID to delete"},
+                "status": {
+                    "type": "string",
+                    "description": "'dropped' removes the todo from the lists; 'next_action' reopens a dropped one",
+                },
             },
             "required": ["todo_id"],
         },
@@ -1857,18 +1847,15 @@ def crm_complete_todo(todo_id: int) -> dict:
 
 def crm_update_todo(todo_id: int, **kwargs) -> dict:
     # The service filters to its own allow-list, so an unknown key is ignored rather
-    # than reaching the UPDATE.
-    result = crm.update_todo(todo_id, **kwargs)
+    # than reaching the UPDATE. A refused value (a malformed due date, `completed` that is
+    # not true/false) comes back as the tool's error, not the registry's generic failure.
+    try:
+        result = crm.update_todo(todo_id, **kwargs)
+    except ValueError as e:
+        return {"error": str(e)}
     if not result:
         return {"error": f"Todo {todo_id} not found"}
     return _with_target(result, "todo", todo_id, record=result)
-
-
-def crm_delete_todo(todo_id: int) -> dict:
-    target = _lookup_target("todo", todo_id)  # before the row is gone — see crm_delete_contact
-    if not crm.delete_todo(todo_id):
-        return {"error": f"Todo {todo_id} not found"}
-    return {"ok": True, "deleted": todo_id, "target": target}
 
 
 # ── Companies ─────────────────────────────────────────────────────────────────
@@ -2238,7 +2225,6 @@ TOOL_EXECUTORS = {
     "crm_list_todos": crm_list_todos,
     "crm_complete_todo": crm_complete_todo,
     "crm_update_todo": crm_update_todo,
-    "crm_delete_todo": crm_delete_todo,
     # Analytics + sales intelligence
     "crm_dashboard": crm_dashboard,
     "crm_analytics": crm_analytics,
@@ -2282,14 +2268,14 @@ TOOL_EXECUTORS = {
 # narrows rather than inside either tool module. The engine consults it there.
 
 
-# The five todo tools, hidden while GTD mode is active — the ten richer `todo_*`
+# The four todo tools, hidden while GTD mode is active — the eleven richer `todo_*`
 # tools (crm/gtd_tools.py) cover the same ground there. Advertising both would give
 # the model two vocabularies for one store and it WILL mix them mid-conversation.
 # Named rather than filtered by prefix: `crm_scan_gaps` also starts with a todo-ish
 # word, and a prefix rule would silently capture future tools.
 _TODO_TOOL_NAMES = frozenset({
     "crm_create_todo", "crm_list_todos", "crm_complete_todo",
-    "crm_update_todo", "crm_delete_todo",
+    "crm_update_todo",
 })
 
 

@@ -1654,6 +1654,10 @@ export function PipelinePage() {
                 onMarkLost={markLost}
                 onSaveDeal={saveDeal}
                 onRestored={restoreDeal}
+                // #301: the same fold. The server row carries `archived_at`,
+                // so the card renders as ARCHIVED at once, and the background refresh the fold
+                // queues prunes it when the Archived facet is off.
+                onArchived={restoreDeal}
                 onClose={() => { setSelectedDealId(null); setLinkOpenedDeal(null); }}
               />
             );

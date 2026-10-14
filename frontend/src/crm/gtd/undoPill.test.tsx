@@ -19,11 +19,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
-  updateTodoMock, refreshMetaMock, deleteTodoMock, listTodosMock, listProjectsMock,
+  updateTodoMock, refreshMetaMock, listTodosMock, listProjectsMock,
 } = vi.hoisted(() => ({
   updateTodoMock: vi.fn(),
   refreshMetaMock: vi.fn(),
-  deleteTodoMock: vi.fn(),
   listTodosMock: vi.fn(),
   listProjectsMock: vi.fn(),
 }));
@@ -33,7 +32,6 @@ const {
 vi.mock('./api', () => ({
   updateTodo: updateTodoMock,
   createTodo: vi.fn(),
-  deleteTodo: deleteTodoMock,
   createProject: vi.fn(),
   listTodos: listTodosMock,
   listProjects: listProjectsMock,
@@ -83,7 +81,6 @@ beforeEach(() => {
   resetToasts();
   updateTodoMock.mockReset().mockResolvedValue(BASE);
   refreshMetaMock.mockReset();
-  deleteTodoMock.mockReset().mockResolvedValue(undefined);
   listTodosMock.mockReset().mockResolvedValue([]);
   listProjectsMock.mockReset().mockResolvedValue([]);
   container = document.createElement('div');
@@ -441,10 +438,9 @@ describe('settle-stage fixes', () => {
     expect(container.textContent).toContain('next occurrence already exists');
   });
 
-  it('deleting a todo inside the window drops its pending undo', async () => {
-    const item = todo({ id: 93, title: 'gone for good', status: 'next_action' });
+  it('the edit sheet offers no Delete, so a pending undo survives opening it (#299)', async () => {
+    const item = todo({ id: 93, title: 'kept for good', status: 'next_action' });
     act(() => { queueUndo(item); });
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     await act(async () => {
       root.render(
         <>
@@ -455,12 +451,9 @@ describe('settle-stage fixes', () => {
       );
     });
 
-    await clickAsync(button('Delete'));
-
-    // Nothing may offer to un-complete a row that no longer exists.
-    expect(pill()).toBeNull();
-    expect(deleteTodoMock).toHaveBeenCalledWith(93);
-    confirm.mockRestore();
+    // A todo is never deleted; dropping is a status, set from the sheet's Status field.
+    expect([...container.querySelectorAll('button')].some(b => b.textContent?.trim() === 'Delete')).toBe(false);
+    expect(pill()).not.toBeNull();
   });
 });
 

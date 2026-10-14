@@ -373,6 +373,8 @@ def test_search_order_does_not_depend_on_the_order_topics_were_read():
     ("is a review due", "todos/weekly-review"),
     ("upload a logo", "settings/branding"),
     ("add a user to my team", "settings/team"),
+    ("export my data as csv", "settings/export"),
+    ("download a spreadsheet of everything", "settings/export"),
     # #209 playbooks: a technique, an objection, a buyer behaviour and an author each land
     # on the book they belong to, with no change to search. These pin the end-to-end
     # ranking, not one field: a book's aliases, title, description and body all feed the
@@ -558,6 +560,7 @@ _TOPIC_TO_CARD = {
     "settings/custom-fields": "custom_fields",
     "settings/branding": "branding",
     "settings/team": "team",
+    "settings/export": "export",
     "settings/notifications": "notifications",
     "settings/passwords-and-2fa": "change_password",
 }

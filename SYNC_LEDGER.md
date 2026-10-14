@@ -1,13 +1,11 @@
 # Sync ledger
 
 Every feature that has crossed into CakeCRM from a blueprint repo, and the PR that
-brought it. This is the idempotency record for the **cake_os → CakeCRM sync bot**
-(`docs/SYNC.md`): before porting an upstream change, check here for whether it already
-landed.
+brought it. Ports are made by hand (`docs/SYNC.md` is the playbook); before porting an
+upstream change, check here for whether it already landed.
 
-Rows are added **only by the port PR itself** — the intake bot never writes to this
-file. That keeps the ledger something a human reviewed, rather than something a machine
-asserted.
+Rows are added **only by the port PR itself**, so the ledger is something a human
+reviewed rather than something a machine asserted.
 
 **Schema** — both tables below use the same four columns, so tooling parses one shape:
 
@@ -19,9 +17,8 @@ asserted.
 | `Date` | Merge date (`YYYY-MM-DD`), or `—` where it was never recorded. |
 
 > **Privacy note.** The `Feature` cell is human prose written in a reviewed PR. That is
-> review policy, not a structural guarantee — unlike the intake issues themselves, which
-> physically cannot carry upstream text. Keep entries generic: no customer, staff, or
-> product names. See `SECURITY.md`.
+> review policy, not a structural guarantee. Keep entries generic: no customer, staff, or
+> product names. `backend/tests/test_sync_ledger.py` rejects email addresses and diff fences.
 
 ---
 

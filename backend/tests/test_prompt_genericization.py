@@ -489,7 +489,7 @@ def test_the_repo_scan_reads_the_whole_repo():
         "README.md",
         "SECURITY.md",
         "docs/SYNC.md",  # docs/
-        "scripts/sync_intake.py",  # scripts/
+        "scripts/seed-labels.sh",  # scripts/
         ".github/workflows/ci.yml",  # workflows
         "backend/crm/service.py",  # backend source
         "backend/migrations/20260723221920_crm_core.sql",  # migrations, append-only
