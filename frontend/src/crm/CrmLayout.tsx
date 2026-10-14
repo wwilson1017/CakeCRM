@@ -344,6 +344,9 @@ export function CrmLayout() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <ThemeToggle />
                 <NotificationsBell />
+                {/* The user manual on mycakecrm.com (built from docs/manual, #309): external, so a plain <a>. */}
+                <a href="https://mycakecrm.com/manual/" target="_blank" rel="noopener noreferrer" aria-label="Manual" title="Manual"
+                  style={{ ...actionLink, width: 32, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>?</a>
                 <Link to="/crm/settings" style={actionLink}>Settings</Link>
                 {isAdmin && <Link to="/setup" style={actionLink}>AI Setup</Link>}
                 <button onClick={logout} style={actionLink}>Sign out</button>

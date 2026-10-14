@@ -6,10 +6,14 @@ admin: false
 ---
 ## Three modes
 
-- **Read-only** — Baker is not even offered the tools that change anything, and would be
+The drawer's mode switch reads **Read / Ask / Auto**.
+
+- **Read** — Baker is not even offered the tools that change anything, and would be
   refused if it named one anyway.
-- **Normal** — every change asks first. This is the sensible default.
-- **Power** — changes run straight away, with the exceptions below.
+- **Ask** (the default) — everyday CRM edits (creating and updating contacts, companies,
+  deals, todos, activity and custom fields) run straight away; deletes, archives, merges,
+  bulk changes, email drafts, notifications and memory always ask first.
+- **Auto** — changes run straight away, with the exceptions below. You turn it on yourself.
 
 Read tools never ask, in any mode.
 
@@ -27,7 +31,7 @@ rather than trusting what comes back from the browser, marks the call as running
 runs it so a crash cannot double-execute it, and answers a repeated approval with the result
 it already produced.
 
-## Two things that ask even in power mode
+## Two things that ask even in Auto
 
 - **Writing or deleting one of Baker's two protected knowledge files.** See
   `assistant/context-files`.
@@ -49,6 +53,7 @@ budget still.
 
 ## Deleting is real
 
-Deleting a contact, a company or a deal is permanent — there is no recycle bin. Archiving a
-deal is the recoverable option (`pipeline/archived-deals`). A todo is never deleted: Baker drops it,
-and it stays recoverable. Deleting a contact keeps its todos, unlinked, and drops the open ones.
+Deleting a contact or a company is permanent — there is no recycle bin. Deals have no delete
+at all: archiving is how one is removed, and it is recoverable (`pipeline/archived-deals`). A
+todo is never deleted: Baker drops it, and it stays recoverable. Deleting a contact keeps its
+todos, unlinked, and drops the open ones.

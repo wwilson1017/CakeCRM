@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from 'react';
 import { useAuth } from '../core/auth/AuthContext';
-import { IconChart, IconUsers, IconBuilding, IconFunnel, IconCheck, IconCalendar, IconFile, IconSettings, IconSparkle, IconLock } from './icons';
+import { IconChart, IconUsers, IconBuilding, IconFunnel, IconCheck, IconCalendar, IconFile, IconSettings, IconSparkle, IconLock, IconHelp } from './icons';
 import { BG_CARD, INK, INK_MUTE, LINE, ACCENT_TEXT, FONT_DISPLAY } from './styles';
 
 interface MobileMenuDrawerProps {
@@ -28,6 +28,8 @@ export function MobileMenuDrawer({ onClose, navigate, onSignOut, children }: Mob
     { icon: IconCalendar, label: 'Reminders', action: go('/crm/reminders') },
     { icon: IconFile, label: 'Reports', action: go('/crm/reports') },
     { icon: IconSettings, label: 'Settings', action: go('/crm/settings') },
+    // The user manual is a static page on mycakecrm.com (#309), so it opens in a new tab.
+    { icon: IconHelp, label: 'Manual', action: () => { onClose(); window.open('https://mycakecrm.com/manual/', '_blank', 'noopener,noreferrer'); } },
   ];
   // AI provider setup is admin-only since #60, so a member is not offered the
   // route — the desktop header applies the same rule.
