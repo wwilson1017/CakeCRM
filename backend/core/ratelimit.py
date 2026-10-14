@@ -58,5 +58,12 @@ class IPRateLimiter:
         self.hits[ip].append(now)
         return True
 
+    def exhausted(self, ip: str) -> bool:
+        """Whether `ip` has no budget left, WITHOUT spending any. For a budget charged
+        only on failure (the guess limiters), checked before the attempt so a spent
+        budget also stops an attempt that would have succeeded."""
+        now = time.time()
+        return sum(1 for t in self.hits.get(ip, ()) if now - t < self.window) >= self.max_hits
+
     def clear(self) -> None:
         self.hits.clear()

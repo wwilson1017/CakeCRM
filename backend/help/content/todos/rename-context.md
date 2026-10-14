@@ -24,4 +24,4 @@ If you rename `@phone` to `@calls` and `@calls` is already a context, nothing ch
 form says so and offers **Merge**. Merging folds every `@phone` todo into `@calls`, and the
 two cannot be told apart afterwards, so only merge when you mean it.
 
-Renaming is not offered on the no-login todo link.
+Renaming is not offered in the no-login todo app.

@@ -26,16 +26,16 @@ in GTD mode it gets the todo tools. It is never given both vocabularies for one 
 **Admin only.** The mode is a single install-wide setting, so one person flipping it changes
 the todo surface for every seat. It lives in Settings, Assistant, Todo mode.
 
-## No-login links live on the same card
+## The no-login surfaces live on the same card
 
-The same card configures the two surfaces that work without signing in, and **they are not
-equally open**:
+The same card controls the two surfaces that work without logging in to the CRM, and **they
+are not equally open**:
 
 - The **capture page** is write-only and is reachable with **no token at all** until you set
   one. It is public by default. Setting a capture token switches it to a secret address and
-  the bare one stops existing.
-- The **phone-sized todo app** reads and writes every todo, is off until you switch it on,
-  and mints its token in the same action, so it is never published at a guessable address.
+  the bare one stops existing. The token is shown on this card and nowhere else.
+- The **phone-sized todo app** reads and writes every todo and is off until you switch it on
+  here. It has no link: each person signs their own devices in under Settings, Personal, Todo
+  app devices, with a one-time code.
 
-Any token that exists is shown on this card and nowhere else. See
-`todos/no-login-surfaces`. Neither surface cares which todo mode is active.
+See `todos/no-login-surfaces`. Neither surface cares which todo mode is active.

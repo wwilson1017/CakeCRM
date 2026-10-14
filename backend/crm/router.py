@@ -1028,69 +1028,52 @@ async def set_todo_mode(body: TodoModeBody, user=Depends(require_admin)):
 class TodoSurfacesBody(BaseModel):
     """All-optional: an omitted field is left untouched.
 
-    `capture_token`/`web_token` accept a literal '' to turn the surface tokenless,
-    which for capture means PUBLIC — hence `regenerate` as the safe way to get a
-    fresh secret without ever transiting a caller-chosen one.
+    `capture_token` accepts a literal '' to turn capture tokenless, which means PUBLIC —
+    hence `regenerate_capture` as the safe way to get a fresh secret without ever
+    transiting a caller-chosen one. The todo app has no token since #293: it opens by
+    per-device sign-in codes (`/api/crm/gtd/web-signin-link`).
     """
     capture_token: str | None = Field(default=None, max_length=128)
     web_enabled: bool | None = None
-    web_token: str | None = Field(default=None, max_length=128)
     regenerate_capture: bool = False
-    regenerate_web: bool = False
 
 
 @router.get("/todo-surfaces")
 async def get_todo_surfaces(user=Depends(require_admin)):
-    """Current state of the two no-login todo surfaces, including their live URLs.
+    """Current state of the two no-login todo surfaces: the capture link and whether the
+    todo app is switched on.
 
-    Returns the tokens themselves: they ARE the credential, and the settings page has
-    to render a copyable link — which is exactly why this is **admin-only** since #102
-    (it was merely authenticated before, and the `mode === 'gtd'` UI gate was the only
-    thing keeping it off a normal-mode member's screen).
+    Returns the capture token itself: it IS the credential, and the settings page has to
+    render a copyable link — which is why this is **admin-only** since #102.
     """
     return _todo_surfaces_payload()
 
 
 @router.post("/todo-surfaces")
 async def update_todo_surfaces(body: TodoSurfacesBody, user=Depends(require_admin)):
-    """Enable/disable the public todo app and set or rotate either token.
+    """Switch the todo app on or off, and set or rotate the capture token.
 
-    Admin-only since #102. Enabling the web app mints an unauthenticated URL granting
-    read+write over the whole todo store, and that token has NO lifecycle tie to the
-    account that created it — deactivating that user does not revoke the link, the way
-    `token_epoch`/`is_active` revoke their JWT. A credential that outlives its creator's
-    account belongs behind the install-configuration gate.
+    Admin-only: both live on the install-wide `crm_meta` row. Signing a device in to the
+    todo app is per seat and lives on the member routes in `crm/gtd_router.py`.
     """
     capture_token = body.capture_token
-    web_token = body.web_token
     if body.regenerate_capture:
         capture_token = todo_tokens.mint_token()
     elif capture_token is not None:
         capture_token = todo_tokens.clamp_token(capture_token)
-    if body.regenerate_web:
-        web_token = todo_tokens.mint_token()
-    elif web_token is not None:
-        web_token = todo_tokens.clamp_token(web_token)
-    crm.set_todo_public_settings(
-        capture_token=capture_token,
-        web_enabled=body.web_enabled,
-        web_token=web_token,
-    )
+    crm.set_todo_public_settings(capture_token=capture_token, web_enabled=body.web_enabled)
     return _todo_surfaces_payload()
 
 
 def _todo_surfaces_payload() -> dict:
-    """One definition of what a todo surface link looks like — the settings UI must
-    never assemble these paths itself, or the two would drift."""
+    """One definition of what the capture link looks like — the settings UI must never
+    assemble the path itself, or the two would drift."""
     s = crm.get_todo_public_settings()
     capture_token = s["todo_capture_token"]
-    web_token = s["todo_web_token"]
     return {
         **s,
         "capture_path": f"/capture/{capture_token}" if capture_token else "/capture",
         "capture_public": not capture_token,
-        "web_path": (f"/todo/{web_token}" if web_token else "/todo") if s["todo_web_enabled"] else None,
-        "web_public": s["todo_web_enabled"] and not web_token,
     }
 
 

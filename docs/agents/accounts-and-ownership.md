@@ -222,3 +222,13 @@
   `MemoryPage` renders those two files read-only for a member so the 403 is never the
   first thing they learn. The dead `MULTI_USER_ENABLED` flag was deleted — grep found
   only its own definition and the docstring advertising it.
+- **Todo app sessions belong to a seat** (#293). A browser signed in to the no-login `/todo`
+  app holds a session made from a sign-in code that a signed-in seat minted; the row records
+  that seat. `crm/todo_sessions.py` joins `users.is_active` on every lookup and every
+  redemption, and `users.service.update_user` deletes a seat's sessions and unspent codes in the
+  deactivating transaction (beside the `token_epoch` bump), so deactivation ends them at
+  once and reactivation does not revive them; the FK is `ON DELETE CASCADE` for
+  completeness. The session does NOT act as the seat inside the app (the todo store stays
+  install-wide). The member card `todo_devices` (Personal) drives `get_current_user` routes
+  that act on the caller's own devices; the on/off switch stays on the admin-only
+  `todo_mode` card.

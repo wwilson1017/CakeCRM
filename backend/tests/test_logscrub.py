@@ -41,6 +41,9 @@ ALL_TOKENS = (WEB_TOKEN, CAPTURE_TOKEN, WRONG_TOKEN)
         (f"/api/capture/{CAPTURE_TOKEN}", "/api/capture/<redacted>"),
         (f"/api/todo-web/{WEB_TOKEN}/todos/3", "/api/todo-web/<redacted>/todos/3"),
         (f"/todo/{WEB_TOKEN}?x=1", "/todo/<redacted>?x=1"),
+        # #293: the sign-in link — the CODE is redacted, not the word "signin".
+        (f"/todo/signin/{WEB_TOKEN}", "/todo/signin/<redacted>"),
+        (f"/api/todo-web/signin/{WEB_TOKEN}", "/api/todo-web/signin/<redacted>"),
         (f'GET "https://h.example/todo/{WEB_TOKEN}" 404', 'GET "https://h.example/todo/<redacted>" 404'),
     ],
 )
@@ -150,7 +153,7 @@ def served_app(monkeypatch):
 
     for limiter in (todo_capture.capture_limiter, todo_web.web_limiter, todo_web.guess_limiter):
         limiter.clear()
-    state = {"todo_capture_token": CAPTURE_TOKEN, "todo_web_enabled": True, "todo_web_token": WEB_TOKEN}
+    state = {"todo_capture_token": CAPTURE_TOKEN, "todo_web_enabled": True}
     monkeypatch.setattr(todo_capture.service, "get_todo_public_settings", lambda: dict(state))
     monkeypatch.setattr(todo_web.service, "get_todo_public_settings", lambda: dict(state))
     monkeypatch.setattr(todo_capture.gtd_service, "capture", lambda text, **kw: {"id": 1, "title": text})
@@ -191,8 +194,12 @@ def served_app(monkeypatch):
 def test_no_token_reaches_the_logs_through_the_real_server(served_app):
     base, buf, _ = served_app
     with httpx.Client(base_url=base) as c:
-        assert c.get(f"/todo/{WEB_TOKEN}").status_code in (200, 503)
-        assert c.get(f"/todo/{WEB_TOKEN}/manifest.webmanifest").status_code == 200
+        # #293: the sign-in page (redeems nothing) and a redemption with no Origin —
+        # refused 403 before any lookup, but still an access line carrying the code.
+        assert c.get(f"/todo/signin/{WEB_TOKEN}").status_code in (200, 503)
+        assert c.post(f"/api/todo-web/signin/{WEB_TOKEN}").status_code == 403
+        # An old tokened address: the retired page, looked up nowhere.
+        assert c.get(f"/todo/{WEB_TOKEN}").status_code == 404
         assert c.get(f"/capture/{CAPTURE_TOKEN}").status_code == 200
         assert c.post(f"/api/capture/{CAPTURE_TOKEN}", json={"text": "x"}).status_code == 200
         # The 404-never-401 branch: a wrong token on each surface.
@@ -204,6 +211,8 @@ def test_no_token_reaches_the_logs_through_the_real_server(served_app):
     out = buf.getvalue()
     # Not vacuous: the access lines are there, just without the secret.
     assert out.count("uvicorn.access") >= 8, out
+    assert '"GET /todo/signin/<redacted> HTTP/1.1"' in out, out
+    assert '"POST /api/todo-web/signin/<redacted> HTTP/1.1" 403' in out, out
     assert '"GET /todo/<redacted> HTTP/1.1" 404' in out, out
     assert "/api/todo-web/<redacted>/todos" in out
     for token in ALL_TOKENS:

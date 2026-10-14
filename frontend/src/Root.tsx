@@ -4,12 +4,11 @@ import ChunkErrorBoundary from './core/components/ChunkErrorBoundary';
 import { isTodoPublicMode } from './crm/gtd/publicMode';
 
 // The no-login todo web app (#70) REPLACES the CRM tree rather than sitting in App's route
-// table: it needs a router whose basename is /todo[/{token}] (that basename is what keeps
+// table: it needs a router whose basename is /todo (that basename is what keeps
 // todoPath() and <Navigate to="/"> inside the surface), and React Router throws
 // "You cannot render a <Router> inside another <Router>" the moment a second one mounts.
 // Only a full page load can reach /todo/... (no <Link> in the app points there), so this
-// module-level check catches every real entry — decided from the basename the backend
-// injected, so the branch can only be taken on a page the backend served at /todo.
+// module-level check on the fixed /todo address catches every real entry.
 //
 // The dispatch lives HERE, above App, and both branches are lazy(): that is what splits the
 // bundle (#149). A /todo visitor downloads the todo app and never a CRM chunk; a CRM visitor

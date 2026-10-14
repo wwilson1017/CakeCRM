@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { BottomBar } from './components/BottomBar';
+import { ThisDevice } from './components/ThisDevice';
 import { QuickAdd } from './components/QuickAdd';
 import { UndoPill } from './components/UndoPill';
 import { isTodoPublicMode, todoPath } from './publicMode';
@@ -78,6 +79,8 @@ export function TodoShell({ active, hideQuickAdd, inlineUndo, onAdded, children 
             className="w-32 sm:w-44 rounded-lg border border-line bg-cream px-3 py-1.5 text-base sm:text-sm text-charcoal placeholder:text-muted focus:border-brand focus:outline-none"
           />
         </form>
+        {/* The phone app's own session control (#293). */}
+        {isTodoPublicMode && <ThisDevice />}
       </div>
 
       {/* In the no-login app a phone gets the bottom bar instead of this strip (#266). */}

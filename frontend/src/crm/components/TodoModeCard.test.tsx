@@ -120,15 +120,24 @@ describe('TodoModeCard mode ownership (issue #102)', () => {
     // rotates and turns off the token has to survive the switch.
     api.mockReset();
     api.mockResolvedValue({
-      todo_capture_token: '', todo_web_enabled: true, todo_web_token: 'sekrit',
+      todo_capture_token: '', todo_web_enabled: true,
       capture_path: '/capture', capture_public: true,
-      web_path: '/todo/sekrit', web_public: false,
     });
     const seen: TodoMode[] = [];
     await act(async () => root.render(<Owner initial="normal" seen={seen} />));
 
     expect(container.textContent).toContain('Full todo app');
     expect(container.textContent).toContain('Enable the no-login todo app');
+    // #293: the app has no link to copy or regenerate; devices sign in from their own card.
+    expect(container.textContent).toContain('Todo app devices');
+    expect(container.textContent).not.toContain('/todo/');
+    const box = container.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    api.mockClear();
+    await click(box);
+    expect(api).toHaveBeenCalledWith('/api/crm/todo-surfaces', {
+      method: 'POST', body: JSON.stringify({ web_enabled: false }),
+    });
   });
 
   it('offers a way to restrict tokenless capture in the simple-list mode too', async () => {
@@ -137,9 +146,8 @@ describe('TodoModeCard mode ownership (issue #102)', () => {
     // mode. Hiding it left a live public endpoint with no way to restrict it.
     api.mockReset();
     api.mockResolvedValue({
-      todo_capture_token: '', todo_web_enabled: false, todo_web_token: '',
+      todo_capture_token: '', todo_web_enabled: false,
       capture_path: '/capture', capture_public: true,
-      web_path: null, web_public: false,
     });
     const seen: TodoMode[] = [];
     await act(async () => root.render(<Owner initial="normal" seen={seen} />));

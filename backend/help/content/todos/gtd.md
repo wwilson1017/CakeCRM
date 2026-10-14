@@ -84,13 +84,13 @@ saving stays, and an add that fails keeps your text and says why.
 "Today" always means today in the install's time zone, the one configured for the
 whole install, not the clock of the browser you are using. Today's Overdue and Due today
 sections, the Today and Tomorrow labels on due dates, and words like "tomorrow" or "friday"
-typed into quick add all follow it. So does the no-login todo link. Someone working late in
+typed into quick add all follow it. So does the no-login todo app. Someone working late in
 another time zone sees the same split as everyone else.
 
 Someday, Done and Projects use the same filter bar as the Contacts, Companies and Todos lists:
 a search box that matches every word you type, a **Filters** button (Someday and Done filter by
 context), a count of what is showing, and — when you are signed in — **Views**, which saves
-the current search and filters under a name the whole team can apply. The no-login todo link
+the current search and filters under a name the whole team can apply. The no-login todo app
 has no Views. Done's Done/Dropped switch and the Projects status buttons pick which list is
 loaded, and the filters apply within it. Inbox, To Do and Waiting keep their own bar, because
 each is split into sections the shared list cannot show.

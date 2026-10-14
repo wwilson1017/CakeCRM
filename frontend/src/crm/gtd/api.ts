@@ -2,13 +2,14 @@
 //
 // Every call goes through `todoFetch`, which is mode-aware: in the CRM it delegates
 // to the shared api() helper (JWT, 401 → /login); in no-login public mode it hits the
-// token-guarded /api/todo-web/{token} mount via RAW fetch. Raw fetch is mandatory
-// there — api() 401-redirects to /login, which is precisely what a no-login surface
-// must never do. The two modes share ONE client so neither needs its own copy of the
+// session-guarded /api/todo-web mount via RAW fetch. Raw fetch is mandatory there —
+// api() 401-redirects to /login, which is precisely what a no-login surface must never
+// do. A 401 there flips the session store to signed out instead (#293). The two modes share ONE client so neither needs its own copy of the
 // pages.
 
-import { api } from '../../core/api/client';
-import { TODO_API_BASE, isTodoPublicMode } from './publicMode';
+import { api, ApiError } from '../../core/api/client';
+import { TODO_API_BASE, TODO_WEB_API, isTodoPublicMode } from './publicMode';
+import { signedOut } from './session';
 import type { Todo, TodoFilters, TodoProject, TodoStatus } from './types';
 import { parseUTC } from './util';
 
@@ -24,17 +25,35 @@ async function rawTodoFetch<T>(url: string, options: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json', ...(options.headers as Record<string, string>) },
   });
   if (!res.ok) {
-    // A 404 here means an unknown or rotated token; it surfaces as an ordinary
-    // error the page explains, and nothing redirects to /login.
+    // A 401 means this browser's session ended: show the signed-out page, never /login.
+    if (res.status === 401) signedOut();
     let detail = res.statusText;
     try {
       const body = await res.json();
       if (body?.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
     } catch { /* non-JSON body — keep statusText */ }
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw new ApiError(`API error ${res.status}: ${detail}`, res.status, detail);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
+}
+
+// ── The no-login app's session (#293) ──────────────────────────────────────────
+// Raw fetch against the web mount only. The cookie rides along on its own (same origin).
+
+/** 200 with a live session; rejects with a 401 ApiError when signed out. */
+export function getSession(): Promise<{ ok: true }> {
+  return rawTodoFetch(`${TODO_WEB_API}/session`, {});
+}
+
+/** Spend a sign-in code: the response sets this browser's session cookie. */
+export function redeemSignIn(token: string): Promise<{ ok: true }> {
+  return rawTodoFetch(`${TODO_WEB_API}/signin/${encodeURIComponent(token)}`, { method: 'POST' });
+}
+
+/** Sign THIS browser out. Every other device stays signed in. */
+export function signOut(): Promise<{ ok: true }> {
+  return rawTodoFetch(`${TODO_WEB_API}/signout`, { method: 'POST' });
 }
 
 export interface TodoListParams {

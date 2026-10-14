@@ -254,6 +254,11 @@ def update_user(
             cur.execute(
                 "UPDATE users SET token_epoch = token_epoch + 1 WHERE id = %s", (user_id,)
             )
+            # The same for the seat's no-login todo app devices (#293): delete them, so
+            # reactivating the seat later does not bring an old phone back signed in.
+            # (Every lookup also joins `is_active`, which covers the window in between.)
+            cur.execute("DELETE FROM todo_web_sessions WHERE user_id = %s", (user_id,))
+            cur.execute("DELETE FROM todo_web_signin_tokens WHERE user_id = %s", (user_id,))
         return updated
 
 

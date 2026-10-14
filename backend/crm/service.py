@@ -3960,20 +3960,21 @@ def set_todo_mode(mode: str) -> dict:
 
 
 def get_todo_public_settings() -> dict:
-    """The three no-login-surface settings. Fail-safe like get_todo_mode: if the row
-    can't be read, report the surfaces as OFF rather than guessing them open."""
+    """The two no-login-surface settings. Fail-safe like get_todo_mode: if the row
+    can't be read, report the surfaces as OFF rather than guessing them open.
+
+    `crm_meta.todo_web_token` is no longer read (#293: the todo app opens by browser
+    sessions, crm/todo_sessions.py); the column stays until no running revision reads it."""
     try:
         row = pg_fetchone(
-            "SELECT todo_capture_token, todo_web_enabled, todo_web_token "
-            "FROM crm_meta WHERE id = 1"
+            "SELECT todo_capture_token, todo_web_enabled FROM crm_meta WHERE id = 1"
         ) or {}
     except Exception:
         logger.warning("crm_meta todo surface settings unreadable — reporting disabled")
-        return {"todo_capture_token": "", "todo_web_enabled": False, "todo_web_token": ""}
+        return {"todo_capture_token": "", "todo_web_enabled": False}
     return {
         "todo_capture_token": row.get("todo_capture_token") or "",
         "todo_web_enabled": bool(row.get("todo_web_enabled")),
-        "todo_web_token": row.get("todo_web_token") or "",
     }
 
 
@@ -3981,11 +3982,10 @@ def set_todo_public_settings(
     *,
     capture_token: str | None = None,
     web_enabled: bool | None = None,
-    web_token: str | None = None,
 ) -> dict:
-    """Update whichever of the three settings were supplied. Tokens are clamped by
-    the caller (crm/todo_tokens.py) before they arrive — they are URL path segments,
-    so an unclamped value could change which route matches."""
+    """Update whichever of the two settings were supplied. The capture token is clamped
+    by the caller (crm/todo_tokens.py) before it arrives — it is a URL path segment, so
+    an unclamped value could change which route matches."""
     sets: list[str] = []
     params: list = []
     if capture_token is not None:
@@ -3994,9 +3994,6 @@ def set_todo_public_settings(
     if web_enabled is not None:
         sets.append("todo_web_enabled = %s")
         params.append(bool(web_enabled))
-    if web_token is not None:
-        sets.append("todo_web_token = %s")
-        params.append(web_token)
     if sets:
         sets.append("updated_at = %s")
         params.append(_now())
@@ -4055,6 +4052,9 @@ def dismiss_ai_prompt() -> dict:
 
 
 def _truncate_all(cur, include_definitions: bool = False) -> None:
+    # todo_web_sessions / todo_web_signin_tokens (#293) are deliberately in NEITHER
+    # branch: they are auth state, like saved_views, and a CRM reset must not sign the
+    # todo app's devices out.
     # Order chosen for the multi-statement writers: delete_contact (SELECT ... FOR
     # UPDATE on contacts, then deletes) and add_note (locks its target, then writes
     # crm_chatter) both take contacts/deals FIRST and crm_chatter LAST, so TRUNCATE

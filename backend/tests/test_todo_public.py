@@ -1,4 +1,5 @@
-"""Security pins for the two no-login todo surfaces (#70).
+"""Security pins for the two no-login todo surfaces (#70; the todo app's browser
+sessions since #293).
 
 These are the tests that matter most in this feature: everything else is behind a
 login, and these two endpoints are not. Each assertion below encodes a decision that
@@ -7,6 +8,7 @@ surface exists; parsing the body before the size check hands an unauthenticated
 caller free work; a non-ASCII token turning into a 500 is an oracle.
 """
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -28,7 +30,7 @@ def _reset_limiters():
 @pytest.fixture
 def surfaces(monkeypatch):
     """Install the crm_meta-backed settings both surfaces read."""
-    state = {"todo_capture_token": "", "todo_web_enabled": False, "todo_web_token": ""}
+    state = {"todo_capture_token": "", "todo_web_enabled": False}
 
     def _set(**kwargs):
         state.update(kwargs)
@@ -39,10 +41,66 @@ def surfaces(monkeypatch):
     return _set
 
 
+class FakeSessions:
+    """In-memory stand-in for crm/todo_sessions.py's database half, recording calls.
+
+    `codes` maps a sign-in code to its seat (spent on first use); `live` maps a cookie
+    value to its session. The lifecycle SQL itself is pinned against a real Postgres in
+    test_todo_web_sessions_integration.py.
+    """
+
+    def __init__(self):
+        self.codes: dict[str, int] = {}
+        self.live: dict[str, dict] = {}
+        self.calls: list[tuple] = []
+        self._n = 0
+
+    def resolve_session(self, token, *, now=None):
+        self.calls.append(("resolve", token))
+        return self.live.get(token) if token else None
+
+    def redeem_signin_token(self, token, *, replaces=None, now=None):
+        self.calls.append(("redeem", token, replaces))
+        user_id = self.codes.pop(token, None)
+        if user_id is None:
+            return None
+        if replaces:
+            self.live.pop(replaces, None)
+        self._n += 1
+        session_token = f"session-{self._n}"
+        self.live[session_token] = {
+            "token_hash": f"h{self._n}", "user_id": user_id,
+            "last_used_at": datetime.now(timezone.utc),
+        }
+        return {"user_id": user_id, "session_token": session_token}
+
+    def touch_session(self, token_hash, last_used_at, *, now=None):
+        self.calls.append(("touch", token_hash))
+        return False
+
+    def revoke_session(self, token):
+        self.calls.append(("revoke", token))
+        self.live.pop(token, None)
+
+
 @pytest.fixture
-def client(surfaces):
+def sessions(monkeypatch):
+    fake = FakeSessions()
+    for name in ("resolve_session", "redeem_signin_token", "touch_session", "revoke_session"):
+        monkeypatch.setattr(todo_web.todo_sessions, name, getattr(fake, name))
+    return fake
+
+
+@pytest.fixture
+def client(surfaces, sessions, monkeypatch):
+    # An install nobody configured: the Origin fallback compares with the request's own
+    # scheme and Host (http://testserver here).
+    monkeypatch.setattr(todo_web.settings, "frontend_url", "http://localhost:5173")
+    monkeypatch.setattr(todo_web.settings, "frontend_url_is_default", True)
+    monkeypatch.setattr(todo_web, "_index_html", lambda: "<html><head></head><body>SHELL</body></html>")
     app = FastAPI()
     app.include_router(todo_capture.router)
+    app.include_router(todo_web.session_api_router, prefix="/api/todo-web")
     app.include_router(todo_web.router)
     return TestClient(app, raise_server_exceptions=False)
 
@@ -170,36 +228,85 @@ def test_wrong_token_guesses_burn_the_same_budget_as_captures(client, surfaces):
     assert client.get("/capture/wrong").status_code == 429
 
 
-# ── Web app ───────────────────────────────────────────────────────────────────
+# ── Web app: switched off ─────────────────────────────────────────────────────
 
-def test_the_web_app_is_completely_dark_until_enabled(client):
-    assert client.get("/todo").status_code == 404
-    assert client.get("/todo/manifest.webmanifest").status_code == 404
-    assert client.get("/api/todo-web/todos").status_code == 404
+SAME_ORIGIN = {"Sec-Fetch-Site": "same-origin"}
+COOKIE = todo_web.todo_sessions._COOKIE_BASE  # http install: no __Host- prefix
 
 
-def test_enabling_the_web_app_tokenless_serves_it(client, surfaces, monkeypatch):
-    monkeypatch.setattr(todo_web, "_index_html", lambda: "<html><head></head></html>")
+def test_the_web_app_is_completely_dark_until_enabled(client, sessions):
+    """Every route on the surface is a 404 while the switch is off — signed in or not."""
+    sessions.live["c"] = {"token_hash": "h", "user_id": 1, "last_used_at": datetime.now(timezone.utc)}
+    client.cookies.set(COOKIE, "c")
+    for path in ("/todo", "/todo/inbox", "/todo/manifest.webmanifest", "/todo/signin/x",
+                 "/todo/oldtoken", "/api/todo-web/todos", "/api/todo-web/session"):
+        assert client.get(path).status_code == 404, path
+    for path in ("/api/todo-web/signin/x", "/api/todo-web/signout", "/api/todo-web/todos"):
+        assert client.post(path, headers=SAME_ORIGIN, json={"title": "x"}).status_code == 404, path
+
+
+# ── Web app: pages ────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def on(surfaces):
     surfaces(todo_web_enabled=True)
-    r = client.get("/todo")
+
+
+def _sign_in(client, sessions, code="code-1", user_id=7) -> str:
+    sessions.codes[code] = user_id
+    r = client.post(f"/api/todo-web/signin/{code}", headers=SAME_ORIGIN)
+    assert r.status_code == 200, r.text
+    return r.cookies[COOKIE]
+
+
+def test_page_without_a_session_is_the_signed_out_page_not_a_redirect(client, on):
+    r = client.get("/todo", follow_redirects=False)
     assert r.status_code == 200
-    assert "__CAKECRM_TODO_BASE__" in r.text
+    assert "Sign in to your Todos" in r.text
+    assert "location" not in r.headers
+    assert "SHELL" not in r.text
     assert r.headers["cache-control"] == "no-store"
+    assert "noindex" in r.headers["x-robots-tag"]
 
 
-def test_a_token_takes_the_bare_web_paths_dark(client, surfaces, monkeypatch):
-    monkeypatch.setattr(todo_web, "_index_html", lambda: "<html><head></head></html>")
-    surfaces(todo_web_enabled=True, todo_web_token="webs3cret")
-    assert client.get("/api/todo-web/todos").status_code == 404
-    r = client.get("/todo/webs3cret")
+def test_page_with_a_session_serves_the_shell_with_no_token_in_it(client, on, sessions):
+    _sign_in(client, sessions)
+    r = client.get("/todo/inbox")
     assert r.status_code == 200
-    assert '"/todo/webs3cret"' in r.text
+    assert "SHELL" in r.text
+    assert 'href="/todo/manifest.webmanifest"' in r.text
+    assert '<meta name="referrer" content="no-referrer">' in r.text
+    assert "__CAKECRM_TODO_BASE__" not in r.text
 
 
-def test_a_wrong_web_token_is_404(client, surfaces, monkeypatch):
-    monkeypatch.setattr(todo_web, "_index_html", lambda: "<html><head></head></html>")
-    surfaces(todo_web_enabled=True, todo_web_token="webs3cret")
-    assert client.get("/todo/nope").status_code == 404
+def test_signin_page_resolves_and_redeems_nothing(client, on, sessions):
+    sessions.codes["code-1"] = 7
+    r = client.get("/todo/signin/code-1")
+    assert r.status_code == 200 and "SHELL" in r.text
+    assert sessions.calls == []
+    assert sessions.codes == {"code-1": 7}
+
+
+@pytest.mark.parametrize("old", ["s3cret", "webs3cret/inbox", "today", "anything-at-all"])
+def test_an_old_address_is_the_retired_page_and_looks_nothing_up(client, on, sessions, old):
+    r = client.get(f"/todo/{old}")
+    assert r.status_code == 404
+    assert "This address is no longer used" in r.text
+    assert sessions.calls == []
+    # Byte-identical whatever the segment: it cannot tell a once-valid token from a guess.
+    assert r.text == client.get("/todo/zzz").text
+
+
+def test_an_old_tokened_api_call_is_a_json_404(client, on):
+    for method in ("get", "post", "put", "delete"):
+        r = getattr(client, method)("/api/todo-web/s3cret/todos")
+        assert r.status_code == 404, method
+        assert r.json() == {"detail": "Not found"}
+
+
+def test_one_manifest_for_everyone(client, on):
+    body = client.get("/todo/manifest.webmanifest").json()
+    assert body["start_url"].startswith("/todo") and body["scope"].startswith("/todo")
 
 
 def test_the_page_opts_into_the_cover_viewport(monkeypatch):
@@ -208,36 +315,207 @@ def test_the_page_opts_into_the_cover_viewport(monkeypatch):
     rather than silently leaving the inset at 0 on someone's phone."""
     index = (Path(__file__).resolve().parents[2] / "frontend" / "index.html").read_text()
     monkeypatch.setattr(todo_web, "_index_html", lambda: index)
-    body = todo_web._page("/todo").body.decode()
+    body = todo_web._page().body.decode()
     assert '<meta name="viewport" content="viewport-fit=cover, width=device-width' in body
     # The CRM's own shell is untouched — it pads no insets, so it must not take cover.
     assert "viewport-fit" not in index
 
 
-def test_the_page_escapes_its_basename_into_both_contexts(monkeypatch):
-    """`_page` is tested directly rather than through a route: a hostile token can
-    never reach it via the URL (the clamp rejects it on write, and a `/` or `"` would
-    not survive routing anyway). That is precisely why the escaping is worth pinning
-    on its own — it is the layer that holds if the value ever arrives from elsewhere,
-    and neither layer is load-bearing alone."""
-    monkeypatch.setattr(todo_web, "_index_html", lambda: "<html><head></head></html>")
-    body = todo_web._page('/todo/a";alert(1)//<script>').body.decode()
-    # JS string literal: the quote is escaped, so the statement never closes.
-    assert 'window.__CAKECRM_TODO_BASE__ = "/todo/a\\";alert(1)//' in body
-    # HTML attribute: the quote and angle brackets are entities, not markup.
-    assert '&quot;;alert(1)//&lt;script&gt;/manifest.webmanifest' in body
-    assert "<script>alert" not in body
-
-
-def test_the_unbuilt_frontend_503_is_still_uncacheable(client, surfaces, monkeypatch):
-    """This fires AFTER a successful token match, so it must not become a cacheable
-    or indexable oracle for "the token was right"."""
+def test_the_unbuilt_frontend_503_is_still_uncacheable(client, on, sessions, monkeypatch):
     monkeypatch.setattr(todo_web, "_index_html", lambda: "")
-    surfaces(todo_web_enabled=True)
+    _sign_in(client, sessions)
     r = client.get("/todo")
     assert r.status_code == 503
     assert r.headers["cache-control"] == "no-store"
     assert "noindex" in r.headers["x-robots-tag"]
+
+
+def test_page_slugs_match_the_spa_routes():
+    """The page route calls anything outside `_PAGE_SLUGS` an old tokened address, so a
+    new SPA page left out of it would answer "no longer used"."""
+    import re
+
+    src = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "crm" / "gtd"
+           / "PublicTodoApp.tsx").read_text()
+    firsts = {p.split("/")[0] for p in re.findall(r'path="([^"]+)"', src)}
+    firsts -= {"*", todo_web._SIGNIN_SEGMENT}
+    assert firsts == set(todo_web._PAGE_SLUGS)
+
+
+# ── Web app: sign-in ──────────────────────────────────────────────────────────
+
+def test_redeem_sets_the_cookie_and_only_the_fresh_token(client, on, sessions):
+    sessions.codes["code-1"] = 7
+    r = client.post("/api/todo-web/signin/code-1", headers=SAME_ORIGIN)
+    assert r.status_code == 200
+    cookie = r.headers["set-cookie"]
+    assert cookie.startswith(f"{COOKIE}=session-1;")
+    assert "HttpOnly" in cookie and "SameSite=lax" in cookie and "Path=/" in cookie
+    assert "Max-Age=31536000" in cookie
+    assert "Secure" not in cookie  # an http install would never store a Secure cookie
+    assert r.headers["cache-control"] == "no-store"
+    # The code is spent.
+    assert client.post("/api/todo-web/signin/code-1", headers=SAME_ORIGIN).status_code == 404
+
+
+def test_an_https_install_sets_a_secure_host_prefixed_cookie(client, on, sessions, monkeypatch):
+    monkeypatch.setattr(todo_web.todo_sessions.settings, "frontend_url", "https://crm.example.test")
+    sessions.codes["code-1"] = 7
+    r = client.post("/api/todo-web/signin/code-1", headers=SAME_ORIGIN)
+    cookie = r.headers["set-cookie"]
+    assert cookie.startswith("__Host-cakecrm_todo_session=") and "Secure" in cookie
+
+
+def test_signing_in_again_replaces_this_browsers_old_session(client, on, sessions):
+    first = _sign_in(client, sessions, code="a")
+    client.cookies.set(COOKIE, first)
+    _sign_in(client, sessions, code="b")
+    assert ("redeem", "b", first) in sessions.calls
+
+
+@pytest.mark.parametrize("code", ["made-up", "ü", "x" * 300])
+def test_a_wrong_spent_or_expired_code_is_the_same_404(client, on, code):
+    r = client.post(f"/api/todo-web/signin/{code}", headers=SAME_ORIGIN)
+    assert r.status_code == 404
+    assert r.json() == {"detail": "Not found"}
+    assert "set-cookie" not in r.headers
+    assert r.headers["cache-control"] == "no-store"
+
+
+def test_wrong_codes_burn_the_strict_guess_limiter(client, on):
+    for _ in range(30):
+        assert client.post("/api/todo-web/signin/nope", headers=SAME_ORIGIN).status_code == 404
+    r = client.post("/api/todo-web/signin/nope", headers=SAME_ORIGIN)
+    assert r.status_code == 429
+    assert r.headers["cache-control"] == "no-store"
+
+
+def test_a_spent_guess_budget_refuses_even_a_good_code(client, on, sessions):
+    """Otherwise a guesser past the budget still wins on the first correct try."""
+    for _ in range(30):
+        client.post("/api/todo-web/signin/nope", headers=SAME_ORIGIN)
+    sessions.codes["real"] = 7
+    r = client.post("/api/todo-web/signin/real", headers=SAME_ORIGIN)
+    assert r.status_code == 429
+    assert "set-cookie" not in r.headers
+    assert sessions.codes == {"real": 7}, "nothing was looked up or spent"
+
+
+def test_a_good_code_never_charges_the_guess_limiter(client, on, sessions):
+    for i in range(35):
+        _sign_in(client, sessions, code=f"c{i}")
+
+
+# ── Web app: the session guard ────────────────────────────────────────────────
+
+def test_api_without_a_live_session_is_401_with_no_www_authenticate(client, on, sessions):
+    for path in ("/api/todo-web/todos", "/api/todo-web/session"):
+        r = client.get(path)
+        assert r.status_code == 401, path
+        assert "www-authenticate" not in r.headers
+        assert r.headers["cache-control"] == "no-store"
+    client.cookies.set(COOKIE, "revoked-or-made-up")
+    assert client.get("/api/todo-web/session").status_code == 401
+
+
+def test_a_signed_out_browser_never_charges_the_guess_limiter(client, on):
+    for _ in range(40):
+        assert client.get("/api/todo-web/session").status_code == 401
+
+
+def test_the_session_bootstrap_answers_ok_with_a_cookie(client, on, sessions):
+    _sign_in(client, sessions)
+    r = client.get("/api/todo-web/session")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert ("touch", "h1") in sessions.calls
+
+
+@pytest.fixture
+def created(monkeypatch):
+    calls = []
+    monkeypatch.setattr("crm.gtd_service.create_todo", lambda *a, **kw: calls.append((a, kw)) or {"id": 1})
+    return calls
+
+
+@pytest.mark.parametrize("headers", [
+    {"Sec-Fetch-Site": "cross-site"},
+    {"Sec-Fetch-Site": "same-site"},
+    {"Sec-Fetch-Site": "none"},
+    {"Origin": "http://evil.example"},
+    {"Origin": "https://testserver"},       # wrong scheme
+    {"Origin": "http://testserver:8443"},   # wrong port
+    {"Origin": "null"},
+    {},                                     # neither header: a script or curl
+])
+def test_a_cross_site_write_is_403_and_writes_nothing(client, on, sessions, created, headers):
+    _sign_in(client, sessions)
+    r = client.post("/api/todo-web/todos", json={"title": "x"}, headers=headers)
+    assert r.status_code == 403
+    assert r.headers["cache-control"] == "no-store"
+    assert created == []
+
+
+@pytest.mark.parametrize("headers", [{"Sec-Fetch-Site": "same-origin"}, {"Origin": "http://testserver"}])
+def test_a_same_origin_write_passes(client, on, sessions, created, headers):
+    _sign_in(client, sessions)
+    r = client.post("/api/todo-web/todos", json={"title": "x"}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert len(created) == 1
+
+
+def test_a_configured_install_compares_origin_with_its_own_address(client, on, sessions, created, monkeypatch):
+    monkeypatch.setattr(todo_web.settings, "frontend_url", "https://crm.example.test/")
+    monkeypatch.setattr(todo_web.settings, "frontend_url_is_default", False)
+    sessions.live["c"] = {"token_hash": "h", "user_id": 1, "last_used_at": datetime.now(timezone.utc)}
+    client.cookies.set("__Host-cakecrm_todo_session", "c")  # https install: the prefixed name
+    ok = client.post("/api/todo-web/todos", json={"title": "x"}, headers={"Origin": "https://crm.example.test"})
+    assert ok.status_code == 200
+    # The Host the request reached no longer counts.
+    bad = client.post("/api/todo-web/todos", json={"title": "x"}, headers={"Origin": "http://testserver"})
+    assert bad.status_code == 403
+
+
+def test_a_cross_site_redemption_is_refused_before_any_lookup(client, on, sessions):
+    sessions.codes["code-1"] = 7
+    r = client.post("/api/todo-web/signin/code-1", headers={"Sec-Fetch-Site": "cross-site"})
+    assert r.status_code == 403
+    assert "set-cookie" not in r.headers
+    assert sessions.calls == [] and sessions.codes == {"code-1": 7}
+
+
+def test_sign_out_ends_only_this_browser_and_leaves_its_cookie(client, on, sessions):
+    other = _sign_in(client, sessions, code="phone")
+    client.cookies.clear()  # a second device: it holds no cookie of its own yet
+    mine = _sign_in(client, sessions, code="laptop")
+    client.cookies.set(COOKIE, mine)
+    r = client.post("/api/todo-web/signout", headers=SAME_ORIGIN)
+    assert r.status_code == 200
+    assert "set-cookie" not in r.headers
+    assert client.get("/api/todo-web/session").status_code == 401
+    client.cookies.set(COOKIE, other)
+    assert client.get("/api/todo-web/session").status_code == 200
+
+
+def test_sign_out_is_same_origin_only(client, on, sessions):
+    mine = _sign_in(client, sessions)
+    client.cookies.set(COOKIE, mine)
+    assert client.post("/api/todo-web/signout", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+    assert client.get("/api/todo-web/session").status_code == 200
+
+
+def test_the_cookie_opens_nothing_else_in_the_crm(monkeypatch, sessions, surfaces):
+    """The real app: a live todo session reaches no contacts, deals, Settings or
+    assistant — every other route authenticates with the CRM's own Bearer token."""
+    import main
+
+    surfaces(todo_web_enabled=True)
+    sessions.live["c"] = {"token_hash": "h", "user_id": 1, "last_used_at": datetime.now(timezone.utc)}
+    c = TestClient(main.app, raise_server_exceptions=False)
+    c.cookies.set(COOKIE, "c")
+    assert c.get("/api/todo-web/session").status_code == 200
+    for path in ("/api/crm/contacts", "/api/crm/deals", "/api/crm/todo-surfaces",
+                 "/api/crm/gtd/web-sessions", "/api/assistant/conversations", "/api/users"):
+        assert c.get(path).status_code == 401, path
 
 
 # ── Tokens ────────────────────────────────────────────────────────────────────
@@ -255,8 +533,8 @@ def _handlers(router):
             if getattr(r, "endpoint", None) and inspect.isfunction(r.endpoint)]
 
 
-@pytest.mark.parametrize("module", [todo_capture, todo_web])
-def test_public_handlers_are_sync_so_blocking_db_calls_leave_the_event_loop(module):
+@pytest.mark.parametrize("router", [todo_capture.router, todo_web.router, todo_web.session_api_router])
+def test_public_handlers_are_sync_so_blocking_db_calls_leave_the_event_loop(router):
     """The single most damaging thing that could regress here.
 
     Every one of these handlers reaches Postgres, and psycopg2 blocks. FastAPI
@@ -268,11 +546,11 @@ def test_public_handlers_are_sync_so_blocking_db_calls_leave_the_event_loop(modu
     import inspect
 
     offenders = [
-        name for name, fn in _handlers(module.router)
+        name for name, fn in _handlers(router)
         if inspect.iscoroutinefunction(fn) and name not in _ASYNC_BY_DESIGN
     ]
     assert not offenders, (
-        f"{module.__name__}: these public handlers are async and would block the "
+        f"these public handlers are async and would block the "
         f"event loop on their DB calls: {offenders}. Make them plain `def`, or "
         f"offload the blocking work with asyncio.to_thread."
     )
@@ -295,12 +573,12 @@ def test_the_two_async_capture_posts_offload_their_blocking_work():
         )
 
 
-def test_the_web_api_guards_are_sync():
-    """These are FastAPI dependencies, not routes, so the route scan above misses
-    them — and they gate every public CRUD call."""
+def test_the_web_api_guard_is_sync():
+    """A FastAPI dependency, not a route, so the route scan above misses it — and it
+    gates every public CRUD call."""
     import inspect
 
-    for guard in (todo_web._public_api_guard, todo_web._token_api_guard):
+    for guard in (todo_web._session_api_guard,):
         assert not inspect.iscoroutinefunction(guard), (
             f"{guard.__name__} must be a plain def — it reads settings from Postgres "
             f"on every public request."
@@ -343,11 +621,11 @@ def test_minted_tokens_survive_their_own_clamp():
 
 def test_no_todo_delete_route_on_any_mount():
     """#299: a todo is never deleted. `build_router` is mounted signed-in AND on the
-    no-login app (bare and token-prefixed); none of them may offer DELETE on a todo."""
+    no-login app (behind a browser session since #293); neither may offer DELETE on a todo."""
     from crm import gtd_router, todo_web
     from crm.router import router as crm_router
 
-    mounts = [gtd_router.router, todo_web.public_api_router, todo_web.token_api_router, crm_router]
+    mounts = [gtd_router.router, todo_web.session_api_router, crm_router]
     for mount in mounts:
         todo_paths = [r for r in mount.routes if r.path.endswith("/todos/{todo_id}")]
         assert todo_paths, mount  # vacuity: the todo routes are on this mount

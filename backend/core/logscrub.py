@@ -1,8 +1,11 @@
 """Keep the no-login link tokens out of the app's logs (#267).
 
-`/todo/{token}`, `/capture/{token}`, `/api/capture/{token}` and
-`/api/todo-web/{token}/…` are authorized by the token IN THE PATH (SECURITY.md), so a
-log line carrying the path carries the credential. This filter replaces the segment
+`/capture/{token}` and `/api/capture/{token}` are authorized by the token IN THE PATH
+(SECURITY.md), and so is a todo app sign-in link, `/todo/signin/{token}` and its
+redemption `/api/todo-web/signin/{token}` (#293: live for an hour, single use — short,
+but a credential while it lasts). The old `/todo/{token}` and `/api/todo-web/{token}/…`
+addresses are retired, yet still arrive from saved bookmarks. A log line carrying any
+of these paths carries the credential. This filter replaces the segment
 after `/todo/`, `/capture/` or `/todo-web/` with `<redacted>` in every record the
 app writes: the message (a string or anything else that is logged, an exception say),
 its arguments (uvicorn's access line is a `%`-format over a
@@ -28,9 +31,10 @@ from collections.abc import Mapping
 
 REDACTED = "<redacted>"
 
-# `/todo/` and `/capture/` (with or without `/api`), and `/api/todo-web/`. The slash
-# before the name keeps `/api/crm/todos/…` and `/crm/todos` out: neither has `todo/`.
-_TOKEN_PATH = re.compile(r"(/(?:todo|capture|todo-web)/)[^/?#\s\"']+")
+# `/todo/` and `/capture/` (with or without `/api`), and `/api/todo-web/`, each with an
+# optional `signin/` so the sign-in code is the segment redacted, not the word. The
+# slash before the name keeps `/api/crm/todos/…` and `/crm/todos` out: neither has `todo/`.
+_TOKEN_PATH = re.compile(r"(/(?:todo|capture|todo-web)/(?:signin/)?)[^/?#\s\"']+")
 
 
 def scrub(text: str) -> str:

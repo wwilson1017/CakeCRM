@@ -16,9 +16,7 @@ SELECT ... FOR UPDATE + UPDATE in one transaction so two concurrent logins can't
 reuse the same code.
 """
 
-import base64
 import hashlib
-import io
 import json
 import logging
 import secrets
@@ -29,7 +27,6 @@ from datetime import datetime, timedelta, timezone
 
 import bcrypt as _bcrypt
 import pyotp
-import qrcode
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from jose import JWTError
 from pydantic import BaseModel
@@ -42,6 +39,7 @@ from core.auth import (
 )
 from core.encryption import decrypt_value, encrypt_value
 from core.postgres import get_connection, pg_execute, pg_fetchone, row_to_dict
+from core.qr import qr_png_data_uri
 from users import service as users_service
 
 logger = logging.getLogger(__name__)
@@ -204,14 +202,6 @@ def _generate_backup_codes() -> tuple[list[str], list[str]]:
     return codes, hashes
 
 
-def _generate_qr_data_uri(provisioning_uri: str) -> str:
-    img = qrcode.make(provisioning_uri, box_size=6, border=2)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    b64 = base64.b64encode(buf.getvalue()).decode()
-    return f"data:image/png;base64,{b64}"
-
-
 def verify_totp_code(user_id: int, code: str) -> bool:
     """Verify a TOTP code against one user's stored secret. True on a valid code."""
     with get_connection() as conn:
@@ -304,7 +294,7 @@ async def setup_2fa(user: dict = Depends(get_current_user)):
     provisioning_uri = totp.provisioning_uri(
         name=user.get("email") or f"user-{user['id']}", issuer_name=TOTP_ISSUER
     )
-    qr_data_uri = _generate_qr_data_uri(provisioning_uri)
+    qr_data_uri = qr_png_data_uri(provisioning_uri)
 
     return {
         "secret": secret,
