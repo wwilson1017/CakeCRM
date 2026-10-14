@@ -15,14 +15,12 @@ import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-const { updateTodoMock, deleteTodoMock, createProjectMock } = vi.hoisted(() => ({
+const { updateTodoMock, createProjectMock } = vi.hoisted(() => ({
   updateTodoMock: vi.fn(),
-  deleteTodoMock: vi.fn(),
   createProjectMock: vi.fn(),
 }));
 vi.mock('../api', () => ({
   updateTodo: updateTodoMock,
-  deleteTodo: deleteTodoMock,
   createProject: createProjectMock,
 }));
 
@@ -82,7 +80,6 @@ beforeEach(() => {
   clock = 0;
   updateTodoMock.mockReset().mockImplementation((_id, fields) =>
     Promise.resolve({ ...TODO, ...fields, updated_at: nextStamp() }));
-  deleteTodoMock.mockReset().mockResolvedValue(undefined);
   createProjectMock.mockReset().mockResolvedValue({ ...PROJECT, id: 9, name: 'Garage' });
   onProcessed = vi.fn();
   onChanged = vi.fn();
@@ -973,6 +970,25 @@ describe('writes decide against the state as it is NOW', () => {
     await settle();
 
     expect(onEdit.mock.calls[0][0].star).toBe(true);
+  });
+});
+
+describe('Drop, the card\'s discard (#299)', () => {
+  it('drops the item through the resolving write, never a delete', async () => {
+    const confirm = vi.spyOn(window, 'confirm');
+    render();
+    const drop = [...container.querySelectorAll('button')].find(b => b.textContent === 'Drop');
+    if (!drop) throw new Error('no Drop button');
+    expect([...container.querySelectorAll('button')].some(b => b.textContent === 'Delete')).toBe(false);
+    setValue(notesBox(), 'not worth doing');
+    click(drop);
+    await settle();
+
+    // The note goes with the decision, exactly as filing carries it.
+    expect(updateTodoMock).toHaveBeenNthCalledWith(1, 7, { notes: 'not worth doing' });
+    expect(updateTodoMock).toHaveBeenLastCalledWith(7, { status: 'dropped' });
+    expect(onProcessed).toHaveBeenCalledTimes(1);
+    expect(confirm).not.toHaveBeenCalled(); // recoverable, so no "are you sure"
   });
 });
 

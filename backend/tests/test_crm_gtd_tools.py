@@ -8,9 +8,8 @@ from crm import gtd_tools, tools
 from crm.gtd_tools import GTD_TOOL_DEFS, GTD_TOOL_EXECUTORS, get_gtd_tools
 
 _TODO_TOOLS = {"crm_create_todo", "crm_list_todos", "crm_complete_todo",
-               "crm_update_todo", "crm_delete_todo"}
+               "crm_update_todo"}
 _GTD_WRITE_TOOLS = {"todo_create", "todo_update", "todo_bulk_update", "todo_bulk_create",
-                    "todo_delete",
                     "todo_create_project", "todo_update_project", "todo_delete_project"}
 _GTD_READ_TOOLS = {"todo_list", "todo_get", "todo_list_projects", "todo_weekly_review"}
 # The four writes #186 classified ROUTINE. Spelled out, not derived: this is the pin.
@@ -244,3 +243,17 @@ def test_update_project_accepts_purpose_and_outcome_and_still_refuses_strangers(
     assert params[:2] == ("why now", "")  # one line; clearing is a real save
     with pytest.raises(ValidationError):
         gtd_service.update_project(1, {"area_id": 3})
+
+
+def test_no_todo_delete_tool_in_either_mode(todo_mode):
+    """#299: a todo is never deleted. The model removes one by dropping it through the
+    update tools, whose description says so; neither delete tool exists any more."""
+    for mode in ("normal", "gtd"):
+        todo_mode(mode)
+        defs = tools.get_crm_tools()[0] + get_gtd_tools()[0]
+        names = {d["name"] for d in defs}
+        assert "crm_update_todo" in names or "todo_update" in names  # vacuity
+        assert not names & {"crm_delete_todo", "todo_delete"}, mode
+        for d in defs:
+            if d["name"] in ("crm_update_todo", "todo_update"):
+                assert "status='dropped'" in d["description"]

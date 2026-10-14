@@ -39,8 +39,9 @@
   `todo_update_project`. Without those, #180's own motivating example still raised a card
   on nearly every install, because `_TODO_TOOL_NAMES` hides three of the sixteen in GTD
   mode. The other todo tools stay unclassified on the rule: `todo_bulk_update` and
-  #284's `todo_bulk_create` (an import of up to 500 todos) are bulk, the two deletes remove
-  a record, and the reads cannot carry a tier at all.
+  #284's `todo_bulk_create` (an import of up to 500 todos) are bulk, `todo_delete_project`
+  removes a record (#299 removed `todo_delete` and `crm_delete_todo`: a todo is never deleted,
+  so the counts below are each one lower now), and the reads cannot carry a tier at all.
   No single registry holds all twenty — normal mode loads the sixteen, GTD mode
   thirteen plus four — so `test_confirm_tier.py` pins the SOURCE set and each registry
   separately. The classification rule and the never-routine list live in
@@ -66,8 +67,8 @@
   the carved-out value on both todo keys and nothing else is: `done` on a todo and
   `completed` on a project are completion (the same call #180 made for a todo), and
   `someday`/`someday_maybe` is filing between working lists that each have their own GTD
-  page. Only `dropped` is a soft delete — `todo_delete`'s own description tells the model
-  to prefer it — and it is the one argument that can hide either row, because
+  page. Only `dropped` is a soft delete — since #299 the only way to remove a todo, which both
+  todo update tools' descriptions tell the model — and it is the one argument that can hide either row, because
   `gtd_service._check_fields` RAISES on any field outside `TODO_FIELDS`/`PROJECT_FIELDS`
   (unlike `service.update_todo`, which silently filters), so `deal_id` — the only other
   column that hides a todo — is unreachable through `todo_update`.

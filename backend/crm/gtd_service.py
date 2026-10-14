@@ -237,10 +237,6 @@ def bulk_update(ids: list[int], fields: dict) -> dict:
     return {"updated": updated, "not_found": not_found}
 
 
-def delete_todo(todo_id: int) -> bool:
-    return service.delete_todo(todo_id)
-
-
 def list_todos(
     status: str | None = None,
     project: str | int | None = None,

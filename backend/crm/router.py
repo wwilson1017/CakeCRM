@@ -38,7 +38,6 @@ Todos:
   POST   /api/crm/todos                 — create
   PUT    /api/crm/todos/:id             — update
   PUT    /api/crm/todos/:id/complete    — mark done
-  DELETE /api/crm/todos/:id             — delete
 
 Activity:
   GET    /api/crm/activity              — log
@@ -812,13 +811,6 @@ async def complete_todo(todo_id: int, user=Depends(get_current_user)):
     if not result:
         raise HTTPException(status_code=404, detail="Todo not found")
     return result
-
-
-@router.delete("/todos/{todo_id}")
-async def delete_todo(todo_id: int, user=Depends(get_current_user)):
-    if not crm.delete_todo(todo_id):
-        raise HTTPException(status_code=404, detail="Todo not found")
-    return {"deleted": True, "todo_id": todo_id}
 
 
 # ── Activity ──────────────────────────────────────────────────────────────────

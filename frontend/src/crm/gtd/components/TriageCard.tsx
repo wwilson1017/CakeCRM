@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { toast } from '../../../shared/toast';
-import { createProject, deleteTodo, updateTodo } from '../api';
+import { createProject, updateTodo } from '../api';
 import type { Todo, TodoProject, TodoStatus } from '../types';
 import { todoSourceLabel } from '../sourceLabel';
 import { dropUndo, queueUndo } from '../undoQueue';
@@ -14,7 +14,7 @@ interface Props {
   projects: TodoProject[];
   /** Contexts already in use — the options for the final "set context" step. */
   contexts: string[];
-  /** After a write that takes the item OUT of the inbox (filed/done/deleted). */
+  /** After a write that takes the item OUT of the inbox (filed/done/dropped). */
   onProcessed: () => void;
   /** After an in-place change that leaves it in the inbox (title, project, …). */
   onChanged: () => void;
@@ -457,8 +457,8 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       // `fields.context !== undefined` on an inbox row is the filing write and nothing
       // else. Queued from `before`, which still holds the status AND context the row had
       // — both are restored, because an item that arrived carrying "@errands" from Quick
-      // Add must go back to '@errands' and not to empty. The Drop button (if one is ever
-      // added) and any other status write fall through to `dropUndo`: a later write that
+      // Add must go back to '@errands' and not to empty. The Drop button (#299) and any
+      // other status write fall through to `dropUndo`: a later write that
       // moves the todo retires an offer that no longer describes a pending change.
       if (fields.status === 'done' && before.status !== 'done') queueUndo(before);
       else if (fields.context !== undefined && before.status === 'inbox') queueUndo(before, 'filed');
@@ -565,20 +565,6 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       // nothing left to add; on failure nothing was written and it must not go on showing a
       // name the server never took. Either way the card falls back to the row it holds.
       apply({ type: 'title', value: null });
-    }
-  };
-
-  const remove = async () => {
-    if (busy) return;
-    if (!window.confirm('Delete this todo permanently?')) return;
-    setBusy(true);
-    setError('');
-    try {
-      await deleteTodo(todo.id);
-      onProcessed(); // stays busy, same reason as patch()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Delete failed');
-      setBusy(false);
     }
   };
 
@@ -779,7 +765,10 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
           <button
             type="button"
             disabled={busy}
-            onClick={() => void remove()}
+            // A todo is never deleted (#299): Drop is this card's discard, the same
+            // resolving write filing uses, so the item leaves the inbox for Done's
+            // Dropped tab, where it can be reopened. No confirm — it is recoverable.
+            onClick={() => void patch({ status: 'dropped' }, true)}
             // Underline, not a colour or opacity change (issue #119). `brand-dark` was
             // 2.18:1 as text on the dark card; `hover:opacity-80` — the obvious
             // replacement — is 3.83:1, because fading a token tuned to sit just over
@@ -787,7 +776,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
             // only kind these tokens can carry.
             className={`${linkCls} text-ck-accent-text hover:underline`}
           >
-            Delete
+            Drop
           </button>
         </div>
         {/* The picked project's purpose and outcome (#262), read-only: filing an item under a

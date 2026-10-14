@@ -280,11 +280,11 @@ def test_complete_todo_locks_the_row_and_none_when_missing(monkeypatch, rec, tod
     assert not any("UPDATE todos SET" in s for s, _ in cur.executed)
 
 
-def test_delete_todo_rowcount(rec):
-    rec.execute_rowcount = 0
-    assert service.delete_todo(5) is False
-    rec.execute_rowcount = 1
-    assert service.delete_todo(5) is True
+def test_todos_have_no_delete(rec):
+    """#299: a todo is never permanently deleted — dropping is the only removal."""
+    from crm import gtd_service
+    assert not hasattr(service, "delete_todo")
+    assert not hasattr(gtd_service, "delete_todo")
 
 
 def test_delete_activity_returns_true_and_rescores_links(rec):
@@ -319,8 +319,11 @@ def test_delete_contact_existence_check_and_cascade_one_txn(monkeypatch, fake_co
     assert service.delete_contact(42) is True
     stmts = [sql for sql, _ in conn.executed]
     assert any("SELECT id FROM contacts WHERE id" in s for s in stmts)
-    # activity_log, todos, crm_chatter, crm_field_values, crm_field_provenance, contacts
-    assert sum("DELETE FROM" in s for s in stmts) == 6
+    # activity_log, crm_chatter, crm_field_values, crm_field_provenance, contacts —
+    # never todos (#299): the open ones are dropped and the FK unlinks them all.
+    assert sum("DELETE FROM" in s for s in stmts) == 5
+    assert not any("DELETE FROM todos" in s for s in stmts)
+    assert any("SELECT id FROM todos WHERE contact_id = %s AND completed = 0" in s for s in stmts)
     assert any("DELETE FROM crm_chatter WHERE entity_type = 'contact'" in s for s in stmts)
     assert any("DELETE FROM crm_field_values WHERE entity_type = 'contact'" in s for s in stmts)
     assert any("DELETE FROM crm_field_provenance WHERE entity_type = 'contact'" in s for s in stmts)
