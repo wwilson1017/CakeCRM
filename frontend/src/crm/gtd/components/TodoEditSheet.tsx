@@ -9,6 +9,8 @@ import { useListTz } from '../useTodoMeta';
 import { formatDay, parseTags } from '../util';
 import { nextActionCopyText, todoCopyText } from '../copyText';
 import { CopyButton } from './CopyButton';
+import { BigTextEditor } from '../../../shared/BigTextEditor';
+import { overflows } from '../../../shared/overflows';
 
 const NEW_PROJECT = '__new__';
 // The context picker's option values are INDICES into `contextOptions`, never the context
@@ -39,6 +41,7 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
   const tz = useListTz();
   const [title, setTitle] = useState(todo?.title ?? '');
   const [notes, setNotes] = useState(todo?.notes ?? '');
+  const [notesExpanded, setNotesExpanded] = useState(false); // #305
   const [status, setStatus] = useState<TodoStatus>(todo?.status ?? defaults?.status ?? 'inbox');
   const [projectSel, setProjectSel] = useState<string>(
     String(todo?.project_id ?? defaults?.project_id ?? ''),
@@ -236,7 +239,12 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
               )}
             </div>
             <textarea id="gtd-notes" className={`${inputCls} min-h-20`} value={notes}
+                      onClick={e => { if (overflows(e.currentTarget)) setNotesExpanded(true); }}
                       onChange={e => setNotes(e.target.value)} />
+            {/* #305: long notes open in a larger window, by this link or by a click into a
+                box that already holds more than it shows. */}
+            <button type="button" className="mt-1 text-xs text-ck-accent-text hover:underline"
+                    onClick={() => setNotesExpanded(true)}>Open larger ⤢</button>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -385,6 +393,14 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
           </div>
         </div>
       </div>
+      {notesExpanded && (
+        <BigTextEditor
+          title="Notes"
+          value={notes}
+          onSave={text => { setNotes(text); setNotesExpanded(false); }}
+          onCancel={() => setNotesExpanded(false)}
+        />
+      )}
     </div>
   );
 }

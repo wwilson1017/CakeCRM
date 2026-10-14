@@ -15,6 +15,11 @@ parallel follow-up mechanism to keep in step with it.
 is linked to, priority, and the due date, with an Open / Done / All filter that starts on
 Open.
 
+A todo's description box is two lines, and a GTD todo's Notes box is a few more. Click
+**Open larger** beside it, or click into a box that already holds more than it shows, to edit
+the text in a window-sized editor; Save puts it back, Cancel or Esc leaves the field as it
+was, and Cmd/Ctrl+Enter saves.
+
 **GTD mode** is the full Getting Things Done workflow: an inbox to triage, next actions,
 waiting-for and delegated items, someday-maybe, projects, contexts, tags, stars, repeats and
 a weekly review. The Todos page becomes nine tabs. See `todos/gtd`.
