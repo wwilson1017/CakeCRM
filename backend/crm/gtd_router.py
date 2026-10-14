@@ -4,13 +4,16 @@ The CRUD lives in ``build_router(guard)`` so it can be mounted TWICE from one se
 endpoint definitions:
 
   * authenticated at ``/api/crm/gtd`` (this module's ``router``), and
-  * token-guarded at ``/api/todo-web[/{token}]`` for the no-login web app
-    (``crm/todo_web.py``).
+  * session-guarded at ``/api/todo-web`` for the no-login web app
+    (``crm/todo_web.py``; a browser cookie since #293, a path token before).
 
 ``guard`` is a FastAPI dependency that either authorizes the request or raises. It
-returns nothing — CakeCRM is single-user, so unlike the blueprint there is no owner
-identity to thread through; the guard's only job is to decide whether the caller may
-proceed at all.
+returns nothing — the todo store is install-wide, so there is no owner identity to
+thread through; the guard's only job is to decide whether the caller may proceed.
+
+Every route in ``build_router`` is therefore PUBLIC on the web mount. Authenticated-only
+routes (the context rename, the todo app's sign-in codes) go on the module-level
+``router`` below, never inside the factory.
 
 Handlers are plain ``def`` so FastAPI runs the blocking psycopg2 work in its
 threadpool.
@@ -18,11 +21,13 @@ threadpool.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from core.auth import get_current_user
-from crm import gtd_service
+from core.config import settings
+from core.qr import qr_png_data_uri
+from crm import gtd_service, service, todo_sessions
 from crm.gtd_common import (
     MAX_BULK_IDS,
     MAX_SHORT_CHARS,
@@ -248,3 +253,47 @@ def rename_context(body: ContextRename):
     in `build_router`: the no-login web app was scoped out, and so is its control.
     409 = the new name already exists; resend with `merge: true` to fold them together."""
     return _call(gtd_service.rename_context, body.old, body.new, merge=body.merge)
+
+
+# ── The todo app's devices (#293) ─────────────────────────────────────────────
+# Member routes: any signed-in seat signs in ITS OWN devices. The on/off switch stays on
+# the admin-only /api/crm/todo-surfaces. These act on the caller's seat only, so they
+# are on this authenticated router and never in `build_router` (whose routes are public).
+
+def _signin_url(request: Request, token: str) -> str:
+    """Absolute, so a phone can scan it: the configured address, else the address this
+    request reached (an unconfigured LAN install has no other)."""
+    if settings.frontend_url_is_default:
+        base = str(request.base_url)
+    else:
+        base = settings.frontend_url
+    return base.rstrip("/") + todo_sessions.signin_path(token)
+
+
+@router.post("/web-signin-link")
+def make_web_signin_link(request: Request, user: dict = Depends(get_current_user)):
+    """A sign-in code for one more of the caller's devices: works once, for one hour.
+    It rotates nothing — signing a phone in never signs another device out.
+    409 while the todo app is switched off."""
+    if not service.get_todo_public_settings()["todo_web_enabled"]:
+        raise HTTPException(status_code=409, detail="The todo app is switched off")
+    token, expires_at = todo_sessions.issue_signin_token(user["id"])
+    url = _signin_url(request, token)
+    return {"url": url, "qr": qr_png_data_uri(url), "expires_at": expires_at.isoformat()}
+
+
+@router.get("/web-sessions")
+def web_sessions(user: dict = Depends(get_current_user)):
+    """Whether the todo app is on, and how many of the caller's devices are signed in."""
+    return {
+        "enabled": service.get_todo_public_settings()["todo_web_enabled"],
+        "count": todo_sessions.count_sessions(user["id"]),
+    }
+
+
+@router.post("/web-signout-all")
+def web_signout_all(user: dict = Depends(get_current_user)):
+    """Sign every one of the caller's devices out and cancel its unused codes. Other
+    seats' devices and the capture link are untouched."""
+    todo_sessions.revoke_all(user["id"])
+    return {"ok": True}

@@ -39,9 +39,8 @@ from crm.gtd_router import router as gtd_router
 from crm.router import MAX_UPLOAD_BYTES as crm_upload_max_bytes, router as crm_router
 from crm.todo_capture import router as todo_capture_router
 from crm.todo_web import (
-    public_api_router as todo_web_public_api,
     router as todo_web_router,
-    token_api_router as todo_web_token_api,
+    session_api_router as todo_web_session_api,
 )
 from gmail.router import router as gmail_router
 from heartbeat.router import router as heartbeat_router
@@ -354,22 +353,17 @@ app.include_router(memory_router, prefix="/api/memory", tags=["memory"])
 app.include_router(gtd_router, prefix="/api/crm/gtd", tags=["todo-gtd"])
 
 # ── No-login todo surfaces (#70) ──────────────────────────────────────────────
-# All four mounts MUST come before the SPA catch-all at the bottom of this file, or
+# All three mounts MUST come before the SPA catch-all at the bottom of this file, or
 # `/todo` and `/capture` would be swallowed by it and always serve the app shell.
-#
-# The token mount is registered before the bare public one for the same reason chatty
-# documents: `/api/todo-web/{token}` would otherwise read a literal path segment like
-# `todos` as a token guess. `todos` is in RESERVED_TODO_WEB_SLUGS precisely so that
-# collision cannot happen from the other direction either.
 #
 # The two surfaces are ASYMMETRIC, and neither consults the todo mode (#102 made GTD the
 # default; these mounts are unchanged by it). Capture is LIVE by default — the bare
 # /capture path answers until a token is set, which is the deliberate #70 design: it is
 # write-only, so an uninvited caller can add to the inbox but read nothing back. The web
-# app is the one that grants reads, so it 404s entirely until todo_web_enabled.
+# app is the one that grants reads, so it 404s entirely until todo_web_enabled, and since
+# #293 it opens by per-device browser sessions (crm/todo_sessions.py), not a path token.
 app.include_router(todo_capture_router, tags=["todo-capture"])
-app.include_router(todo_web_public_api, prefix="/api/todo-web", tags=["todo-web"])
-app.include_router(todo_web_token_api, prefix="/api/todo-web/{token}", tags=["todo-web"])
+app.include_router(todo_web_session_api, prefix="/api/todo-web", tags=["todo-web"])
 app.include_router(todo_web_router, tags=["todo-web"])
 
 
