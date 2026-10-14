@@ -13,10 +13,10 @@ import secrets
 # the path or collide with the manifest route.
 _TOKEN_STRIP_RE = re.compile(r"[^A-Za-z0-9_-]")
 
-# Page slugs the no-login todo app routes to client-side. A token equal to one of
-# these would make /todo/<slug> ambiguous. 'todos' is reserved for a second reason:
-# the token also rides the /api/todo-web/{token} mount, and /api/todo-web/todos/...
-# would match the bare public router's /todos/{todo_id} route first, shadowing it.
+# Page slugs the no-login todo app routes to client-side, plus the API's own first
+# segments. Only the capture token is clamped here since #293 (the todo app opens by
+# browser sessions, crm/todo_sessions.py); the set is kept so a capture token can never
+# read as a page or API path either.
 #
 # "manifest.webmanifest" is deliberately NOT listed: the strip above removes dots, so
 # a clamped token can never equal it in the first place. That is also what makes the

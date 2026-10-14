@@ -81,3 +81,58 @@ def test_the_cookie_is_secure_and_host_prefixed_only_over_https(monkeypatch):
     assert (ts.cookie_name(), ts.cookie_secure()) == ("cakecrm_todo_session", False)
     monkeypatch.setattr(ts.settings, "frontend_url", "https://crm.example.test")
     assert (ts.cookie_name(), ts.cookie_secure()) == ("__Host-cakecrm_todo_session", True)
+
+
+# ── The member routes that drive the Todo app devices card ────────────────────
+
+def _member_client(monkeypatch, *, enabled=True, user_id=2):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from core.auth import get_current_user
+    from crm import gtd_router
+
+    calls = []
+    monkeypatch.setattr(gtd_router.service, "get_todo_public_settings",
+                        lambda: {"todo_capture_token": "", "todo_web_enabled": enabled})
+    monkeypatch.setattr(gtd_router.todo_sessions, "issue_signin_token",
+                        lambda uid: calls.append(("issue", uid)) or ("tok", NOW + ts.SIGNIN_TTL))
+    monkeypatch.setattr(gtd_router.todo_sessions, "count_sessions",
+                        lambda uid: calls.append(("count", uid)) or 3)
+    monkeypatch.setattr(gtd_router.todo_sessions, "revoke_all",
+                        lambda uid: calls.append(("revoke_all", uid)))
+    monkeypatch.setattr(gtd_router.settings, "frontend_url", "https://crm.example.test")
+    monkeypatch.setattr(gtd_router.settings, "frontend_url_is_default", False)
+    app = FastAPI()
+    app.include_router(gtd_router.router, prefix="/api/crm/gtd")
+    app.dependency_overrides[get_current_user] = lambda: {"id": user_id, "role": "member"}
+    return TestClient(app), calls
+
+
+def test_a_member_mints_a_code_for_their_own_seat(monkeypatch):
+    client, calls = _member_client(monkeypatch)
+    body = client.post("/api/crm/gtd/web-signin-link").json()
+    assert body["url"] == "https://crm.example.test/todo/signin/tok"
+    assert body["qr"].startswith("data:image/png;base64,")
+    assert body["expires_at"] == (NOW + ts.SIGNIN_TTL).isoformat()
+    assert calls == [("issue", 2)]
+
+
+def test_no_code_while_the_app_is_switched_off(monkeypatch):
+    client, calls = _member_client(monkeypatch, enabled=False)
+    assert client.post("/api/crm/gtd/web-signin-link").status_code == 409
+    assert calls == []
+
+
+def test_the_count_and_sign_out_everywhere_act_on_the_callers_seat_only(monkeypatch):
+    client, calls = _member_client(monkeypatch, user_id=5)
+    assert client.get("/api/crm/gtd/web-sessions").json() == {"enabled": True, "count": 3}
+    assert client.post("/api/crm/gtd/web-signout-all").json() == {"ok": True}
+    assert calls == [("count", 5), ("revoke_all", 5)]
+
+
+def test_an_unconfigured_install_links_to_the_address_it_was_reached_at(monkeypatch):
+    client, _ = _member_client(monkeypatch)
+    from crm import gtd_router
+    monkeypatch.setattr(gtd_router.settings, "frontend_url_is_default", True)
+    assert client.post("/api/crm/gtd/web-signin-link").json()["url"] == "http://testserver/todo/signin/tok"
