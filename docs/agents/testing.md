@@ -106,13 +106,7 @@
   these names take in identifiers, filenames and env vars (six such bypasses were
   measured, and this very bullet tripped the guard by naming one). The scan
   reads the working tree, **not history**: tokens committed before a scrub stay in the
-  log. `test_sync_intake.py` consumes `_REPO_FORBIDDEN` **by name** for the same
-  reason: it used to hand-copy the blueprint regex in a `pattern != …` exclusion, so
-  widening that pattern turned the exclusion into a no-op and failed that test — loudly
-  and fail-closed, but on a file nothing was wrong with. Naming the class instead means
-  both of #88's scans inherit every future widening automatically. It deliberately
-  narrows what they scan (blueprint tokens are legitimate outside the payload) and
-  keeps the rendered-issue-body scan, which is coverage no file scan can provide.
+  log.
 
 ## CI
 
