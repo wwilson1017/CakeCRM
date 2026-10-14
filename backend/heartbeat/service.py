@@ -1,6 +1,6 @@
 """The heartbeat — the background half of the assistant (issue #6).
 
-Four independent scheduler jobs, split by one rule: bounded local SQL rides
+Five independent scheduler jobs (plus #72's observer), split by one rule: bounded local SQL rides
 ``maintenance_tick``; network- or AI-bound work gets its OWN job, so a hung request
 never stalls the others.
   * ``maintenance_tick()`` (every 60s): stamps ``heartbeat_state.last_tick_at`` and
@@ -13,6 +13,8 @@ never stalls the others.
     (network-bound, so it gets its own slot rather than riding maintenance_tick).
   * ``proactive_tick()`` (every 60s): runs #22's digest / stale nudges if due
     (delivers over the network, so same reasoning as gmail_scan).
+  * ``reminders_tick()`` (every 60s): fires #283's due reminders (claims in one
+    transaction, then delivers over the network, so same reasoning again).
 
 ``tick()`` is the run-now workhorse behind ``POST /api/heartbeat/run-now``; it drives
 the same maintenance work synchronously and only runs the AI turn when explicitly forced.
@@ -325,3 +327,23 @@ def _maybe_run_observer():
         return run_observer_if_due()
     except Exception:
         logger.warning("observer pass errored", exc_info=True)
+
+
+# ── #283: reminders ──────────────────────────────────────────────────────────
+# Delivers over the network (web push / Telegram), so by the rule above it is its own job.
+
+def reminders_tick() -> dict | None:
+    """Dedicated scheduler job (registered in heartbeat/scheduler.py). ``fire_due``
+    claims due reminders in one transaction, then delivers each; keyless, so it always
+    runs."""
+    return _maybe_fire_reminders()
+
+
+def _maybe_fire_reminders():
+    """The lazy import and the call share one broad guard, so nothing here can abort
+    the job."""
+    try:
+        from reminders.service import fire_due
+        return fire_due()
+    except Exception:
+        logger.warning("reminders tick errored", exc_info=True)

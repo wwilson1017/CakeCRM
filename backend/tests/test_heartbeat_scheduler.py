@@ -32,6 +32,7 @@ def test_registers_all_jobs():
         assert sched.get_job("heartbeat_turn") is not None    # throttled AI-turn job
         assert sched.get_job("gmail_scan") is not None        # #17 read-only inbox touch scan
         assert sched.get_job("proactive") is not None         # #22 P3 digest + nudges
+        assert sched.get_job("reminders_tick") is not None    # #283 due reminders
     finally:
         scheduler.shutdown_scheduler()
 
@@ -63,6 +64,21 @@ def test_the_observer_runs_on_its_own_job():
         assert job.trigger.interval.total_seconds() == 60
         from heartbeat import service
         assert job.func is service.observer_tick
+    finally:
+        scheduler.shutdown_scheduler()
+
+
+def test_the_reminders_tick_runs_on_its_own_job():
+    """#283: it delivers over the network, so it may not ride maintenance_tick."""
+    try:
+        scheduler.start_scheduler()
+        sched = scheduler.get_scheduler()
+        job = sched.get_job("reminders_tick")
+        assert job is not None
+        assert job.max_instances == 1
+        assert job.trigger.interval.total_seconds() == 60
+        from heartbeat import service
+        assert job.func is service.reminders_tick
     finally:
         scheduler.shutdown_scheduler()
 
