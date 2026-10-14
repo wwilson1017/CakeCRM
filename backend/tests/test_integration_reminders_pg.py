@@ -244,3 +244,69 @@ def test_scheduler_entrypoint_fires_through_the_seam(sent, monkeypatch):
     real = service.fire_due
     monkeypatch.setattr(service, "fire_due", lambda: real(now=_utc(2026, 10, 14, 15) + timedelta(0)))
     assert heartbeat.reminders_tick() == {"fired": 1, "spawned": 0, "attempted": 1}
+
+
+def test_update_changes_people_time_and_date_on_a_real_row(sent):
+    from reminders import service
+
+    a, b = _user("Ada"), _user("Bo")
+    r = service.create_reminder(note="Draft", due_date="2026-10-20", repeat="weekly",
+                                owner_id=a, created_by=a, now=_utc(2026, 10, 1))
+    out = service.update_reminder(r["id"], {"people": [b, a], "due_time": "16:45",
+                                            "due_date": "2026-10-22", "note": "Final"},
+                                  now=_utc(2026, 10, 1))
+    assert out["people"] == [a, b] and out["note"] == "Final"
+    assert out["due_time"] == "16:45" and out["due_date"] == "2026-10-22"
+    assert out["anchor_date"] == "2026-10-22"
+    assert datetime.fromisoformat(out["due_at"]) == _utc(2026, 10, 22, 21, 45)
+
+
+def test_moving_a_successor_onto_a_date_its_series_used_is_a_clear_refusal(sent):
+    from crm.gtd_common import ValidationError
+    from reminders import service
+
+    a = _user("Ada")
+    service.create_reminder(note="Daily", due_date="2026-10-14", due_time="09:00",
+                            repeat="daily", owner_id=a, created_by=a, now=_utc(2026, 10, 1))
+    service.fire_due(now=_utc(2026, 10, 14, 15))
+    service.fire_due(now=_utc(2026, 10, 15, 15))  # the second row (series_id set) fires too
+    successor = _rows()[-1]
+    assert successor["due_date"] == "2026-10-16"
+    with pytest.raises(ValidationError, match="already has one on that date"):
+        service.update_reminder(successor["id"], {"due_date": "2026-10-15", "due_time": "23:00"},
+                                now=_utc(2026, 10, 15, 16))
+
+
+def test_list_filters_and_keyset_paging_on_real_rows(sent):
+    from reminders import service
+
+    a, b = _user("Ada"), _user("Bo")
+    mine = service.create_reminder(note="Mine", due_date="2026-10-20", owner_id=a,
+                                   created_by=a, now=_utc(2026, 10, 1))
+    for_me = service.create_reminder(note="For me", due_date="2026-10-21", people=[a],
+                                     owner_id=b, created_by=b, now=_utc(2026, 10, 1))
+    other = service.create_reminder(note="Other", due_date="2026-10-22", owner_id=b,
+                                    created_by=b, now=_utc(2026, 10, 1))
+    service.void_reminder(other["id"], "never mind")
+    ids = [r["id"] for r in service.list_reminders(mine_user_id=a)]
+    assert ids == [mine["id"], for_me["id"]]
+    assert [r["id"] for r in service.list_reminders(status="voided")] == [other["id"]]
+    assert [r["id"] for r in service.list_reminders(due_from="2026-10-21", due_to="2026-10-21")] == [for_me["id"]]
+    page = service.list_reminders(sort="id", after_id=mine["id"], limit=1)
+    assert [r["id"] for r in page] == [for_me["id"]]
+
+
+def test_the_today_panel_reads_due_today_reminders_for_the_scope(sent):
+    from crm import today_service
+    from reminders import service
+
+    a, b = _user("Ada"), _user("Bo")
+    kept = service.create_reminder(note="Today, for Bo", due_date="2026-10-14", due_time="15:00",
+                                   people=[b], owner_id=a, created_by=a, now=_utc(2026, 10, 1))
+    gone = service.create_reminder(note="Voided", due_date="2026-10-14", owner_id=a,
+                                   created_by=a, now=_utc(2026, 10, 1))
+    service.void_reminder(gone["id"], "no")
+    rows = today_service._fetch_today_reminders("2026-10-14", b)
+    assert [(r["id"], r["due_time"]) for r in rows] == [(kept["id"], "15:00")]
+    assert today_service._fetch_today_reminders("2026-10-14", _user("Cy")) == []
+    assert [r["id"] for r in today_service._fetch_today_reminders("2026-10-14", None)] == [kept["id"]]

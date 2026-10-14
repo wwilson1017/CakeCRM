@@ -76,3 +76,26 @@ def test_list_scope_binds_the_seat_and_restates_the_untrusted_note(monkeypatch):
     tools.get_reminder_tools(None)[1]["reminder_list"]()
     assert [s["mine_user_id"] for s in seen] == [3, None, None]
     assert out["note"] == tools._UNTRUSTED_NOTE
+
+
+def test_update_resolves_people_and_drops_the_clock(monkeypatch, created):
+    seen = {}
+    monkeypatch.setattr(service, "update_reminder",
+                        lambda rid, fields: seen.update(fields) or {"id": rid, "note": "n", "owner_id": 3})
+    out = tools.get_reminder_tools(SEAT)[1]["reminder_update"](
+        reminder_id=1, people=["me", "Cy"], now="2000-01-01")
+    assert seen == {"people": [3, 6]}
+    assert out["target"]["entity_type"] == "reminder"
+
+
+def test_update_and_void_on_a_missing_reminder_are_tool_errors(monkeypatch):
+    from crm.gtd_common import NotFoundError
+
+    def missing(*a, **k):
+        raise NotFoundError("x")
+
+    monkeypatch.setattr(service, "update_reminder", missing)
+    monkeypatch.setattr(service, "void_reminder", missing)
+    ex = tools.get_reminder_tools(SEAT)[1]
+    assert ex["reminder_update"](reminder_id=9, note="x") == {"error": "Not found"}
+    assert ex["reminder_void"](reminder_id=9, reason="x") == {"error": "Not found"}

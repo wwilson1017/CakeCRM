@@ -24,6 +24,8 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timezone
 
+import psycopg2
+
 from core.localtime import tz
 from core.postgres import get_connection, pg_fetchall, pg_fetchone, row_to_dict
 from crm.gtd_common import NotFoundError, ValidationError, validate_due
@@ -201,11 +203,15 @@ def update_reminder(reminder_id: int, fields: dict, *, now: datetime | None = No
             params += [d, t, at, d]
         if not sets:
             return row
-        cur.execute(
-            f"UPDATE reminders SET {', '.join(sets)}, updated_at = now() "
-            f"WHERE id = %s RETURNING {_COLS}",
-            (*params, reminder_id),
-        )
+        try:
+            cur.execute(
+                f"UPDATE reminders SET {', '.join(sets)}, updated_at = now() "
+                f"WHERE id = %s RETURNING {_COLS}",
+                (*params, reminder_id),
+            )
+        except psycopg2.errors.UniqueViolation:
+            # uq_reminders_series_due: an earlier row of this series already holds that date.
+            raise ValidationError("This repeating reminder already has one on that date") from None
         return row_to_dict(cur, cur.fetchone())
 
 
