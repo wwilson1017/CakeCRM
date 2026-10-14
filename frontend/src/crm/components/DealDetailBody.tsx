@@ -448,8 +448,11 @@ interface Props {
    *
    *  PATCHING ONLY. Dismissal is `onClose`'s, for the reason stated there. */
   onRestored?: (deal: CrmDeal) => void;
+  /** #301: the deal was archived here. The SERVER's row, same contract as
+   *  `onRestored` — patch only, dismissal is `onClose`'s. A host that cannot patch reloads. */
+  onArchived?: (deal: CrmDeal) => void;
   /**
-   * Take this panel away — the deal's work here is done (closed out, or restored).
+   * Take this panel away — the deal's work here is done (closed out, restored, or archived).
    *
    * THE BODY decides this, never the host, and that is the whole point. A close-out is awaited,
    * so between the click and the answer the user can walk to another record with `‹ ›`, follow a
@@ -466,7 +469,8 @@ interface Props {
 }
 
 export function DealDetailBody({
-  deal, onBoard, stageWritable, ctx, onMarkWon, onMarkLost, onSaveDeal, onRestored, onClose,
+  deal, onBoard, stageWritable, ctx, onMarkWon, onMarkLost, onSaveDeal, onRestored, onArchived,
+  onClose,
 }: Props) {
   const navigate = useNavigate();
 
@@ -495,6 +499,9 @@ export function DealDetailBody({
   const [askingLostReason, setAskingLostReason] = useState(false);
   // #279: Mark Won asks which day the deal actually closed.
   const [askingClosedOn, setAskingClosedOn] = useState(false);
+  // #301: the Archive button asks for its reason the same way.
+  const [askingArchiveReason, setAskingArchiveReason] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   // A close-out is in flight. The two hosts dismiss differently — the pipeline clears its
   // selection only once the write succeeds, while a refusal keeps the panel open so the user can
   // retry — so without this the buttons stay live during the request, and a second Mark Lost
@@ -862,17 +869,43 @@ export function DealDetailBody({
     }
   }
 
+  /**
+   * #301: archive from the panel, the mirror of `restoreDeal`. The reason is required (#239) and
+   * the dialog does not submit without one, so a 400 here is a raw-client case. The server's row
+   * goes UP so the board shows the card archived (or drops it) without a refetch that can fail
+   * silently.
+   */
+  async function archiveDeal(reason: string) {
+    setArchiving(true);
+    try {
+      const archived = await api<CrmDeal>(`/api/crm/deals/${record.id}/archive`, {
+        method: 'POST', body: JSON.stringify({ reason }),
+      });
+      setFetched(prev => (prev ? { ...prev, ...archived } : archived));
+      onArchived?.(archived);
+      if (mountedRef.current) onClose();
+    } catch {
+      toast.error('Failed to archive deal.');
+      // The outcome is UNKNOWN, as with a failed close-out: the archive can have committed
+      // before the response was lost. Reconcile against the server, so a deal the server now
+      // holds archived re-reads with its banner instead of staying editable here.
+      if (mountedRef.current) void loadDetail();
+    } finally {
+      setArchiving(false);
+    }
+  }
+
   const closable = stageWritable && !archivedAt && OPEN_STAGES.includes(closeStage);
   // Disable the close-out pair while EITHER a write is in flight or the reason dialog is open.
   // The dialog half is defence in depth behind its focus trap: this panel stays a live DOM subtree
   // underneath, and Mark Won sitting one stray Tab away from an open Mark Lost dialog is a wrong
   // write, not just an a11y lapse.
-  const closeOutDisabled = closing || askingLostReason || askingClosedOn;
+  const closeOutDisabled = closing || askingLostReason || askingClosedOn || askingArchiveReason;
   // An exit this body started is in flight. While it is, the body accepts NO new draft: the host
   // dismisses the panel when the write settles, and the close guard already ran — at click time,
   // before any such draft existed — so anything typed underneath would be discarded in silence.
   // One rule, three controls: Edit, the quick-log chips and its note.
-  const exiting = closeOutDisabled || restoring;
+  const exiting = closeOutDisabled || restoring || archiving;
 
   return (
     <div style={{ padding: 20 }}>
@@ -926,6 +959,22 @@ export function DealDetailBody({
               }}
             >Mark Lost</button>
           </>
+        )}
+        {/* #301. Archive is not a close: a junk deal (test record, duplicate,
+            entered by mistake) leaves the board without touching the win rate. Offered on any
+            LIVE deal, not just an open one — a closed deal can be bad data too — and through the
+            same draft guard and reason dialog as Mark Lost. The banner above carries Restore. */}
+        {!editing && !archivedAt && (
+          <button
+            type="button"
+            onClick={() => void leaveVia(() => setAskingArchiveReason(true))}
+            disabled={exiting}
+            style={{
+              ...actionButtonStyle,
+              cursor: exiting ? 'default' : 'pointer',
+              opacity: exiting ? 0.5 : 1,
+            }}
+          >{archiving ? 'Archiving…' : 'Archive'}</button>
         )}
       </div>
 
@@ -1166,6 +1215,17 @@ export function DealDetailBody({
           onConfirm={day => {
             setAskingClosedOn(false);
             void closeOut('won', undefined, day);
+          }}
+        />
+      )}
+      {askingArchiveReason && (
+        <LostReasonModal
+          variant="archive"
+          dealTitle={record.title}
+          onCancel={() => setAskingArchiveReason(false)}
+          onConfirm={reason => {
+            setAskingArchiveReason(false);
+            void archiveDeal(reason);
           }}
         />
       )}

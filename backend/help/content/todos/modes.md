@@ -41,8 +41,7 @@ normal mode leaves at their defaults.
 ## What else the switch changes
 
 The tools Baker is offered swap with the mode. In normal mode it gets the simple todo tools
-— `crm_create_todo`, `crm_list_todos`, `crm_complete_todo`, `crm_update_todo` and
-`crm_delete_todo`. In GTD mode those are withdrawn and the `todo_` tools take their place. It
+— `crm_create_todo`, `crm_list_todos`, `crm_complete_todo` and `crm_update_todo`. In GTD mode those are withdrawn and the `todo_` tools take their place. It
 is never handed both vocabularies for one store, and its working instructions change with the
 mode so it never coaches you toward a tool it cannot see.
 

@@ -17,7 +17,7 @@ That is not a UI rewrite. Applying a client-side facet to a server-paginated *sl
 
 ### 1. Sweep on an immutable, append-only key — and use a keyset, not OFFSET
 
-Membership is not stable across a multi-second sweep: CakeCRM hard-deletes contacts and todos, and a todo also leaves `list_todos` when it is dropped or its deal is archived. Under OFFSET, one deletion behind the cursor shifts every later row back by one and a record is **skipped entirely**.
+Membership is not stable across a multi-second sweep: CakeCRM hard-deletes contacts, and a todo (never deleted since #299) leaves `list_todos` when it is dropped or its deal is archived. Under OFFSET, one deletion behind the cursor shifts every later row back by one and a record is **skipped entirely**.
 
 ```python
 _CONTACT_SORTS = {

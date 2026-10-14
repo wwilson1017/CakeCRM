@@ -668,6 +668,14 @@ export function CrmDashboardPage() {
               // dashboard numbers.
               // Patching only — the body dismisses itself, and only while it is still on screen.
               onRestored={() => reload()}
+              // #301: drop the archived row from Top deals at once (deal reads exclude archived
+              // records, and a failed reload keeps the old state), then reload the aggregates.
+              onArchived={archived => {
+                setData(prev => prev
+                  ? { ...prev, top_deals: prev.top_deals.filter(d => d.id !== archived.id) }
+                  : prev);
+                reload();
+              }}
               onClose={() => setSelectedDealId(null)}
             />
           ),

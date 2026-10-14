@@ -31,11 +31,11 @@
   the is-the-CRM-empty counts deliberately do NOT filter it. `todo_projects` is
   FK-referenced by `todos`, so it MUST stay in both TRUNCATE variants. Tool surfaces
   SWAP by mode: `crm.gtd_tools.get_gtd_tools()` returns `([], {})` in normal mode (the
-  `get_gmail_tools` precedent) and `get_crm_tools()` hides its five todo tools in GTD
+  `get_gmail_tools` precedent) and `get_crm_tools()` hides its four todo tools in GTD
   mode — advertising both would give the model two vocabularies for one store — while
   executors stay reachable in both so a call proposed just before a flip still
-  resolves. `crm_update_todo`/`crm_delete_todo` close the long-standing parity gap in
-  BOTH modes. `identity.GTD_GUIDE` appends to the static prompt only in GTD mode (a
+  resolves. `crm_update_todo` closes the long-standing parity gap in BOTH modes (#70's
+  `crm_delete_todo` went in #299). `identity.GTD_GUIDE` appends to the static prompt only in GTD mode (a
   rare, deliberate cache invalidation, same class as editing the personality — and since
   #102 that is the steady state for nearly every install rather than a flip-flop), and the
   heartbeat prompt names `todo_list` instead of `crm_list_todos`. Telegram gains a
@@ -59,7 +59,7 @@
   reason both need it — two writes to one column, in flight together, land in whichever order
   the server picks — and a resolving write flushes both, so filing carries them. The trade-off
   commit-on-blur brings, measured rather than assumed: an entry that is never blurred is lost
-  on a hard reload. Every path that ends the interaction inside the app — filing, Edit, Delete,
+  on a hard reload. Every path that ends the interaction inside the app — filing, Edit, Drop,
   promoting another card, Tab, clicking anywhere — blurs and commits, so only closing the tab
   with focus still in the box loses it. The same trade-off the notes box already makes. `pendingDue` mirrors the existing
   `pendingTitle` so the CONTROLLED field does not revert to the prop for the length of the
@@ -223,7 +223,7 @@
   `TriageCard`'s `patch`, `TodoEditSheet.save`), and every later write that moves the
   todo off where the queued write put it calls `dropUndo` — un-checking, `setStatus`,
   a sheet save that changes the status, a sheet re-file under another context while a
-  FILING is pending, and delete. That last rule is what stops the pill offering to redo
+  FILING is pending, and the triage card's Drop. That last rule is what stops the pill offering to redo
   a decision the user has since made themselves. A filing restores status AND context
   (an item that arrived as "@errands" from Quick Add goes back to "@errands"), and the
   revert asks the Inbox, via `notifyTodosChanged(focusInboxId)`, to promote it to the
@@ -531,6 +531,21 @@
   changed mid-wait, was silently reverted. The notes box is locked too, so the sheet opens
   on exactly what the card holds when the wait ends, except that a date whose write failed is
   handed over as it was on screen at the click (a failed write releases its override).
+- **Todos are dropped, never permanently deleted** (#299, port of cake_os `67e2f740d`).
+  Product decision: `dropped` is the only way off the lists, in both modes and on every
+  surface. Gone: `service.delete_todo`, `gtd_service.delete_todo`, `DELETE /api/crm/todos/{id}`,
+  `build_router`'s `DELETE /todos/{id}` (so the no-login app loses it too), the
+  `crm_delete_todo` and `todo_delete` tools, `api.deleteTodo` and the edit sheet's Delete. The
+  triage card's Delete became **Drop** — `patch({status: 'dropped'}, true)`, the same
+  resolving write filing uses, so it leaves the inbox and lands on Done's Dropped tab, where
+  it reopens. The model drops through `crm_update_todo` / `todo_update` (both descriptions say
+  todos are never deleted; `crm_update_todo` now advertises `status`), and that call keeps its
+  Approve card through `confirm_tier._HIDING_STATUS`. `service.delete_contact` no longer
+  deletes the contact's todos: it drops the open ones through `_apply_todo_update_cur` and lets
+  the FK (`ON DELETE SET NULL`) unlink them all; finished ones are left as they are. Normal mode
+  gets no Dropped view — a dropped todo is reachable from GTD's Dropped tab or through Baker.
+  The only `DELETE`/`TRUNCATE` of `todos` left outside tests is the two install-wide resets
+  (`clear_all`, `clear_demo_data`). Project delete is unchanged (it already keeps its todos).
 - **A long description or note opens in a larger editor** (#305, port of PlaybackCRM `0a45298`).
   `shared/BigTextEditor.tsx` is an in-place overlay (Save / Cancel / Esc, Cmd/Ctrl+Enter saves,
   Tab trapped, only a press and release both on the backdrop cancels). `TodoForm`'s

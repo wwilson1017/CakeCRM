@@ -178,12 +178,6 @@ def build_router(guard) -> APIRouter:
             raise HTTPException(status_code=404, detail="Todo not found")
         return todo
 
-    @r.delete("/todos/{todo_id}")
-    def delete_todo(todo_id: int):
-        if not _call(gtd_service.delete_todo, todo_id):
-            raise HTTPException(status_code=404, detail="Todo not found")
-        return {"ok": True}
-
     @r.post("/todos/bulk")
     def bulk_update(body: TodoBulkUpdate):
         return _call(gtd_service.bulk_update, body.ids, body.fields)

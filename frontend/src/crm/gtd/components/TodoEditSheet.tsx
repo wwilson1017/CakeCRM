@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { createTodo, deleteTodo, updateTodo } from '../api';
+import { createTodo, updateTodo } from '../api';
 import { REPEAT_OPTIONS, STATUS_META, TODO_STATUS_ORDER } from '../constants';
 import { dropUndo, hasPendingFiling, queueUndo } from '../undoQueue';
 import { isTodoPublicMode } from '../publicMode';
@@ -173,23 +173,6 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed');
-      setBusy(false);
-    }
-  };
-
-  const remove = async () => {
-    if (!todo || !window.confirm('Delete this todo permanently? “Dropped” keeps history instead.')) return;
-    setBusy(true);
-    try {
-      await deleteTodo(todo.id);
-      // A completed todo is still openable from Search inside the 7s window, and a row
-      // whose todo no longer exists offers a PUT that 404s and then claims it is "still
-      // marked done" (#231).
-      dropUndo(todo.id);
-      onSaved();
-      onClose();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Delete failed');
       setBusy(false);
     }
   };
@@ -396,13 +379,8 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
 
         {error && <p className="mt-3 text-sm text-ck-accent-text">{error}</p>}
 
-        <div className="mt-5 flex items-center justify-between gap-3">
-          {todo ? (
-            <button type="button" onClick={() => void remove()} disabled={busy}
-                    className="text-sm text-ck-accent-text underline disabled:opacity-50">
-              Delete
-            </button>
-          ) : <span />}
+        {/* No Delete (#299): a todo is never deleted — set the status to Dropped. */}
+        <div className="mt-5 flex items-center justify-end gap-3">
           <div className="flex gap-2">
             <button type="button" onClick={onClose}
                     className="rounded-lg border border-line bg-cream px-4 py-2 text-sm font-heading text-charcoal hover:bg-sand">

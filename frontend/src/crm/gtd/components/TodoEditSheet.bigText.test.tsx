@@ -8,7 +8,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../api', () => ({ createTodo: vi.fn(), updateTodo: vi.fn(), deleteTodo: vi.fn() }));
+vi.mock('../api', () => ({ createTodo: vi.fn(), updateTodo: vi.fn() }));
 
 import { TodoEditSheet } from './TodoEditSheet';
 import type { Todo } from '../types';

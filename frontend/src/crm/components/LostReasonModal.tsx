@@ -14,6 +14,9 @@
  *  - The blueprint's field is unbounded; this one carries `maxLength` because
  *    `service.mark_deal_lost` truncates at MAX_LOST_REASON and the route rejects past it.
  *
+ * #301: `variant="archive"` reuses the same dialog for the Archive button —
+ * different copy, a REQUIRED reason (the server refuses a blank one, #239) and the archive cap.
+ *
  * It renders through a PORTAL, which is not decoration: the surface it opens over is deliberately
  * BELOW the assistant launcher — `DealDetailSheet`'s root set `zIndex: 39`, and since #75 its
  * replacement is `DetailModal` in `underLauncher` mode (`z-50 dock:z-[39]`) — and either one
@@ -28,22 +31,27 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { composerKeyAction } from '../chatterComposer';
-import { MAX_LOST_REASON } from '../constants';
+import { MAX_ARCHIVE_REASON, MAX_LOST_REASON } from '../constants';
 import {
   BG_ELEV, FONT_DISPLAY, INK, INK_DIM, INK_MUTE, LINE_STRONG,
   SCRIM, SHADOW, inputStyle, mono,
 } from '../../shared/styles';
-import { btnDanger, btnSecondary } from '../styles';
+import { btnDanger, btnPrimary, btnSecondary } from '../styles';
 
 export interface LostReasonModalProps {
   dealTitle: string;
   /** Called at most once with the typed reason — `''` when the user wrote nothing. */
   onConfirm: (reason: string) => void;
   onCancel: () => void;
+  /** `'archive'` asks why a deal is being put away (reason required); default is Mark Lost. */
+  variant?: 'lost' | 'archive';
 }
 
-export function LostReasonModal({ dealTitle, onConfirm, onCancel }: LostReasonModalProps) {
+export function LostReasonModal({ dealTitle, onConfirm, onCancel, variant = 'lost' }: LostReasonModalProps) {
   const [reason, setReason] = useState('');
+  const archive = variant === 'archive';
+  // Archiving without a reason is refused server-side, so the dialog does not offer it.
+  const blocked = archive && reason.trim() === '';
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   // Synchronous latch, deliberately a ref and not the `submitting` state: a held
@@ -63,10 +71,10 @@ export function LostReasonModal({ dealTitle, onConfirm, onCancel }: LostReasonMo
   useEffect(() => { onCancelRef.current = onCancel; });
 
   const confirm = useCallback(() => {
-    if (submitted.current) return;
+    if (submitted.current || blocked) return;
     submitted.current = true;
     onConfirm(reason);
-  }, [onConfirm, reason]);
+  }, [onConfirm, reason, blocked]);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement;
@@ -157,7 +165,7 @@ export function LostReasonModal({ dealTitle, onConfirm, onCancel }: LostReasonMo
             fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 400,
             color: INK, margin: '0 0 4px',
           }}
-        >Mark as Lost</h2>
+        >{archive ? 'Archive deal' : 'Mark as Lost'}</h2>
         <p style={{ fontSize: 13, color: INK_MUTE, margin: '0 0 16px', lineHeight: 1.5 }}>
           {dealTitle}
         </p>
@@ -165,7 +173,7 @@ export function LostReasonModal({ dealTitle, onConfirm, onCancel }: LostReasonMo
         <label
           htmlFor="crm-lost-reason-input"
           style={{ ...mono(10), color: INK_DIM, display: 'block', marginBottom: 6 }}
-        >Reason (optional)</label>
+        >{archive ? 'Why archive? *' : 'Reason (optional)'}</label>
         <textarea
           id="crm-lost-reason-input"
           ref={textareaRef}
@@ -180,8 +188,10 @@ export function LostReasonModal({ dealTitle, onConfirm, onCancel }: LostReasonMo
             }) === 'submit') { e.preventDefault(); confirm(); }
           }}
           rows={3}
-          maxLength={MAX_LOST_REASON}
-          placeholder="e.g. Budget constraints, chose a competitor"
+          maxLength={archive ? MAX_ARCHIVE_REASON : MAX_LOST_REASON}
+          placeholder={archive
+            ? 'e.g. Test record, entered twice, created by mistake'
+            : 'e.g. Budget constraints, chose a competitor'}
           style={{
             ...inputStyle, width: '100%', fontSize: 13, lineHeight: 1.5,
             resize: 'vertical', minHeight: 72,
@@ -202,8 +212,12 @@ export function LostReasonModal({ dealTitle, onConfirm, onCancel }: LostReasonMo
           <button
             type="button"
             onClick={confirm}
-            style={{ ...btnDanger, padding: '8px 14px', fontSize: 13 }}
-          >Mark Lost</button>
+            disabled={blocked}
+            style={{
+              ...(archive ? btnPrimary : btnDanger), padding: '8px 14px', fontSize: 13,
+              cursor: blocked ? 'default' : 'pointer', opacity: blocked ? 0.5 : 1,
+            }}
+          >{archive ? 'Archive' : 'Mark Lost'}</button>
         </div>
       </div>
     </div>,

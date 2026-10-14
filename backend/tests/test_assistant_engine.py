@@ -1148,8 +1148,8 @@ async def test_adding_a_todo_runs_with_no_card(store):
 
 @pytest.mark.asyncio
 async def test_dropping_a_todo_through_a_routine_update_still_confirms(store):
-    """`todo_delete`'s own description tells the model to drop instead of deleting, so
-    without the carve-out the routine tier would hand it an unconfirmed delete."""
+    """Dropping is the only way to remove a todo (#299 — there is no delete tool), so
+    without the carve-out the routine tier would hand the model an unconfirmed delete."""
     reg = Registry(writes={"todo_update"}, routine={"todo_update"})
     prov = FakeProvider([
         [_complete([_tc("todo_update", args={"todo_id": 5, "status": "dropped"})],
