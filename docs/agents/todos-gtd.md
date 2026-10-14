@@ -506,8 +506,9 @@
   boolean, 0/1 or None and refuses everything else, and `service._create_todo_cur` /
   `_apply_todo_update_cur` use it for `star` and `auto_star_on_due`. `bulk_update`'s `fields`
   dict and the assistant's tools reach those functions untyped, so `bool("false")` used to
-  star every listed todo. (`completed` keeps its truthiness: normal mode sends it as an int
-  and `test_update_todo_writes_completed_and_status_together` pins that.) **Quick Add and a project's "Add a next action" clear only
+  star every listed todo. #298 extended it to `completed` in `_apply_todo_update_cur`, so
+  `"false"` or `2` is refused and writes nothing, and `crm_update_todo` returns the refusal
+  as its error. **Quick Add and a project's "Add a next action" clear only
   the draft that was sent**: both boxes stay editable while the add is in flight, so text typed
   meanwhile survives the add landing. Each box counts its edits and clears only if untouched
   since the send — a text compare would clear a next todo that starts with the same words —
@@ -523,10 +524,16 @@
   and used to be dropped. Counted rather than compared, because a date typed away and back
   reads the same as the one a failed write was carrying. They also clear it when the box was
   typed back to the row's own date (the early return used to leave it pinned, hiding every
-  later change and writing itself back over it on the next blur).
+  later change and writing itself back over it on the next blur). **The triage card's Edit
+  waits for the notes AND both date commits** (#297) before the sheet opens, and every
+  control on the card reads `locked` (`busy || editPending`) for that wait: the sheet saves
+  every field it is handed, so a date write landing after its Save, or a star or project
+  changed mid-wait, was silently reverted. The notes box is locked too, so the sheet opens
+  on exactly what the card holds when the wait ends, except that a date whose write failed is
+  handed over as it was on screen at the click (a failed write releases its override).
 - **A long description or note opens in a larger editor** (#305, port of PlaybackCRM `0a45298`).
   `shared/BigTextEditor.tsx` is an in-place overlay (Save / Cancel / Esc, Cmd/Ctrl+Enter saves,
-  Tab trapped, only a click that starts and ends on the backdrop cancels). `TodoForm`'s
+  Tab trapped, only a press and release both on the backdrop cancels). `TodoForm`'s
   Description and `TodoEditSheet`'s Notes get an **Open larger** link, and a click into a box
   that already overflows (`overflows()`) opens it too. It lives in `shared/`, imports nothing from
   `crm/` and renders without a portal, because the no-login `/todo` app reaches it through
