@@ -65,15 +65,19 @@ describe('BigTextEditor', () => {
     expect(document.activeElement).toBe(field());
     const backdrop = document.body.querySelector('[role="dialog"]')!.parentElement as HTMLElement;
     const press = (el: Element) => el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    const release = (el: Element) => el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
     // A click whose target is the dialog box (a drag released inside) is not a backdrop click.
     act(() => { press(field()); (document.body.querySelector('[role="dialog"]') as HTMLElement).click(); });
     expect(onCancel).not.toHaveBeenCalled();
     // A drag that starts in the text and is released on the backdrop: the browser targets the
     // click at the backdrop (the common ancestor), and it must not discard the draft.
-    act(() => { press(field()); backdrop.click(); });
+    act(() => { press(field()); release(backdrop); backdrop.click(); });
+    expect(onCancel).not.toHaveBeenCalled();
+    // The reverse, a press on the backdrop released over the text, is targeted the same way.
+    act(() => { press(backdrop); release(field()); backdrop.click(); });
     expect(onCancel).not.toHaveBeenCalled();
     // A press and release on the backdrop itself is a backdrop click.
-    act(() => { press(backdrop); backdrop.click(); });
+    act(() => { press(backdrop); release(backdrop); backdrop.click(); });
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 

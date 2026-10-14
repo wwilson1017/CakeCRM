@@ -44,6 +44,7 @@ export function BigTextEditor({ title, value, onSave, onCancel }: BigTextEditorP
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const downOnBackdrop = useRef(false);
+  const upOnBackdrop = useRef(false);
   const onCancelRef = useRef(onCancel);
   useEffect(() => { onCancelRef.current = onCancel; });
 
@@ -89,13 +90,15 @@ export function BigTextEditor({ title, value, onSave, onCancel }: BigTextEditorP
     <div
       // Only a click that starts AND ends on the backdrop cancels: a drag that starts in the
       // textarea and ends outside is targeted at this wrapper too (the browser sends the click
-      // to the common ancestor), so where the press began is recorded and checked.
+      // to the common ancestor), and so is one that starts outside and ends inside, so where the
+      // press began and where it was released are both recorded and checked.
       onClick={e => {
         e.stopPropagation();
-        if (e.target === e.currentTarget && downOnBackdrop.current) onCancel();
-        downOnBackdrop.current = false;
+        if (e.target === e.currentTarget && downOnBackdrop.current && upOnBackdrop.current) onCancel();
+        downOnBackdrop.current = upOnBackdrop.current = false;
       }}
       onMouseDown={e => { e.stopPropagation(); downOnBackdrop.current = e.target === e.currentTarget; }}
+      onMouseUp={e => { upOnBackdrop.current = e.target === e.currentTarget; }}
       style={{
         position: 'fixed', inset: 0, background: SCRIM, zIndex: 150,
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
