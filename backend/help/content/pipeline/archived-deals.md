@@ -1,7 +1,7 @@
 ---
 title: Archived deals
 description: Archiving hides a junk deal without deleting it, and Restore brings it back.
-aliases: archive, archived, restore, unarchive, hide a deal, deleted deal, junk, missing deal
+aliases: archive, archived, restore, unarchive, hide a deal, deleted deal, junk, missing deal, test data, archive button
 admin: false
 ---
 ## What archiving is
@@ -21,12 +21,12 @@ Never archive a deal that genuinely closed. Winning or losing is `crm_mark_deal_
 
 ## How to archive
 
-There is **no archive button in the interface**. Ask Baker, which uses `crm_archive_deal`.
-That is deliberate — archiving is rare and destructive-looking, and the recovery path below
-matters more than the shortcut.
+Open the deal from the Pipeline (or the dashboard) and press **Archive**, next to Mark Won
+and Mark Lost. It is there on any deal that is not already archived, open or closed. Baker can
+do the same with `crm_archive_deal`.
 
-Archiving always needs a **reason**. If you do not give one, Baker asks. The reason and your
-name are saved on the deal and written into its notes as "Archived — <reason>", so whoever
+Archiving always needs a **reason**; the dialog will not submit without one. The reason and
+your name are saved on the deal and written into its notes as "Archived — <reason>", so whoever
 finds it later knows who put it away and why. Merging two deals archives the source with the
 reason "Merged into deal #N".
 
