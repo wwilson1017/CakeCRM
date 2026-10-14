@@ -7,7 +7,7 @@ upstream change, check here for whether it already landed.
 Rows are added **only by the port PR itself**, so the ledger is something a human
 reviewed rather than something a machine asserted.
 
-**Schema** — both tables below use the same four columns, so tooling parses one shape:
+**Schema** — both tables below use the same four columns:
 
 | Column | Contents |
 |---|---|
