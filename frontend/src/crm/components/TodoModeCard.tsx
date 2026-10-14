@@ -137,7 +137,7 @@ export function TodoModeCard({ isMobile }: { isMobile: boolean }) {
           restrict it. A reachable surface must never lose its off switch. */}
       {surfaces && (
         <div style={{ marginTop: 20, borderTop: '1px solid var(--color-ck-line)', paddingTop: 16 }}>
-          <h3 style={settingsSubheading}>No-login links</h3>
+          <h3 style={settingsSubheading}>Without logging in</h3>
 
           <div style={{ marginTop: 12 }}>
             <p style={{ ...labelStyle, marginBottom: 4 }}>Quick capture (write-only)</p>
