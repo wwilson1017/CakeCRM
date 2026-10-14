@@ -251,7 +251,9 @@ was a secret link). There is nothing to copy, keep or re-send:
 - **The session reaches the todos and nothing else.** The app's API serves only the
   todo/project endpoints, and nothing else in CakeCRM reads its cookie. Contacts, deals,
   Settings, the assistant and every other part of the CRM stay behind your login.
-- **Switching the app off** answers 404 on every route of the surface at once.
+- **Switching the app off** answers 404 on every route of the surface at once. It
+  suspends devices rather than signing them out: switched back on, they work again. Use
+  Sign out everywhere, or deactivate the person, to end devices for good.
 - **Upgrading from a link-based release**: the app stays on, and every device signs in
   once. A home-screen icon added from the old link opens the "no longer used" page;
   remove it and add `/todo` again once signed in.

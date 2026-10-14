@@ -514,7 +514,9 @@
   **Seats:** any signed-in seat signs in its own devices; the three member routes
   (`web-signin-link`, `web-sessions`, `web-signout-all`) are on `gtd_router.router` (never
   `build_router`) and act on the caller's seat only; "Sign out everywhere" is that seat's
-  sessions + unspent codes. The on/off switch stays admin-only on `/api/crm/todo-surfaces`.
+  sessions + unspent codes. The on/off switch stays admin-only on `/api/crm/todo-surfaces`;
+  it suspends sessions (every route 404s) but does not delete them, so they work again
+  when the app is switched back on.
   A session does NOT act as its seat inside the app (install-wide view, as before); the seat
   is recorded only so deactivating it ends its sessions — `users.service.update_user`
   deletes the seat's sessions and codes in the deactivating transaction (so reactivation
