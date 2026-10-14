@@ -524,3 +524,12 @@
   reads the same as the one a failed write was carrying. They also clear it when the box was
   typed back to the row's own date (the early return used to leave it pinned, hiding every
   later change and writing itself back over it on the next blur).
+- **A long description or note opens in a larger editor** (#305, port of PlaybackCRM `0a45298`).
+  `shared/BigTextEditor.tsx` is an in-place overlay (Save / Cancel / Esc, Cmd/Ctrl+Enter saves,
+  Tab trapped, only a click that starts and ends on the backdrop cancels). `TodoForm`'s
+  Description and `TodoEditSheet`'s Notes get an **Open larger** link, and a click into a box
+  that already overflows (`overflows()`) opens it too. It lives in `shared/`, imports nothing from
+  `crm/` and renders without a portal, because the no-login `/todo` app reaches it through
+  `TodoEditSheet` and `bootSplit.test.ts` keeps `react-dom` and CRM code out of that download.
+  Its keydown listener is capture-phase on `document` and stops propagation, so Esc closes the
+  editor and never the sheet underneath.
