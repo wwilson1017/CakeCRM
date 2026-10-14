@@ -104,6 +104,19 @@ export async function api<T = unknown>(
  * will ever read. Abandoning the promise is not enough — only the signal stops the bytes.
  */
 export async function apiBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+  return (await apiResponse(path, signal)).blob();
+}
+
+/**
+ * The checked `Response` behind `apiBlob`, for a caller that also needs the headers (the
+ * export card reads the server's `Content-Disposition` filename). Same 401 and error handling.
+ */
+/** The quoted filename from a `Content-Disposition` header, or `fallback`. */
+export function attachmentName(header: string | null, fallback: string): string {
+  return header?.match(/filename="([^"]+)"/)?.[1] ?? fallback;
+}
+
+export async function apiResponse(path: string, signal?: AbortSignal): Promise<Response> {
   const token = getToken();
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -126,5 +139,5 @@ export async function apiBlob(path: string, signal?: AbortSignal): Promise<Blob>
     throw new ApiError(`API error ${res.status}: ${detail}`, res.status, detail);
   }
 
-  return res.blob();
+  return res;
 }

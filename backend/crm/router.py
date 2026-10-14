@@ -110,12 +110,14 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, StrictInt, field_validator
 
 from core.auth import get_current_user, require_admin
 from crm import (
     attachment_service,
     chatter_service,
+    export,
     field_service,
     gtd_common,
     mention_notify,
@@ -1892,3 +1894,19 @@ def reset_stage_criteria(stage: str, user=Depends(require_admin)):
         return stage_criteria.reset_criteria(stage)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from None
+
+
+# ── All-data CSV export (#302) ───────────────────────────────────────────────
+
+@router.get("/export")
+def export_all(user=Depends(require_admin)):
+    """Every table as CSV in one streamed ZIP. Admin-only: it is the whole database.
+
+    Sync def: the generator does blocking psycopg2 work, which Starlette iterates in its
+    threadpool."""
+    stamp = gtd_common.today_local_str()
+    return StreamingResponse(
+        export.stream_zip(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="cakecrm-export-{stamp}.zip"'},
+    )
