@@ -1163,6 +1163,22 @@ describe('Edit waits for every write the sheet would race (#297)', () => {
     expect(projectPicker().disabled).toBe(false);
   });
 
+  it('hands the sheet a date whose write failed, so the sheet can rescue it', async () => {
+    vi.spyOn(toast, 'error').mockImplementation(() => {});
+    let fail!: (e: Error) => void;
+    updateTodoMock.mockReturnValueOnce(new Promise<Todo>((_, reject) => { fail = reject; }));
+    render();
+    setValue(backInput(), '2026-11-02');
+    unfocus(backInput());
+    click(button('Edit'));
+    await act(async () => { fail(new Error('offline')); });
+    await settle();
+
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    expect(onEdit.mock.calls[0][0].bring_back_on).toBe('2026-11-02');
+    expect(star().disabled).toBe(false); // the failure does not leave the card locked
+  });
+
   it('hands the sheet the card as it stands when the wait ends', async () => {
     // The flush's own response can carry a field someone else changed meanwhile; the sheet
     // saves every field it is given, so it must open on that, not on the click-time view.

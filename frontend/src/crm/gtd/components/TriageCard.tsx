@@ -769,11 +769,19 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               // after the sheet's Save and overwrite it (#297). Opened regardless of the
               // result: a draft the server rejected is exactly what the sheet is there to
               // rescue, and `payload()` hands it over either way.
+              //
+              // The dates on screen now, because a failed date write releases its override
+              // before the wait ends, and the sheet would open on the old date. Nothing can
+              // change them meanwhile: the card is locked.
+              const { pendingDue: due, pendingBack: back } = stateRef.current;
               setEditPending(true);
               void Promise.all([flushNotes(), commitDue(), commitBack()]).then(() => {
                 if (!mounted.current) return;
                 setEditPending(false);
-                onEdit(payload());
+                const sheet = payload();
+                if (due !== null) sheet.due_date = due;
+                if (back !== null) sheet.bring_back_on = back || null;
+                onEdit(sheet);
               });
             }}
             className={`${linkCls} text-muted hover:text-charcoal`}

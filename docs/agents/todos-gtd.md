@@ -528,4 +528,5 @@
   control on the card reads `locked` (`busy || editPending`) for that wait: the sheet saves
   every field it is handed, so a date write landing after its Save, or a star or project
   changed mid-wait, was silently reverted. The notes box is locked too, so the sheet opens
-  on exactly what the card holds when the wait ends.
+  on exactly what the card holds when the wait ends, except that a date whose write failed is
+  handed over as it was on screen at the click (a failed write releases its override).
