@@ -1,0 +1,2004 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CakeCRM Manual</title>
+<meta name="description" content="How to use CakeCRM, screen by screen: the pipeline, contacts, todos, reports, Baker the assistant, settings and self-hosting.">
+<meta name="theme-color" content="#fbfaf6">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="canonical" href="https://mycakecrm.com/manual/">
+<style>
+/* Light only, like the rest of mycakecrm.com. Tokens are a literal copy of website/style.css :root
+   (itself a copy of the app's light --color-ck-*): re-copy them when the site palette changes. */
+@font-face { font-family:"Geist"; src:url(../fonts/geist-latin-wght-normal.woff2) format("woff2-variations"); font-weight:100 900; font-display:swap }
+:root {
+  --bg:#fbfaf6; --card:#fff; --ink:#1d1a17; --muted:#58504a; --line:#e8e4d9; --soft:#f3f1ea;
+  --accent:#be123c; --hl:#f3f1ea; --shadow:0 1px 2px rgba(60,40,20,.05),0 6px 24px rgba(60,40,20,.05);
+  --sans:"Geist",system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+* { box-sizing:border-box }
+html { scroll-padding-top:72px }
+body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.65 var(--sans); -webkit-font-smoothing:antialiased }
+a { color:inherit }
+header.top { position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:14px; padding:0 20px; height:60px;
+  background:var(--card); border-bottom:1px solid var(--line) }
+.brand { display:flex; align-items:center; gap:10px; text-decoration:none; white-space:nowrap }
+.brand svg { flex:none }
+.brand b { font:650 19px/1 var(--sans); letter-spacing:-.01em }
+.brand span { color:var(--muted); font-size:13px; letter-spacing:.08em; text-transform:uppercase }
+.search { margin-left:auto; position:relative; width:min(340px,40vw) }
+.search input { width:100%; height:38px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); padding:0 12px; font:inherit; font-size:14px }
+#menuBtn { display:none; height:38px; border:1px solid var(--line); background:var(--bg); color:var(--ink); border-radius:8px; padding:0 12px; font:inherit; font-size:14px; cursor:pointer }
+.layout { display:grid; grid-template-columns:290px minmax(0,1fr); max-width:1320px; margin:0 auto }
+aside { position:sticky; top:60px; height:calc(100vh - 60px); overflow-y:auto; padding:22px 14px 40px 20px; border-right:1px solid var(--line) }
+aside .home { display:block; padding:6px 10px; margin-bottom:8px; border-radius:6px; text-decoration:none; font-weight:600 }
+aside details { margin:2px 0 }
+aside summary { cursor:pointer; list-style:none; padding:7px 10px; border-radius:6px; font:700 15px/1.3 var(--sans); display:flex; gap:10px; align-items:baseline }
+aside summary::-webkit-details-marker { display:none }
+aside summary::after { content:"›"; margin-left:auto; color:var(--muted); transition:transform .15s }
+aside details[open] summary::after { transform:rotate(90deg) }
+aside summary:hover, aside .home:hover { background:var(--hl) }
+.n { font:600 12px/1 var(--sans); color:var(--muted); min-width:16px }
+aside ul { list-style:none; margin:2px 0 8px; padding:0 0 0 26px; border-left:1px solid var(--line); margin-left:17px }
+aside li a { display:block; padding:4px 10px; font-size:14px; text-decoration:none; color:var(--muted); border-radius:6px; line-height:1.4 }
+aside li a:hover { color:var(--ink); background:var(--hl) }
+aside a.on { color:var(--ink); background:var(--hl); font-weight:600 }
+main { min-width:0; padding:36px 48px 80px }
+article { max-width:860px }
+h1 { font:680 40px/1.1 var(--sans); margin:6px 0 10px; letter-spacing:-.035em }
+h2 { font:650 23px/1.3 var(--sans); letter-spacing:-.02em; margin:40px 0 10px; padding-top:20px; border-top:1px solid var(--line) }
+h3 { font:700 18px/1.35 var(--sans); margin:28px 0 6px }
+p { margin:0 0 14px }
+.lead { font-size:18px; color:var(--muted); margin-bottom:24px }
+.eyebrow, .crumb { font-size:13px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:0 }
+.crumb a { text-decoration:none } .crumb a:hover { text-decoration:underline }
+ul, ol { padding-left:24px } li { margin-bottom:6px }
+code { background:var(--soft); padding:1px 6px; border-radius:4px; font-size:88% }
+strong { font-weight:650 }
+blockquote { margin:18px 0; padding:12px 18px; background:var(--card); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:0 8px 8px 0 }
+blockquote p:last-child { margin:0 }
+.wrap { overflow-x:auto; margin:14px 0 20px; border:1px solid var(--line); border-radius:8px; background:var(--card) }
+table { border-collapse:collapse; width:100%; font-size:14.5px }
+th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top }
+tr:last-child td { border-bottom:0 }
+th { background:var(--soft); font-weight:650; white-space:nowrap }
+figure.shot { margin:22px 0 26px; }
+figure.shot img { display:block; max-width:100%; height:auto; border-radius:12px; cursor:zoom-in }
+.cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:14px; margin:8px 0 36px }
+.card { display:flex; flex-direction:column; gap:4px; padding:16px 18px; background:var(--card); border:1px solid var(--line); border-radius:10px; text-decoration:none; box-shadow:var(--shadow); transition:transform .12s, border-color .12s }
+.card:hover { transform:translateY(-2px); border-color:var(--muted) }
+.card strong { font:700 18px/1.3 var(--sans) }
+.card .count { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em }
+.card .list { font-size:13.5px; color:var(--muted); line-height:1.5 }
+.pn { display:flex; justify-content:space-between; gap:14px; margin-top:48px; padding-top:20px; border-top:1px solid var(--line) }
+.pn a { display:flex; flex-direction:column; padding:12px 16px; border:1px solid var(--line); border-radius:10px; background:var(--card); text-decoration:none; max-width:48%; font-weight:600 }
+.pn a:hover { border-color:var(--muted) }
+.pn a.next { text-align:right; margin-left:auto }
+.pn small { font-weight:400; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.06em }
+#results a { display:block; padding:12px 14px; margin:8px 0; border:1px solid var(--line); border-radius:8px; background:var(--card); text-decoration:none }
+#results a span { display:block; color:var(--muted); font-size:14px }
+#results a em { display:block; font-style:normal; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em }
+footer { margin-top:56px; font-size:13px; color:var(--muted) }
+#lightbox { position:fixed; inset:0; z-index:50; background:rgba(0,0,0,.85); display:none; overflow:auto; cursor:zoom-out; padding:24px }
+#lightbox.open { display:block }
+#lightbox img { display:block; margin:0 auto; max-width:min(100%,1600px); height:auto; border-radius:8px }
+@media (max-width: 900px) {
+  #menuBtn { display:block }
+  .brand span { display:none }
+  .search { width:auto; flex:1 }
+  .layout { grid-template-columns:1fr }
+  aside { display:none; position:fixed; top:60px; left:0; right:0; bottom:0; z-index:15; height:auto; background:var(--bg); border:0 }
+  body.nav-open aside { display:block }
+  main { padding:24px 16px 64px }
+  h1 { font-size:31px }
+  .pn a { max-width:none; flex:1 }
+}
+@media print { header.top, aside, .pn { display:none } .layout { display:block } main { padding:0 } article[hidden] { display:none } }
+</style>
+</head>
+<body>
+<header class="top">
+  <button id="menuBtn" aria-label="Contents">☰</button>
+  <a class="brand" href="../" title="mycakecrm.com">
+    <img src="../img/logo-mark.svg" width="28" height="28" alt="">
+    <b>CakeCRM</b><span>Manual</span>
+  </a>
+  <div class="search"><input id="q" type="search" placeholder="Search the manual…" autocomplete="off"></div>
+</header>
+<div class="layout">
+  <aside id="nav"><a class="home" href="#/" data-route="">Manual home</a><details data-sec="getting-started"><summary><span class="n">1</span>Getting started</summary><ul><li><a href="#/getting-started/what-cakecrm-is" data-route="getting-started/what-cakecrm-is">What CakeCRM is</a></li><li><a href="#/getting-started/signing-in" data-route="getting-started/signing-in">Signing in</a></li><li><a href="#/getting-started/sample-data" data-route="getting-started/sample-data">Sample data</a></li><li><a href="#/getting-started/mobile" data-route="getting-started/mobile">Using CakeCRM on a phone</a></li><li><a href="#/getting-started/light-and-dark" data-route="getting-started/light-and-dark">Light and dark mode</a></li><li><a href="#/getting-started/notifications" data-route="getting-started/notifications">Notifications</a></li></ul></details><details data-sec="dashboard"><summary><span class="n">2</span>Dashboard</summary><ul><li><a href="#/dashboard/dashboard" data-route="dashboard/dashboard">The dashboard</a></li><li><a href="#/dashboard/today-panel" data-route="dashboard/today-panel">The Today panel</a></li></ul></details><details data-sec="pipeline"><summary><span class="n">3</span>Pipeline</summary><ul><li><a href="#/pipeline/board" data-route="pipeline/board">The pipeline board</a></li><li><a href="#/pipeline/list-filters-and-views" data-route="pipeline/list-filters-and-views">List, filters and saved views</a></li><li><a href="#/pipeline/deal-page" data-route="pipeline/deal-page">The deal page</a></li><li><a href="#/pipeline/stages-and-closing" data-route="pipeline/stages-and-closing">Stages and closing a deal</a></li><li><a href="#/pipeline/bulk-moves" data-route="pipeline/bulk-moves">Moving deals in bulk</a></li><li><a href="#/pipeline/archived-deals" data-route="pipeline/archived-deals">Archived deals</a></li><li><a href="#/pipeline/deal-health-and-scores" data-route="pipeline/deal-health-and-scores">Deal health and scores</a></li><li><a href="#/pipeline/adding-a-deal" data-route="pipeline/adding-a-deal">Adding a deal</a></li></ul></details><details data-sec="contacts-and-companies"><summary><span class="n">4</span>Contacts &amp; companies</summary><ul><li><a href="#/contacts-and-companies/contacts-list" data-route="contacts-and-companies/contacts-list">The Contacts list</a></li><li><a href="#/contacts-and-companies/contact-page" data-route="contacts-and-companies/contact-page">A contact&#x27;s page</a></li><li><a href="#/contacts-and-companies/companies" data-route="contacts-and-companies/companies">Companies</a></li><li><a href="#/contacts-and-companies/creating-records" data-route="contacts-and-companies/creating-records">Adding contacts and companies</a></li><li><a href="#/contacts-and-companies/notes-mentions-attachments" data-route="contacts-and-companies/notes-mentions-attachments">Notes, mentions and attachments</a></li><li><a href="#/contacts-and-companies/importing" data-route="contacts-and-companies/importing">Importing contacts</a></li><li><a href="#/contacts-and-companies/duplicates" data-route="contacts-and-companies/duplicates">Duplicates</a></li><li><a href="#/contacts-and-companies/archiving" data-route="contacts-and-companies/archiving">Archiving</a></li><li><a href="#/contacts-and-companies/ownership" data-route="contacts-and-companies/ownership">Ownership</a></li><li><a href="#/contacts-and-companies/custom-fields" data-route="contacts-and-companies/custom-fields">Custom fields</a></li></ul></details><details data-sec="todos"><summary><span class="n">5</span>Todos</summary><ul><li><a href="#/todos/todo-modes" data-route="todos/todo-modes">Todo modes</a></li><li><a href="#/todos/gtd-basics" data-route="todos/gtd-basics">GTD basics</a></li><li><a href="#/todos/today" data-route="todos/today">Today</a></li><li><a href="#/todos/inbox" data-route="todos/inbox">The Inbox</a></li><li><a href="#/todos/to-do" data-route="todos/to-do">To Do</a></li><li><a href="#/todos/projects" data-route="todos/projects">Projects</a></li><li><a href="#/todos/waiting-and-someday" data-route="todos/waiting-and-someday">Waiting and Someday</a></li><li><a href="#/todos/done-and-review" data-route="todos/done-and-review">Done and Review</a></li><li><a href="#/todos/contexts-and-search" data-route="todos/contexts-and-search">Contexts and search</a></li><li><a href="#/todos/simple-list" data-route="todos/simple-list">The simple list</a></li><li><a href="#/todos/no-login-links" data-route="todos/no-login-links">No-login links</a></li></ul></details><details data-sec="reports"><summary><span class="n">6</span>Reports</summary><ul><li><a href="#/reports/company-report" data-route="reports/company-report">The company report</a></li></ul></details><details data-sec="baker"><summary><span class="n">7</span>Baker, the assistant</summary><ul><li><a href="#/baker/meet-baker" data-route="baker/meet-baker">Meet Baker</a></li><li><a href="#/baker/what-baker-can-do" data-route="baker/what-baker-can-do">What Baker can and cannot do</a></li><li><a href="#/baker/approvals" data-route="baker/approvals">Approvals and modes</a></li><li><a href="#/baker/memory" data-route="baker/memory">Baker&#x27;s memory</a></li><li><a href="#/baker/playbooks" data-route="baker/playbooks">Sales playbooks and help</a></li><li><a href="#/baker/ai-setup" data-route="baker/ai-setup">AI setup</a></li></ul></details><details data-sec="settings"><summary><span class="n">8</span>Settings</summary><ul><li><a href="#/settings/personal" data-route="settings/personal">Personal settings</a></li><li><a href="#/settings/assistant" data-route="settings/assistant">Assistant settings</a></li><li><a href="#/settings/workspace" data-route="settings/workspace">Workspace settings</a></li><li><a href="#/settings/integrations" data-route="settings/integrations">Integrations settings</a></li></ul></details><details data-sec="integrations"><summary><span class="n">9</span>Integrations</summary><ul><li><a href="#/integrations/gmail" data-route="integrations/gmail">Gmail</a></li><li><a href="#/integrations/telegram" data-route="integrations/telegram">Telegram</a></li></ul></details><details data-sec="self-hosting"><summary><span class="n">10</span>Self-hosting</summary><ul><li><a href="#/self-hosting/deploying" data-route="self-hosting/deploying">Deploying CakeCRM</a></li><li><a href="#/self-hosting/first-admin-and-passwords" data-route="self-hosting/first-admin-and-passwords">First admin and passwords</a></li></ul></details></aside>
+  <main>
+    <div id="results" hidden></div>
+    <article data-route="" data-title="CakeCRM user manual"><p class="eyebrow">Manual</p><h1>CakeCRM user manual</h1><p class="lead">How to use every part of CakeCRM, screen by screen. Pick a section below or use the contents on the left.</p><div class="cards"><a class="card" href="#/getting-started/what-cakecrm-is"><span class="n">1</span><strong>Getting started</strong><span class="count">6 pages</span><span class="list">What CakeCRM is · Signing in · Sample data · Using CakeCRM on a phone · Light and dark mode · Notifications</span></a><a class="card" href="#/dashboard/dashboard"><span class="n">2</span><strong>Dashboard</strong><span class="count">2 pages</span><span class="list">The dashboard · The Today panel</span></a><a class="card" href="#/pipeline/board"><span class="n">3</span><strong>Pipeline</strong><span class="count">8 pages</span><span class="list">The pipeline board · List, filters and saved views · The deal page · Stages and closing a deal · Moving deals in bulk · Archived deals …</span></a><a class="card" href="#/contacts-and-companies/contacts-list"><span class="n">4</span><strong>Contacts &amp; companies</strong><span class="count">10 pages</span><span class="list">The Contacts list · A contact&#x27;s page · Companies · Adding contacts and companies · Notes, mentions and attachments · Importing contacts …</span></a><a class="card" href="#/todos/todo-modes"><span class="n">5</span><strong>Todos</strong><span class="count">11 pages</span><span class="list">Todo modes · GTD basics · Today · The Inbox · To Do · Projects …</span></a><a class="card" href="#/reports/company-report"><span class="n">6</span><strong>Reports</strong><span class="count">1 page</span><span class="list">The company report</span></a><a class="card" href="#/baker/meet-baker"><span class="n">7</span><strong>Baker, the assistant</strong><span class="count">6 pages</span><span class="list">Meet Baker · What Baker can and cannot do · Approvals and modes · Baker&#x27;s memory · Sales playbooks and help · AI setup</span></a><a class="card" href="#/settings/personal"><span class="n">8</span><strong>Settings</strong><span class="count">4 pages</span><span class="list">Personal settings · Assistant settings · Workspace settings · Integrations settings</span></a><a class="card" href="#/integrations/gmail"><span class="n">9</span><strong>Integrations</strong><span class="count">2 pages</span><span class="list">Gmail · Telegram</span></a><a class="card" href="#/self-hosting/deploying"><span class="n">10</span><strong>Self-hosting</strong><span class="count">2 pages</span><span class="list">Deploying CakeCRM · First admin and passwords</span></a></div><p>CakeCRM is a free, self-hostable CRM with a built-in AI sales assistant called Baker. The CRM is the product and Baker is one feature of it: every part of the CRM works with no AI provider connected. AI features stay hidden until an admin connects one, and they never show errors in the meantime.</p>
+<h2>How the pieces fit</h2>
+<p>The navigation has six destinations, and each one answers a different question.</p>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Destination</th>
+<th>What it is for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Dashboard</td>
+<td>What needs you today, and how the pipeline looks overall</td>
+</tr>
+<tr>
+<td>Pipeline</td>
+<td>Your deals, by stage, as a board or a list</td>
+</tr>
+<tr>
+<td>Contacts</td>
+<td>The people you sell to</td>
+</tr>
+<tr>
+<td>Companies</td>
+<td>The organisations they belong to</td>
+</tr>
+<tr>
+<td>Todos</td>
+<td>Your follow-ups, the one follow-up tool in the product</td>
+</tr>
+<tr>
+<td>Reports</td>
+<td>Everything known about one company, on one page</td>
+</tr>
+</tbody>
+</table></div>
+<p>A typical loop: create a contact, create a deal linked to it, log an activity against the deal, and add a follow-up todo. That loop is the whole CRM in miniature. Start with <a href="#/getting-started/what-cakecrm-is">What CakeCRM is</a> if you are new.</p>
+<p>Baker sits in the bottom-right corner of every page. Once an admin connects an AI provider it can read your CRM, draft records and changes for you to approve, and answer questions about your pipeline. See <a href="#/baker/meet-baker">Meet Baker</a>.</p>
+<h2>Admins and members</h2>
+<p>There are exactly two roles.</p>
+<ul>
+<li><strong>Members</strong> can do everything with CRM records: create, edit and close deals, contacts, companies and todos. Owning a record is not a permission; any member may edit any record.</li>
+<li><strong>Admins</strong> can also change how the install is set up: branding, the team, custom fields, integrations, the todo mode, AI providers and Baker's protected memory files.</li>
+</ul>
+<p>In Settings, members see the Personal and Assistant sections; Workspace and Integrations are admin-only and do not appear for a member. Where a page in this manual describes something only an admin can do, it says so.</p>
+<h2>Running your own copy</h2>
+<p>If you are installing CakeCRM rather than using an existing install, start with <a href="#/self-hosting/deploying">Deploying</a> and <a href="#/self-hosting/first-admin-and-passwords">The first admin and passwords</a>.</p></article>
+<article data-route="getting-started/what-cakecrm-is" data-title="What CakeCRM is" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/getting-started/what-cakecrm-is">Getting started</a></p><h1>What CakeCRM is</h1><p class="lead">A free, self-hostable CRM with an AI assistant built in, and a CRM that works fully without it.</p><p>CakeCRM is a free, open-source CRM you run on your own server. It keeps your contacts, companies, deals and follow-up todos in one place, and it comes with a built-in AI sales assistant called Baker.</p>
+<h2>The CRM comes first</h2>
+<p>Every part of the CRM works with no AI provider configured. Lead scores, duplicate scans, deal staleness, the dashboard, analytics and the company report are plain database work and are always available.</p>
+<p>What stays hidden until an admin connects a provider:</p>
+<ul>
+<li>Baker's chat itself.</li>
+<li>Assisted import of file formats beyond CSV and vCard.</li>
+<li>The estimated touch-count pill on deal cards, and the Weekly touches card on the dashboard.</li>
+<li>AI provenance badges.</li>
+</ul>
+<p>These hide rather than break. You never see an error because no key is set. An admin may see a dismissible banner offering to add a key; it is a prompt, never a gate, and dismissing it is remembered.</p>
+<h2>Where things live</h2>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Page</th>
+<th>What you find there</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="#/dashboard/dashboard">Dashboard</a></td>
+<td>A Today panel ranking what needs you now, headline counts, a snapshot and recent activity</td>
+</tr>
+<tr>
+<td><a href="#/pipeline/board">Pipeline</a></td>
+<td>The deal board, by stage, with a list view and filters</td>
+</tr>
+<tr>
+<td><a href="#/contacts-and-companies/contacts-list">Contacts</a> and <a href="#/contacts-and-companies/companies">Companies</a></td>
+<td>Searchable lists with detail pages that roll up linked records, notes and activity</td>
+</tr>
+<tr>
+<td><a href="#/todos/todo-modes">Todos</a></td>
+<td>Your follow-ups</td>
+</tr>
+<tr>
+<td><a href="#/reports/company-report">Reports</a></td>
+<td>One report: everything known about a single company</td>
+</tr>
+<tr>
+<td><a href="#/settings/personal">Settings</a></td>
+<td>Personal, Assistant, Workspace and Integrations</td>
+</tr>
+</tbody>
+</table></div>
+<h2>Your first ten minutes</h2>
+<ol>
+<li><a href="#/getting-started/signing-in">Sign in</a>.</li>
+<li>If the CRM is empty, you are offered <a href="#/getting-started/sample-data">sample data</a>: fictional contacts, deals and todos so you can see how everything behaves.</li>
+<li>Walk the navigation: Dashboard, Pipeline, Contacts, Companies, Todos, Reports.</li>
+<li>Create a contact, create a deal linked to it, log an activity against the deal, and add a follow-up todo.</li>
+</ol>
+<h2>Adding AI</h2>
+<p>An admin connects a provider and a model on the AI Setup page. Once a key is connected, the Baker button in the bottom-right corner opens a chat drawer instead of pointing at setup. See <a href="#/baker/ai-setup">AI setup</a>.</p><nav class="pn"><span></span><a class="next" href="#/getting-started/signing-in"><small>Next</small>Signing in</a></nav></article>
+<article data-route="getting-started/signing-in" data-title="Signing in" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/getting-started/what-cakecrm-is">Getting started</a></p><h1>Signing in</h1><p class="lead">Sign in with your email and password, and what happens when your account has two-factor turned on.</p><p>Open your install's address (for example <code>https://crm.example.com</code>) and you land on the sign-in screen.</p>
+<figure class="shot"><img data-shot="login" width="1400" height="954" alt="Signing in screenshot"></figure>
+
+<h2>Signing in</h2>
+<ol>
+<li>Enter your <strong>Email</strong> and <strong>Password</strong>.</li>
+<li>Press <strong>Sign in</strong>.</li>
+</ol>
+<p>You arrive on the Dashboard. Your account is created by an admin from Settings, Workspace, Team; there is no sign-up form. On a brand-new install, the first admin account is created by the server from its environment settings. See <a href="#/self-hosting/first-admin-and-passwords">The first admin and passwords</a>.</p>
+<h2>Two-factor codes</h2>
+<p>If two-factor authentication is switched on for your account, a second screen asks for a code after your password.</p>
+<ul>
+<li>Enter the 6-digit code from your authenticator app and press <strong>Verify</strong>.</li>
+<li>Lost your phone? Press <strong>Use a backup code</strong> and enter one of your backup codes instead. Each backup code works once.</li>
+<li>Tick <strong>Trust this browser for 30 days</strong> to skip the code on this browser for a month.</li>
+<li><strong>Back</strong> returns you to the password screen.</li>
+</ul>
+<p>There is no screen in CakeCRM for turning two-factor on, showing a QR code or listing backup codes. The server supports it, but the setup screen has not been built.</p>
+<h2>Signing out</h2>
+<p>Press <strong>Sign out</strong> at the top right of any page. On a phone it is at the bottom of the menu; see <a href="#/getting-started/mobile">Using CakeCRM on a phone</a>.</p>
+<h2>Forgotten passwords</h2>
+<p>There is no emailed reset link: a self-hosted install has no mail server to send one.</p>
+<ul>
+<li><strong>A member</strong> who has forgotten their password asks an admin, who resets it from Settings, Workspace, Team. If they have also lost their authenticator, the admin can tick the box that clears two-factor at the same time.</li>
+<li><strong>The only admin</strong> needs whoever runs the server to set a password-reset value in its environment. See <a href="#/self-hosting/first-admin-and-passwords">The first admin and passwords</a>.</li>
+</ul>
+<p>To change a password you still know, use Settings, Personal, Change password. Changing it signs you out everywhere else and keeps you signed in where you are. See <a href="#/settings/personal">Personal settings</a>.</p><nav class="pn"><a href="#/getting-started/what-cakecrm-is"><small>Previous</small>What CakeCRM is</a><a class="next" href="#/getting-started/sample-data"><small>Next</small>Sample data</a></nav></article>
+<article data-route="getting-started/sample-data" data-title="Sample data" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/getting-started/what-cakecrm-is">Getting started</a></p><h1>Sample data</h1><p class="lead">Load a fictional set of contacts, deals and todos to explore CakeCRM, then clear it when you are ready for real records.</p><p>A brand-new CRM is empty, which makes it hard to see how anything behaves. CakeCRM can fill it with fictional sample data: a small business with its contacts, companies, deals and todos. Every name in it is made up.</p>
+<h2>Loading it</h2>
+<p>When the CRM has no records, a <strong>Start with sample data?</strong> dialog appears after you sign in. You have two choices:</p>
+<ul>
+<li><strong>Load sample data</strong> fills the CRM with the examples. Loading needs an admin account.</li>
+<li><strong>No thanks, start fresh</strong> closes the dialog and leaves the CRM empty. The choice is remembered for the whole install, so the dialog does not come back.</li>
+</ul>
+<h2>The example-data banner</h2>
+<p>While sample data is loaded, admins see a banner across the top of every page: "You're viewing example data — contacts, deals, and todos are samples." It stays there so nobody mistakes the examples for real records.</p>
+<figure class="shot"><img data-shot="sample-data-banner" width="1400" height="954" alt="Sample data screenshot"></figure>
+
+<h2>Clearing it</h2>
+<p>Press <strong>Clear example data</strong> in the banner. A confirmation asks <strong>Clear all CRM data?</strong>, and you press <strong>Clear everything</strong> to go ahead.</p>
+<p>Read that confirmation carefully. Clearing removes the example data <strong>and anything you have added since</strong>. It cannot be undone. If you want to try CakeCRM with sample data and then go live, clear the samples before you start entering real records.</p>
+<p>What clearing keeps:</p>
+<ul>
+<li>Everyone's user accounts.</li>
+<li>Custom field definitions an admin has set up.</li>
+<li>Saved views on list pages.</li>
+</ul>
+<p>Custom stage criteria on the pipeline are put back to the standard ones. See <a href="#/pipeline/stages-and-closing">Stages and closing a deal</a>.</p>
+<p>Only admins see the banner and its Clear button; clearing changes the whole install.</p><nav class="pn"><a href="#/getting-started/signing-in"><small>Previous</small>Signing in</a><a class="next" href="#/getting-started/mobile"><small>Next</small>Using CakeCRM on a phone</a></nav></article>
+<article data-route="getting-started/mobile" data-title="Using CakeCRM on a phone" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/getting-started/what-cakecrm-is">Getting started</a></p><h1>Using CakeCRM on a phone</h1><p class="lead">The same CRM in a narrower layout, with a menu drawer and a few touch-friendly changes.</p><p>CakeCRM works in your phone's browser. There is nothing to install; open the same address you use on a computer and sign in.</p>
+<figure class="shot"><img data-shot="mobile-dashboard" width="1008" height="1988" alt="Using CakeCRM on a phone screenshot"></figure>
+
+<h2>Getting around</h2>
+<p>On a narrow screen the header changes:</p>
+<ul>
+<li>A row of tabs under the header holds the six destinations: Dashboard, Pipeline, Contacts, Companies, Todos and Reports. Swipe it sideways if they do not all fit.</li>
+<li>The light/dark switch and the notifications bell stay in the header, so alerts are always one tap away.</li>
+<li>The menu button (three lines, top left) opens the <strong>Menu</strong> drawer.</li>
+</ul>
+<figure class="shot"><img data-shot="mobile-menu" width="1008" height="1988" alt="Using CakeCRM on a phone screenshot"></figure>
+
+<p>The drawer lists the same six destinations plus <strong>Settings</strong>, <strong>AI Setup</strong> (admins only) and <strong>Sign out</strong>. Tap the <strong>×</strong> to close it.</p>
+<h2>The pipeline on a phone</h2>
+<p>The board shows roughly one stage column at a time, and you swipe between them. A row of stage pills above the board jumps straight to a column and shows which one you are on.</p>
+<p>Some desktop actions work differently on a phone:</p>
+<ul>
+<li><strong>No dragging.</strong> To move a deal to another stage, open it and use <strong>Edit</strong>, or <strong>Mark Won</strong> or <strong>Mark Lost</strong>.</li>
+<li><strong>No checkboxes</strong>, so there is no bulk move. Use a computer for <a href="#/pipeline/bulk-moves">moving deals in bulk</a>.</li>
+<li>The <strong>Add Deal</strong> button reads <strong>Add</strong>.</li>
+<li>A stage's checklist opens as a sheet along the bottom of the screen rather than a panel in the corner.</li>
+</ul>
+<h2>Baker on a phone</h2>
+<p>The Baker button sits in the bottom-right corner on a phone too. Pages leave room at the bottom so you can scroll past it.</p><nav class="pn"><a href="#/getting-started/sample-data"><small>Previous</small>Sample data</a><a class="next" href="#/getting-started/light-and-dark"><small>Next</small>Light and dark mode</a></nav></article>
+<article data-route="getting-started/light-and-dark" data-title="Light and dark mode" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/getting-started/what-cakecrm-is">Getting started</a></p><h1>Light and dark mode</h1><p class="lead">Switch between a light and a dark theme with one button; CakeCRM follows your device until you choose.</p><p>CakeCRM has a light theme and a dark theme. Every page works the same in both; only the look changes.</p>
+<figure class="shot"><img data-shot="dark-mode" width="1400" height="954" alt="Light and dark mode screenshot"></figure>
+
+<h2>Switching</h2>
+<p>Press the sun or moon button in the header, beside the notifications bell. It is in the header on a phone as well.</p>
+<ul>
+<li>In light mode the button shows a moon and switches you to dark.</li>
+<li>In dark mode it shows a sun and switches you to light.</li>
+</ul>
+<h2>How CakeCRM picks a theme</h2>
+<p>Until you press the button, CakeCRM follows your device's own setting. If your computer switches to dark mode in the evening, CakeCRM switches with it.</p>
+<p>Once you press the button, your choice wins and stays put. It is saved in this browser, so:</p>
+<ul>
+<li>Other tabs of CakeCRM open in the same browser switch along with it.</li>
+<li>Another browser or another device keeps its own setting.</li>
+<li>If your browser blocks site storage, the choice lasts until you close the tab.</li>
+</ul>
+<p>The theme is a personal display choice. It does not affect anyone else on your team.</p><nav class="pn"><a href="#/getting-started/mobile"><small>Previous</small>Using CakeCRM on a phone</a><a class="next" href="#/getting-started/notifications"><small>Next</small>Notifications</a></nav></article>
+<article data-route="getting-started/notifications" data-title="Notifications" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/getting-started/what-cakecrm-is">Getting started</a></p><h1>Notifications</h1><p class="lead">The bell, browser push, Telegram and the daily digest, and what raises a notification in the first place.</p><p>CakeCRM tells you when something needs you through the bell in the header, and optionally through browser push and Telegram. None of it needs an AI provider.</p>
+<h2>The bell</h2>
+<p>The bell sits in the header on every page, on a phone too. Its badge counts your unread notifications. Open it to read them, dismiss one with its <strong>✕</strong>, or clear the lot with <strong>Dismiss all</strong>.</p>
+<p>When the system itself has a problem to report, an alert appears at the top of the list with <strong>Acknowledge</strong> and <strong>Resolve</strong> buttons. Alerts are shared by the whole install.</p>
+<h2>Who sees a notification</h2>
+<p>Every notification is one of two kinds.</p>
+<ul>
+<li><strong>Addressed to you.</strong> Nobody else sees it, and nobody else can dismiss it. A mention, or a nudge about a deal or contact you own, is the usual case.</li>
+<li><strong>Sent to everyone.</strong> The daily digest, anything Baker raises while working in the background, and a nudge about a record with no owner. Dismissing one of these dismisses it for the whole team.</li>
+</ul>
+<h2>What raises a notification</h2>
+<ul>
+<li><strong>Mentions.</strong> A teammate types <code>@</code> in a note on a deal, contact or company and picks your name. The notification's title opens that record. See <a href="#/contacts-and-companies/notes-mentions-attachments">Notes, mentions and attachments</a>.</li>
+<li><strong>The daily digest and nudges</strong>, when an admin has turned them on (below).</li>
+<li><strong>Baker</strong>, at most one notification per background run, once an AI provider is connected.</li>
+</ul>
+<h2>Browser push</h2>
+<p>In Settings, Personal, the <strong>Notifications</strong> card has <strong>Enable Web Push</strong>. Pressing it asks your browser for permission and registers this browser. It works per browser and per device: turning it on at your desk does nothing for your phone. <strong>Disable Web Push</strong> turns it off again.</p>
+<p>If your browser has blocked notifications for the site, the card says so; allow them in your browser's settings first.</p>
+<p><strong>Send test notification</strong> sends a real notification through the whole delivery path and tells you whether it reached a device or only landed in the bell.</p>
+<h2>Telegram</h2>
+<p>If you link your Telegram account from Settings, Personal, <strong>Link my Telegram</strong>, your notifications also go to that chat. There is no separate on/off switch for it. See <a href="#/integrations/telegram">Telegram</a>.</p>
+<h2>The daily digest and nudges (admins)</h2>
+<p>The same card has a <strong>Daily digest and nudges</strong> section with <strong>Turn on</strong> and <strong>Turn off</strong>. It sends a pipeline summary each morning, plus a nudge when a deal goes cold or a contact with open business has not been spoken to. It applies to the whole install, so only admins see the control.</p><nav class="pn"><a href="#/getting-started/light-and-dark"><small>Previous</small>Light and dark mode</a><a class="next" href="#/dashboard/dashboard"><small>Next</small>The dashboard</a></nav></article>
+<article data-route="dashboard/dashboard" data-title="The dashboard" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/dashboard/dashboard">Dashboard</a></p><h1>The dashboard</h1><p class="lead">The first page after you sign in: what needs you today, then the shape of the pipeline and recent work.</p><p>The Dashboard is the first page you see after signing in. It reads from top to bottom: first what needs you now, then how the pipeline looks, then what has happened lately. Everything on it is plain database work and works with no AI provider.</p>
+<figure class="shot"><img data-shot="dashboard" width="1400" height="954" alt="The dashboard screenshot"></figure>
+
+<h2>The headline</h2>
+<p>At the top, "Pipeline is ..." gives the total value of your open deals and how many there are. Open means any deal in lead, qualified, proposal or negotiation.</p>
+<h2>Today</h2>
+<p>Directly under the headline, the <strong>Today</strong> panel lists up to five things that need you now: starred todos, hot deals that have gone quiet, overdue todos and todos due today. See <a href="#/dashboard/today-panel">The Today panel</a>.</p>
+<h2>The four counts</h2>
+<p>Four tiles are always there: <strong>Contacts</strong>, <strong>Companies</strong>, <strong>Pipeline value</strong> and <strong>Overdue todos</strong> (with the number of pending todos underneath).</p>
+<h2>Snapshot</h2>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Tile</th>
+<th>What it shows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Win rate</td>
+<td>Won deals as a share of all closed deals, with the won and lost counts</td>
+</tr>
+<tr>
+<td>Avg days to close</td>
+<td>Roughly how long won deals took</td>
+</tr>
+<tr>
+<td>Avg won deal</td>
+<td>The average value of a won deal</td>
+</tr>
+<tr>
+<td>Open deals</td>
+<td>How many deals are open, and what they are worth</td>
+</tr>
+</tbody>
+</table></div>
+<p>A bar under the tiles splits won from lost. With nothing closed yet it reads "No closed deals yet."</p>
+<h2>Weekly touches</h2>
+<p>Once an AI provider is connected, a <strong>Weekly touches</strong> card shows how many open deals each person touched in the week. A touch is an edit, a logged activity or a note. With no provider the card is not shown.</p>
+<h2>Stages</h2>
+<p>One row per open stage, with its value and number of deals. Click a row to open the <a href="#/pipeline/board">Pipeline</a> board scrolled to that stage's column. Any filters you had on the board are cleared so the column is in view.</p>
+<h2>Further down</h2>
+<ul>
+<li><strong>By rep</strong>: each person's open deals, pipeline, won and lost, records touched and activity over the last 30 days. It only appears when more than one person uses the install.</li>
+<li><strong>Deal aging</strong>: open deals grouped by age, and <strong>Needs a touch</strong>: open deals with nothing logged for 14 days or more. Click one to open it.</li>
+<li><strong>Activity</strong>: how much was logged in the last 30 days, by day and by type.</li>
+<li><strong>Top deals</strong>: the five largest open deals past the lead stage. Click one to open it in place. See <a href="#/pipeline/deal-health-and-scores">Deal health and scores</a> for how they are picked.</li>
+<li><strong>Recent activity</strong>: the last ten activities logged anywhere.</li>
+</ul>
+<p>At the bottom, <strong>+ Add Contact</strong>, <strong>+ Add Deal</strong> and <strong>+ Add Todo</strong> take you to the page where you add each one.</p><nav class="pn"><a href="#/getting-started/notifications"><small>Previous</small>Notifications</a><a class="next" href="#/dashboard/today-panel"><small>Next</small>The Today panel</a></nav></article>
+<article data-route="dashboard/today-panel" data-title="The Today panel" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/dashboard/dashboard">Dashboard</a></p><h1>The Today panel</h1><p class="lead">One short, ranked list at the top of the dashboard of what needs you today.</p><p>The <strong>Today</strong> panel sits at the top of the <a href="#/dashboard/dashboard">Dashboard</a>. It answers one question: what should I do now? It is ranked by plain rules, not AI, and works the same with or without an AI provider.</p>
+<h2>What goes on it, in order</h2>
+<ol>
+<li><strong>Starred</strong> todos you have marked for today.</li>
+<li><strong>Hot deals that have gone quiet</strong>: deals you have marked hot that have had no touch for 14 days or more. At most two take a slot, longest-quiet first, so a neglected pipeline never buries the promises you made yourself.</li>
+<li><strong>Overdue</strong> todos.</li>
+<li>Todos <strong>due today</strong>.</li>
+</ol>
+<p>Each todo row wears a label saying why it is there: STARRED, OVERDUE or DUE TODAY. A deal row shows its hot icon and how long it has been idle and what it is worth, for example "idle 12d · $30K".</p>
+<h2>Five at a time</h2>
+<p>The panel shows up to five rows. If more are waiting, <strong>+N more today</strong> opens the rest and <strong>Show less</strong> folds them away again. The extra rows also include:</p>
+<ul>
+<li>Hot deals that are still being worked, and quiet hot deals beyond the first two.</li>
+<li>Todos marked BROUGHT BACK, whose bring-back date has arrived.</li>
+</ul>
+<p>When nothing is ranked, the panel reads "Nothing needs you today."</p>
+<h2>Acting on a row</h2>
+<ul>
+<li>Tick the box on a todo row to complete it without leaving the dashboard.</li>
+<li>Click a todo's title to go to <a href="#/todos/todo-modes">Todos</a>.</li>
+<li>Click a deal to open it on the <a href="#/pipeline/deal-page">Pipeline</a>.</li>
+</ul>
+<p>Marking a deal hot is up to you; see <a href="#/pipeline/deal-health-and-scores">Deal health and scores</a>.</p>
+<h2>Mine and Everyone</h2>
+<p>On an install with more than one person, <strong>MINE</strong> and <strong>EVERYONE</strong> buttons sit beside the heading. Mine shows your own work plus anything with no owner, so unassigned work is always caught by someone; those rows are labelled Unassigned. Everyone shows the whole team. Your choice is remembered in this browser tab.</p>
+<h2>When it updates</h2>
+<p>The panel uses the install's own day, not your computer's, and reloads itself at midnight.</p><nav class="pn"><a href="#/dashboard/dashboard"><small>Previous</small>The dashboard</a><a class="next" href="#/pipeline/board"><small>Next</small>The pipeline board</a></nav></article>
+<article data-route="pipeline/board" data-title="The pipeline board" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/pipeline/board">Pipeline</a></p><h1>The pipeline board</h1><p class="lead">Every deal as a card in its stage&#x27;s column; drag a card to move it, click it to open it.</p><p><strong>Pipeline</strong> shows your deals as cards in columns, one column per stage. Under the page title a line reads how much is open and how many open deals there are.</p>
+<figure class="shot"><img data-shot="pipeline-board" width="1400" height="954" alt="The pipeline board screenshot"></figure>
+
+<h2>The columns</h2>
+<p>There are six stages: lead, qualified, proposal, negotiation, won and lost. The board opens with the four open stages showing. Won and Lost are hidden by default, so the board is about work that is still live.</p>
+<p>When any stage is hidden, the line under the title says how many, with a <strong>Show all</strong> link beside it. Nothing is ever secretly missing. To hide or show a single column, use the stage checkboxes in the toolbar above the board. See <a href="#/pipeline/stages-and-closing">Stages and closing a deal</a> for how to make Won and Lost show by default.</p>
+<h2>What a card shows</h2>
+<ul>
+<li>The deal title and its value.</li>
+<li>The linked contact.</li>
+<li>The probability, if one is set.</li>
+<li>The forecasted close date, or "No forecast date".</li>
+<li>A lead score, an estimated touch count (only with an AI provider) and a temperature icon you can click to mark the deal hot, warm or cold.</li>
+</ul>
+<p>On a Won card, the score, touch count and temperature are replaced by when the account was last contacted, because after the sale the question is whether it has gone quiet.</p>
+<p>See <a href="#/pipeline/deal-health-and-scores">Deal health and scores</a> for what the numbers mean.</p>
+<h2>Moving a deal</h2>
+<p>Drag a card into another column. The move saves straight away. Dragging still works while a filter is on.</p>
+<p>Dragging into Won records today as the deal's Closed on date, and dragging into Lost records no reason. To capture the real close date or a lost reason, open the deal and use <strong>Mark Won</strong> or <strong>Mark Lost</strong> instead. See <a href="#/pipeline/stages-and-closing">Stages and closing a deal</a>.</p>
+<p>On a phone there is no dragging; open the deal instead. See <a href="#/getting-started/mobile">Using CakeCRM on a phone</a>.</p>
+<h2>Opening a deal</h2>
+<p>Click a card to open the deal in a panel over the board. See <a href="#/pipeline/deal-page">The deal page</a>.</p>
+<h2>Searching and filtering</h2>
+<p>The search box above the board matches deal titles, contact names and company names. <strong>Filters</strong> narrows the board by stage, owner, value, dates, activity and more. <strong>Board</strong> and <strong>List</strong> switch between this view and a table. See <a href="#/pipeline/list-filters-and-views">List, filters and saved views</a>.</p>
+<h2>Adding a deal</h2>
+<p>Press <strong>Add Deal</strong> at the top right. See <a href="#/pipeline/adding-a-deal">Adding a deal</a>.</p><nav class="pn"><a href="#/dashboard/today-panel"><small>Previous</small>The Today panel</a><a class="next" href="#/pipeline/list-filters-and-views"><small>Next</small>List, filters and saved views</a></nav></article>
+<article data-route="pipeline/list-filters-and-views" data-title="List, filters and saved views" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/pipeline/board">Pipeline</a></p><h1>List, filters and saved views</h1><p class="lead">See deals as a sortable table, narrow them with filters, and save a filtered view for the whole team.</p><p>The toolbar above the pipeline has a search box, a <strong>Filters</strong> button, a <strong>Sort</strong> control, the <strong>Board</strong> and <strong>List</strong> switch, the stage checkboxes and a <strong>Views</strong> menu.</p>
+<h2>The list view</h2>
+<p>Press <strong>List</strong> to see your deals as a table.</p>
+<figure class="shot"><img data-shot="pipeline-list" width="1400" height="954" alt="List, filters and saved views screenshot"></figure>
+
+<p>The columns are Deal, Company, Stage, Value, % Closed, Score, Touches, Forecasted close, Closed on, Last activity and Owner. Click a row to open the deal. The Touches column needs an AI provider and is empty without one.</p>
+<h2>Sorting</h2>
+<p><strong>Sort</strong> orders the deals by Board order, Deal, Company, Value, % Closed, Lead score, Touches, Forecasted close date, Closed on, Last activity or Owner. The arrow beside it flips between ascending and descending.</p>
+<h2>Filters</h2>
+<p>Press <strong>Filters</strong> to open the filter panel. The button shows how many filters are on, for example "Filters (2)", and <strong>Clear filters</strong> turns them all off along with the search.</p>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Filter</th>
+<th>Choices</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Stage</td>
+<td>Any of the six stages; picking stages also hides the other columns</td>
+</tr>
+<tr>
+<td>Owner</td>
+<td>Any person, or Unassigned</td>
+</tr>
+<tr>
+<td>Value</td>
+<td>A minimum and a maximum</td>
+</tr>
+<tr>
+<td>Forecasted close date</td>
+<td>Overdue, Next 7 days, This month, No forecasted close date</td>
+</tr>
+<tr>
+<td>Forecasted close range</td>
+<td>A from and to date</td>
+</tr>
+<tr>
+<td>Closed on</td>
+<td>Last 7 days, This month, Last month, Won, no closed-on date</td>
+</tr>
+<tr>
+<td>Created</td>
+<td>Last 7 days, Last 30 days, This month, This quarter, Last quarter</td>
+</tr>
+<tr>
+<td>Created range</td>
+<td>A from and to date</td>
+</tr>
+<tr>
+<td>Deal activity</td>
+<td>Active (≤ 7 days), Active (≤ 30 days), No activity in 30+ days, No activity logged</td>
+</tr>
+<tr>
+<td>Activity range</td>
+<td>A from and to date</td>
+</tr>
+<tr>
+<td>Archived</td>
+<td>Include archived, Archived only</td>
+</tr>
+</tbody>
+</table></div>
+<p>Filters, search and sort are remembered for this browser tab.</p>
+<h2>Saved views</h2>
+<p>A saved view stores the filters, search text, sort and Board or List choice under a name, so you can come back to it in one click. Saved views are shared: everyone on the team sees and can apply every view.</p>
+<ol>
+<li>Set up the filters you want.</li>
+<li>Open <strong>Views</strong> and press <strong>Save current view</strong>.</li>
+<li>Type a name and press <strong>Save</strong>.</li>
+</ol>
+<p>To use a view, open <strong>Views</strong> and click its name. Each view shows who made it.</p>
+<p>Only the person who made a view, or an admin, can change it. They see <strong>Update to current view</strong> (replace it with what is on screen now), <strong>Rename</strong> and <strong>Delete</strong>. Updating or deleting changes it for everyone.</p>
+<p>Saved views do not include which stage columns you have hidden; that stays your own choice on your own device. A view saved under an older version of the page is listed but greyed out, with a note saying so.</p><nav class="pn"><a href="#/pipeline/board"><small>Previous</small>The pipeline board</a><a class="next" href="#/pipeline/deal-page"><small>Next</small>The deal page</a></nav></article>
+<article data-route="pipeline/deal-page" data-title="The deal page" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/pipeline/board">Pipeline</a></p><h1>The deal page</h1><p class="lead">Everything about one deal in a single panel: its details, how to edit or close it, the activity log and the notes thread.</p><p>Click a deal anywhere in CakeCRM (a board card, a list row, a Top deals row on the dashboard) and it opens in a panel over the page.</p>
+<figure class="shot"><img data-shot="deal-detail" width="1400" height="954" alt="The deal page screenshot"></figure>
+
+<h2>Along the top</h2>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Button</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Copy link</td>
+<td>Copies a link that opens this deal on the Pipeline, to paste into a message or a note</td>
+</tr>
+<tr>
+<td>Edit</td>
+<td>Turns the panel into a form so you can change the deal's fields</td>
+</tr>
+<tr>
+<td>Mark Won</td>
+<td>Closes the deal as won, asking which day it closed</td>
+</tr>
+<tr>
+<td>Mark Lost</td>
+<td>Closes the deal as lost, asking for a reason</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Mark Won</strong> and <strong>Mark Lost</strong> only appear while the deal is in an open stage. See <a href="#/pipeline/stages-and-closing">Stages and closing a deal</a>.</p>
+<h2>The details</h2>
+<p>Under the title and value you see the stage, then the Deal ID, Contact, Company, Owner, Temperature, Probability, Lead Score, Forecasted close date and Closed on. A lost deal also shows its LOST REASON.</p>
+<p>Click the temperature icon to cycle the deal through hot, warm, cold and not set. Once an AI provider is connected, an estimated touch count also appears here, and you can open the line-by-line reasons behind it. See <a href="#/pipeline/deal-health-and-scores">Deal health and scores</a>.</p>
+<h2>Editing</h2>
+<p>Press <strong>Edit</strong> to change the title, contact, company, owner, stage, value, probability, forecasted close date or notes. A Won deal also shows its Closed on date here. Press <strong>Save</strong> to keep your changes or <strong>Cancel</strong> to drop them.</p>
+<p>If you try to close the panel with unsaved changes, CakeCRM asks before throwing them away.</p>
+<h2>Log Activity</h2>
+<p>Pick <strong>call</strong>, <strong>email</strong>, <strong>meeting</strong> or <strong>note</strong>, type what happened in the box, and press <strong>Log</strong>. <strong>Clear</strong> puts the choice back if you picked one by mistake. An activity is a dated record of an interaction; it is history and is not edited afterwards.</p>
+<h2>Custom fields</h2>
+<p>If an admin has set up custom fields for deals, they appear under the activity box. See <a href="#/contacts-and-companies/custom-fields">Custom fields</a>.</p>
+<h2>Activity History</h2>
+<p>Every call, email, meeting and note logged against the deal.</p>
+<h2>Chatter</h2>
+<p>The notes thread at the bottom is for standing commentary about the deal. You can reply in threads, attach files and mention a teammate with <code>@</code>. See <a href="#/contacts-and-companies/notes-mentions-attachments">Notes, mentions and attachments</a>.</p>
+<h2>Archived deals</h2>
+<p>An archived deal opens with a banner saying when it was archived, by whom and why, and a <strong>Restore</strong> button. See <a href="#/pipeline/archived-deals">Archived deals</a>.</p><nav class="pn"><a href="#/pipeline/list-filters-and-views"><small>Previous</small>List, filters and saved views</a><a class="next" href="#/pipeline/stages-and-closing"><small>Next</small>Stages and closing a deal</a></nav></article>
+<article data-route="pipeline/stages-and-closing" data-title="Stages and closing a deal" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/pipeline/board">Pipeline</a></p><h1>Stages and closing a deal</h1><p class="lead">The six stages, the checklist behind each one, and how to close a deal so the date and reason are kept.</p><h2>The six stages</h2>
+<p>In order: <strong>lead, qualified, proposal, negotiation, won, lost</strong>. Lead through negotiation are the open stages; won and lost are the closed ones.</p>
+<p>There is no preset probability per stage. A new deal starts at 0% unless you set one. Winning sets it to 100% and losing sets it to 0%.</p>
+<h2>Stage checklists</h2>
+<p>Every stage has a short summary and a checklist of what it takes for a deal to belong there.</p>
+<ul>
+<li><strong>Hover</strong> over a stage name on the board for a quick look.</li>
+<li><strong>Click</strong> it to pin the checklist in a small panel at the bottom-right of the screen (a sheet along the bottom on a phone). The board keeps working while it is open. Click another stage name to switch, or the same one, the <strong>×</strong>, the panel itself or Escape to close it.</li>
+</ul>
+<p>CakeCRM ships a <strong>Standard</strong> checklist for every stage. An admin can write their own: pin the stage, press <strong>Edit</strong>, change the summary, add, remove or reorder lines with <strong>Add item</strong>, then <strong>Save</strong>. The panel then shows <strong>Custom</strong>, and <strong>Reset to standard</strong> puts it back. Members see the checklists but not the Edit button. Custom checklists go back to standard when the CRM is reset or its sample data is cleared.</p>
+<h2>Won and Lost on the board</h2>
+<p>The board hides Won and Lost by default. Two separate controls decide this:</p>
+<ul>
+<li><strong>The stage checkboxes on the board</strong> hide or show a column for this browser tab only.</li>
+<li><strong>Settings, Personal, Pipeline board</strong> has a <strong>Show Won and Lost stages</strong> checkbox. That is the default every new tab starts from, saved in this browser.</li>
+</ul>
+<p>Moving a deal into a hidden column shows that column, so a closed deal never vanishes without explanation.</p>
+<h2>Closing a deal properly</h2>
+<p>Open the deal and use <strong>Mark Won</strong> or <strong>Mark Lost</strong>. These are the only ways that keep the full record.</p>
+<p><strong>Mark Won</strong> asks <strong>When did this close?</strong> The Closed on day defaults to today. An earlier day is fine; a future day is refused. Press <strong>Confirm</strong>.</p>
+<p><strong>Mark Lost</strong> opens <strong>Mark as Lost</strong> with a <strong>Reason (optional)</strong> box, for example "Budget constraints, chose a competitor". Press <strong>Mark Lost</strong>. The reason is saved on the deal and written into its notes thread.</p>
+<p>Every other way into Won or Lost (dragging a card, a <a href="#/pipeline/bulk-moves">bulk move</a>, or changing the stage in the edit form) records today as the Closed on date and records no lost reason. A lost reason cannot be added later, and it is the most useful thing to have when you look back over a quarter, so it is worth the extra click.</p>
+<h2>The Closed on date</h2>
+<p>When a deal is won, the day it really closed is kept as its <strong>Closed on</strong> date, separate from the forecasted close date, which was only a guess. It shows on the deal, in the list view's Closed on column and in the Closed on filter.</p>
+<ul>
+<li>While a deal is Won you can correct the date in the edit form, but you cannot blank it.</li>
+<li>Every change leaves a "Closed on: old → new" note in the deal's notes thread.</li>
+<li>Moving the deal out of Won clears the date; winning it again asks again.</li>
+<li>Moving a deal out of Lost clears its lost reason.</li>
+</ul><nav class="pn"><a href="#/pipeline/deal-page"><small>Previous</small>The deal page</a><a class="next" href="#/pipeline/bulk-moves"><small>Next</small>Moving deals in bulk</a></nav></article>
+<article data-route="pipeline/bulk-moves" data-title="Moving deals in bulk" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/pipeline/board">Pipeline</a></p><h1>Moving deals in bulk</h1><p class="lead">Select several deals and move them to another stage in one go.</p><p>You can move many deals to a new stage at once. It is the only bulk action on the pipeline: there is no bulk archive, delete, close-with-reason, reassign or merge.</p>
+<h2>Doing it</h2>
+<ol>
+<li>Tick the checkbox on each deal card, or on each row in the list view. In the list view, the box in the header selects every visible row.</li>
+<li>A bar appears reading how many deals are selected.</li>
+<li>Pick a stage from <strong>Move to…</strong> and press <strong>Apply</strong>.</li>
+</ol>
+<p>There is no confirmation dialog. If you move deals to the wrong place, move them back. <strong>Clear</strong> drops the selection.</p>
+<p>The selection only ever covers deals on screen, so what the bar counts and what Apply moves are always the same set. Checkboxes are not shown on a phone.</p>
+<h2>Limits</h2>
+<ul>
+<li>At most <strong>200 deals</strong> per move. Selecting more is refused and nothing moves.</li>
+<li>A deal already in the target stage is skipped and left untouched.</li>
+<li>Archived deals have no checkbox and cannot be moved.</li>
+<li>If a deal in the selection has gone or been archived in the meantime, CakeCRM tells you which one and still moves the rest.</li>
+</ul>
+<h2>Moving into Won or Lost</h2>
+<p><strong>Move to…</strong> does list Won and Lost, but a bulk move closes the deals with today as their Closed on date and no lost reason. If the date or reason matters, close the deals one at a time with <strong>Mark Won</strong> or <strong>Mark Lost</strong>. See <a href="#/pipeline/stages-and-closing">Stages and closing a deal</a>.</p>
+<h2>Asking Baker</h2>
+<p>With an AI provider connected, you can ask Baker to move a set of deals. It has the same 200-deal limit, but it only moves deals into open stages. It refuses to win or lose deals in bulk, and closes them one at a time instead so each date and reason is captured. See <a href="#/baker/what-baker-can-do">What Baker can do</a>.</p><nav class="pn"><a href="#/pipeline/stages-and-closing"><small>Previous</small>Stages and closing a deal</a><a class="next" href="#/pipeline/archived-deals"><small>Next</small>Archived deals</a></nav></article>
+<article data-route="pipeline/archived-deals" data-title="Archived deals" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/pipeline/board">Pipeline</a></p><h1>Archived deals</h1><p class="lead">Archiving hides a junk deal without deleting it, and Restore brings it back.</p><p>Archiving is a soft hide. The deal keeps every note, activity and todo; it simply stops appearing. Nothing is deleted.</p>
+<h2>Archived is not Lost</h2>
+<ul>
+<li><strong>Lost</strong> is a real outcome: the deal happened and you did not win it. It counts in your win rate.</li>
+<li><strong>Archived</strong> means "stop showing me this": a duplicate, a test record, something created by mistake.</li>
+</ul>
+<p>Never archive a deal that genuinely closed. Use <strong>Mark Lost</strong> instead.</p>
+<h2>How to archive a deal</h2>
+<p>There is no archive button. Ask Baker, once an AI provider is connected. In Ask mode Baker shows an Approve card before it archives anything; see <a href="#/baker/approvals">Approvals</a>. Archiving always needs a reason; if you do not give one, Baker asks for it. The reason and your name are saved on the deal and written into its notes as "Archived — reason".</p>
+<p>Merging two deals archives the one merged away, with the reason "Merged into deal #N".</p>
+<h2>Where an archived deal goes</h2>
+<p>It leaves the board, the dashboard, analytics, the deal lists, and the contact and company pages. Its open todos drop out of your todo lists too.</p>
+<p>Its activity history is never hidden, because that is what you read to decide whether to bring it back.</p>
+<h2>Finding and restoring one</h2>
+<ol>
+<li>On the Pipeline, open <strong>Filters</strong> and set <strong>Archived</strong> to <strong>Include archived</strong> or <strong>Archived only</strong>. If the board is empty, a <strong>Show archived deals</strong> link appears under the page title instead.</li>
+<li>Archived cards are dimmed and marked ARCHIVED. They cannot be dragged or selected, but they still open.</li>
+<li>Open the deal. A banner says when it was archived, by whom and why. Press <strong>Restore</strong>.</li>
+</ol>
+<p>Restoring puts the deal straight back on the board and leaves a "Restored from archive." note with your name. Neither the archive nor the restore note counts as contact with the customer, so they do not reset how long the deal has gone untouched.</p>
+<h2>While a deal is archived</h2>
+<ul>
+<li>Its stage cannot be changed, and it has no Mark Won or Mark Lost buttons.</li>
+<li>It cannot be part of a bulk move.</li>
+<li>Archiving it again keeps the original date, person and reason.</li>
+</ul>
+<h2>Restoring a merged deal</h2>
+<p>Restoring a deal that was merged away makes it visible again, but it does not undo the merge. Its activity and todos already moved to the deal it was merged into, and they stay there.</p><nav class="pn"><a href="#/pipeline/bulk-moves"><small>Previous</small>Moving deals in bulk</a><a class="next" href="#/pipeline/deal-health-and-scores"><small>Next</small>Deal health and scores</a></nav></article>
+<article data-route="pipeline/deal-health-and-scores" data-title="Deal health and scores" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/pipeline/board">Pipeline</a></p><h1>Deal health and scores</h1><p class="lead">What the lead score, temperature and touch count on a deal mean, and which of them need AI.</p><p>A deal card carries up to three signals. Two of them are plain arithmetic or your own judgement and always work; one needs an AI provider.</p>
+<h2>The lead score</h2>
+<p>A number from 0 to 100 on every deal (and every contact). It is pure arithmetic with no AI involved. For a deal it starts from a baseline for the current stage and adjusts it for:</p>
+<ul>
+<li><strong>engagement</strong>: how much has been logged against it;</li>
+<li><strong>value</strong>: the size of the deal;</li>
+<li><strong>relationship</strong>: whether it is linked to a contact and a company;</li>
+<li><strong>recency</strong>: how long since the last touch;</li>
+<li><strong>age</strong>: how long since it was created;</li>
+<li><strong>temperature</strong>: your own read on it, below.</li>
+</ul>
+<p>An open deal always scores between 1 and 99. A won deal is exactly 100 and a lost one exactly 0. Nobody can type a score in, and neither can Baker. It is recalculated when the deal changes and refreshed daily.</p>
+<p>On its own the score tells you little you can act on. Use it to sort, then look at what the deal needs.</p>
+<h2>Temperature</h2>
+<p>Your own judgement, with three values: <strong>hot</strong>, <strong>warm</strong> and <strong>cold</strong>, plus not set. Not set is neutral: it is not the same as cold and does not lower the score.</p>
+<p>Click the icon on a card, or the Temperature row on the deal page, to cycle it: not set, hot, warm, cold, back to not set. Each state has its own shape as well as its own colour.</p>
+<p>Hot deals that have gone quiet for 14 days or more get their own place on the dashboard's <a href="#/dashboard/today-panel">Today panel</a>.</p>
+<h2>Deal health flags</h2>
+<p>Baker can check a deal's health and report these flags, and only these:</p>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>stale</td>
+<td>Nothing has touched it for 14 days</td>
+</tr>
+<tr>
+<td>stuck in stage</td>
+<td>It has sat in the same stage for 30 days</td>
+</tr>
+<tr>
+<td>no next step</td>
+<td>It has no open todo</td>
+</tr>
+<tr>
+<td>overdue todo</td>
+<td>It has a todo past its due date</td>
+</tr>
+<tr>
+<td>missing contact</td>
+<td>No contact is linked</td>
+</tr>
+<tr>
+<td>missing company</td>
+<td>No company is linked</td>
+</tr>
+</tbody>
+</table></div>
+<p>The dashboard's <strong>Needs a touch</strong> list shows the stale deals without asking Baker.</p>
+<h2>The touch-count pill (needs AI)</h2>
+<p>An estimate of how many real touches a deal has had, read from its notes and activities by an AI model. Under 5 is the dead zone, 5 to 12 is roughly where deals close, 13 and up is a long cycle.</p>
+<p>With no AI provider the pill is simply not drawn; there is no error and no empty badge. Where a count exists, the deal page lets you open the line-by-line reasons behind it.</p>
+<h2>How Top deals are picked</h2>
+<p>The dashboard's <strong>Top deals</strong> shows five open deals past the lead stage, ranked by size with probability tipping the order: a deal counts at 40% of its value at 0% probability, rising to its full value at 100%. This is separate from the lead score. If the list is empty while the pipeline is not, every open deal is still a lead.</p><nav class="pn"><a href="#/pipeline/archived-deals"><small>Previous</small>Archived deals</a><a class="next" href="#/pipeline/adding-a-deal"><small>Next</small>Adding a deal</a></nav></article>
+<article data-route="pipeline/adding-a-deal" data-title="Adding a deal" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/pipeline/board">Pipeline</a></p><h1>Adding a deal</h1><p class="lead">Create a deal from the Pipeline with the New Deal form, linking it to a contact and a company as you go.</p><p>On the Pipeline, press <strong>Add Deal</strong> at the top right (<strong>Add</strong> on a phone). The <strong>New Deal</strong> form opens.</p>
+<figure class="shot"><img data-shot="add-deal" width="1400" height="954" alt="Adding a deal screenshot"></figure>
+
+<h2>The fields</h2>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>What to enter</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Title *</td>
+<td>A short name for the deal, for example "TechStart monthly catering". The only required field</td>
+</tr>
+<tr>
+<td>Contact</td>
+<td>The person you are dealing with</td>
+</tr>
+<tr>
+<td>Company</td>
+<td>The organisation the deal is with</td>
+</tr>
+<tr>
+<td>Owner</td>
+<td>Who is responsible for it. Starts as you; pick another person or Unassigned</td>
+</tr>
+<tr>
+<td>Stage</td>
+<td>Where the deal starts. Defaults to lead</td>
+</tr>
+<tr>
+<td>Value ($)</td>
+<td>What the deal is worth</td>
+</tr>
+<tr>
+<td>Probability (%)</td>
+<td>Your estimate of the chance it closes, 0 to 100. Leave it blank for 0%</td>
+</tr>
+<tr>
+<td>Forecasted close date</td>
+<td>When you expect it to close. A guess, kept separate from the real Closed on date</td>
+</tr>
+<tr>
+<td>Notes</td>
+<td>Anything worth remembering about the deal</td>
+</tr>
+</tbody>
+</table></div>
+<p>If an admin has set up custom fields for deals, they appear under <strong>Custom Fields</strong> at the bottom. See <a href="#/contacts-and-companies/custom-fields">Custom fields</a>.</p>
+<p>Press <strong>Create</strong> to add the deal, or <strong>Cancel</strong> to leave without saving.</p>
+<h2>Linking a contact and a company</h2>
+<p>The Contact and Company boxes search as you type. Pick a match to link it.</p>
+<p>If the person or company is not in the CRM yet, type the name and choose <strong>Create "name"…</strong> at the bottom of the list. CakeCRM creates the record and links it in one step, so you do not have to leave the form. Searching first is worth it: it is how you avoid making a duplicate. See <a href="#/contacts-and-companies/duplicates">Duplicates</a>.</p>
+<p>A deal linked to both a contact and a company scores higher than one linked to neither, and Reports can only show it under a company it is linked to.</p>
+<h2>After you create it</h2>
+<p>The deal appears on the board in the stage you picked. From there:</p>
+<ul>
+<li>Open it to <a href="#/pipeline/deal-page">log an activity</a> such as a call or a meeting.</li>
+<li>Add a follow-up todo so it has a next step. A deal with no open todo is flagged "no next step"; see <a href="#/pipeline/deal-health-and-scores">Deal health and scores</a>.</li>
+<li>Move it through the stages as it progresses; see <a href="#/pipeline/stages-and-closing">Stages and closing a deal</a>.</li>
+</ul>
+<p>With an AI provider connected you can also ask Baker to create a deal for you. See <a href="#/baker/what-baker-can-do">What Baker can do</a>.</p><nav class="pn"><a href="#/pipeline/deal-health-and-scores"><small>Previous</small>Deal health and scores</a><a class="next" href="#/contacts-and-companies/contacts-list"><small>Next</small>The Contacts list</a></nav></article>
+<article data-route="contacts-and-companies/contacts-list" data-title="The Contacts list" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/contacts-and-companies/contacts-list">Contacts &amp; companies</a></p><h1>The Contacts list</h1><p class="lead">Every person in the CRM in one table you can search, filter, sort and save as a view.</p><p>Open <strong>Contacts</strong> in the top navigation. The table shows each person's name and job title, company, email, phone, when you were last in touch, their status and their score.</p>
+<figure class="shot"><img data-shot="contacts-list" width="1400" height="954" alt="The Contacts list screenshot"></figure>
+
+<h2>Searching</h2>
+<p>Type in <strong>Search contacts…</strong> to narrow the table as you type. Search looks at the name, email, phone, company, job title, tags and notes.</p>
+<h2>Filters</h2>
+<p><strong>Filters</strong> opens these choices. Use as many as you like at once:</p>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Filter</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Status</td>
+<td>Active, Inactive or Archived</td>
+</tr>
+<tr>
+<td>Tags</td>
+<td>Any tag used on a contact</td>
+</tr>
+<tr>
+<td>Owner</td>
+<td>A teammate, or <strong>Unassigned</strong> (only shown when there is more than one person on the team)</td>
+</tr>
+<tr>
+<td>Score</td>
+<td>Hot (70+), Warm (40-69), Cool (under 40) or Not scored</td>
+</tr>
+<tr>
+<td>Last contact</td>
+<td>Last 7 days, Last 30 days, Not in 30 days, or Never</td>
+</tr>
+</tbody>
+</table></div>
+<p>The count beside the filters, such as "11 of 11 contacts", always matches the rows on screen.</p>
+<h2>Sorting</h2>
+<p>Pick a field from <strong>Sort</strong>: Recently updated (the default), Name, Company, Email, Score, Last contact or Status. The arrow button beside it flips the order. You can also click a column heading.</p>
+<h2>Views</h2>
+<p><strong>Views</strong> saves the current search, filters and sort under a name. Your whole team can apply a saved view. See <a href="#/pipeline/list-filters-and-views">List filters and views</a> for how views work across the app.</p>
+<h2>Last contact and score</h2>
+<p><strong>Last contact</strong> is worked out from logged activity and Chatter notes on the contact. It moves when someone logs a call, email or meeting, or adds a note. The <strong>score</strong> is a number from 0 to 100, worked out without AI. See <a href="#/pipeline/deal-health-and-scores">Deal health and scores</a>.</p>
+<h2>"Showing saved data"</h2>
+<p>On a large CRM the full list can take a moment to load. Contacts opens on the rows you saw last time, with a line saying <strong>Refreshing… showing saved data from</strong> a time. The fresh list then replaces them. If loading fails, the line reads <strong>Couldn't refresh</strong> and offers <strong>Retry</strong>. These saved rows stay in your browser only. They are erased when you sign out and thrown away after seven days.</p>
+<p>The round-arrow button beside <strong>Import Contacts</strong> reloads the list on demand.</p><nav class="pn"><a href="#/pipeline/adding-a-deal"><small>Previous</small>Adding a deal</a><a class="next" href="#/contacts-and-companies/contact-page"><small>Next</small>A contact&#x27;s page</a></nav></article>
+<article data-route="contacts-and-companies/contact-page" data-title="A contact&#x27;s page" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/contacts-and-companies/contacts-list">Contacts &amp; companies</a></p><h1>A contact&#x27;s page</h1><p class="lead">Everything about one person: details, deals, todos, activity, Chatter notes and custom fields.</p><p>Click a name on the Contacts list to open that person's page. <strong>← Contacts</strong> takes you back to the list.</p>
+<figure class="shot"><img data-shot="contact-detail" width="1400" height="954" alt="A contact&#x27;s page screenshot"></figure>
+
+<h2>The header</h2>
+<p>The top shows the name and score, then the job title and the company. The company is a link to its own page. Below that come the email, phone, <strong>Owner</strong> and tags. The owner row always shows, even when it reads <em>Unassigned</em>.</p>
+<p><strong>Edit</strong> opens the contact form. <strong>Delete</strong> asks you to confirm, then permanently deletes the contact and their activity history. It cannot be undone. To keep the history, archive the contact instead. See <a href="#/contacts-and-companies/archiving">Archiving</a>.</p>
+<h2>Notes</h2>
+<p>If the contact has a <strong>Notes</strong> field filled in, it shows in a card under the header. You change it through <strong>Edit</strong>.</p>
+<h2>Deals and Todos</h2>
+<p>Two side-by-side lists show the deals and todos linked to this person. Each has <strong>+ Add</strong>, which opens a new deal or todo already linked to the contact. A deal card shows its title, stage and value. A todo shows its due date and priority, with done todos struck through.</p>
+<h2>Log Activity</h2>
+<p>Pick <strong>Call</strong>, <strong>Email</strong>, <strong>Meeting</strong> or <strong>Note</strong>, type what happened in <strong>Add a note...</strong>, and press <strong>Log</strong>. It appears in <strong>Activity History</strong> below, newest first. Logging activity updates the contact's <strong>Last contact</strong> date.</p>
+<h2>Custom fields and Chatter</h2>
+<p>If an admin has defined custom fields for contacts, a Custom fields section shows them here. See <a href="#/contacts-and-companies/custom-fields">Custom fields</a>.</p>
+<p><strong>Chatter</strong> is the running notes thread for the contact. You can mention teammates and attach files there. See <a href="#/contacts-and-companies/notes-mentions-attachments">Notes, mentions and attachments</a>.</p><nav class="pn"><a href="#/contacts-and-companies/contacts-list"><small>Previous</small>The Contacts list</a><a class="next" href="#/contacts-and-companies/companies"><small>Next</small>Companies</a></nav></article>
+<article data-route="contacts-and-companies/companies" data-title="Companies" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/contacts-and-companies/contacts-list">Contacts &amp; companies</a></p><h1>Companies</h1><p class="lead">The Companies list and a company&#x27;s page, which gathers its people, deals and history.</p><p>Open <strong>Companies</strong> in the top navigation. The table shows each company's name, industry, domain, phone and status.</p>
+<figure class="shot"><img data-shot="companies-list" width="1400" height="954" alt="Companies screenshot"></figure>
+
+<h2>Searching, filtering and sorting</h2>
+<p><strong>Search companies…</strong> looks at the name, domain, industry, phone, address and notes. <strong>Filters</strong> offers Status, Industry and, on a team of more than one, Owner (including <strong>Unassigned</strong>). <strong>Sort</strong> offers Name (the default), Industry, Domain, Status and Recently updated. <strong>Views</strong> saves a search and filters for the whole team, just as on Contacts.</p>
+<h2>A company's page</h2>
+<p>Click a company to open it.</p>
+<figure class="shot"><img data-shot="company-detail" width="1400" height="954" alt="Companies screenshot"></figure>
+
+<p>The header shows the name and status, then the industry, domain, phone and address. The <strong>Owner</strong> row always shows, even when it is <em>Unassigned</em>.</p>
+<p>Below come:</p>
+<ul>
+<li><strong>Notes</strong> — the company's notes field, if it has one.</li>
+<li><strong>Contacts</strong> — everyone linked to this company, with job title and email. Click one to open them.</li>
+<li><strong>Deals</strong> — every deal linked to the company, with <strong>Open pipeline</strong> showing the total value of its open deals.</li>
+<li><strong>Activity History</strong> — notes and logged activity from the company's contacts and deals in one feed, each marked with where it came from.</li>
+<li><strong>Custom fields</strong> — if an admin has defined any for companies.</li>
+<li><strong>Chatter</strong> — a notes thread for the company. See <a href="#/contacts-and-companies/notes-mentions-attachments">Notes, mentions and attachments</a>.</li>
+</ul>
+<p><strong>Edit</strong> opens the company form. <strong>Delete</strong> asks you to confirm, then permanently deletes the company. Contacts and deals linked to it are kept and unlinked. To hide a company without losing anything, archive it instead. See <a href="#/contacts-and-companies/archiving">Archiving</a>.</p>
+<p>For a printable summary of one company, see <a href="#/reports/company-report">The company report</a>.</p><nav class="pn"><a href="#/contacts-and-companies/contact-page"><small>Previous</small>A contact&#x27;s page</a><a class="next" href="#/contacts-and-companies/creating-records"><small>Next</small>Adding contacts and companies</a></nav></article>
+<article data-route="contacts-and-companies/creating-records" data-title="Adding contacts and companies" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/contacts-and-companies/contacts-list">Contacts &amp; companies</a></p><h1>Adding contacts and companies</h1><p class="lead">What you need to fill in, and how to link or create a company without leaving the form.</p><p>Press <strong>+ Add Contact</strong> on the Contacts page or <strong>+ Add Company</strong> on the Companies page.</p>
+<figure class="shot"><img data-shot="add-contact" width="1400" height="954" alt="Adding contacts and companies screenshot"></figure>
+
+<h2>What is required</h2>
+<p>Very little:</p>
+<ul>
+<li><strong>Contact</strong> — only a <strong>Name</strong>. Email, phone, company, job title, source, status, owner, tags and notes are all optional.</li>
+<li><strong>Company</strong> — only a <strong>Name</strong>. Domain, industry, phone, address, source, status, owner and notes are optional.</li>
+</ul>
+<p>Tags on a contact are typed as a comma-separated list. <strong>Owner</strong> starts on you. See <a href="#/contacts-and-companies/ownership">Ownership</a> for what it means.</p>
+<p>A new contact can be Active or Inactive, and a new company is Active. Neither can be created already archived. Create it first, then archive it with a reason.</p>
+<h2>Linking a company from a contact</h2>
+<p>The <strong>Company</strong> field on the contact form is a search-as-you-type picker. Type a name and pick the company from the list. If nothing matches, the list offers a <strong>Create "…"</strong> row. Choosing it creates the company straight away and links it.</p>
+<p>Two things to know:</p>
+<ul>
+<li><strong>Typing a name and pressing Save without choosing a row discards it.</strong> The pick, or the Create row, is what counts.</li>
+<li>Creating from the picker saves a real company at once. If you then cancel the form, that company stays. Typing the same name later reuses it rather than making a second one.</li>
+</ul>
+<p>Company names are matched without regard to capitals or extra spaces, so "The Green Table" and "the green table " are the same company.</p>
+<h2>The New Company form</h2>
+<p>The <strong>+ Add Company</strong> form always creates a new company. If that name already exists, it tells you so plainly.</p>
+<h2>An old unlinked company name</h2>
+<p>A contact may carry a company name as plain text that was never linked to a company record. The form shows that text with a "not linked" hint and a Remove action. If you leave the field alone while editing something else, the text is kept.</p>
+<h2>Adding deals and todos from a record</h2>
+<p>The <strong>+ Add</strong> links on a contact's Deals and Todos lists open a new deal or todo already linked to that person. For deals, see <a href="#/pipeline/adding-a-deal">Adding a deal</a>.</p><nav class="pn"><a href="#/contacts-and-companies/companies"><small>Previous</small>Companies</a><a class="next" href="#/contacts-and-companies/notes-mentions-attachments"><small>Next</small>Notes, mentions and attachments</a></nav></article>
+<article data-route="contacts-and-companies/notes-mentions-attachments" data-title="Notes, mentions and attachments" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/contacts-and-companies/contacts-list">Contacts &amp; companies</a></p><h1>Notes, mentions and attachments</h1><p class="lead">Use Chatter to keep a shared thread of notes on a contact, company or deal, tag teammates and attach files.</p><p>Every contact and company page, and every deal, has a <strong>Chatter</strong> section. It is a shared thread of notes that anyone on the team can add to.</p>
+<h2>Adding a note</h2>
+<p>Type in <strong>Add a note… (type @ to mention a teammate)</strong> and post it. A note counts as being in touch, so adding one updates a contact's <strong>Last contact</strong> date.</p>
+<h2>Mentioning a teammate</h2>
+<p>Type <code>@</code> and pick a name from the list. That person gets a notification. Its title opens the record. You are never notified when you mention yourself. If you edit a note later, only people newly added to it are notified.</p>
+<p>See <a href="#/getting-started/notifications">Notifications</a> for how notifications reach you.</p>
+<h2>Attaching files</h2>
+<p>Press <strong>Attach</strong> in the note composer to add files to a note:</p>
+<ul>
+<li>Up to <strong>10 MB</strong> per file.</li>
+<li>Up to <strong>10 files</strong> per note.</li>
+</ul>
+<p>Images that the app can preview show as a small tile. Click it to see a larger view. Other files show as a chip that downloads when you click it. You can remove an attachment from its note.</p>
+<p>Attachments work with no AI provider connected.</p>
+<h2>Editing and archiving notes</h2>
+<p>Each note has <strong>Edit</strong> and <strong>Archive</strong>. An edited note is marked "· edited". An archived note is hidden from the thread. <strong>Show archived</strong> brings archived notes back into view, marked "· archived", each with <strong>Restore</strong>.</p>
+<h2>Notes field versus Chatter</h2>
+<p>A contact or company also has a single <strong>Notes</strong> field on its form. It shows in a card near the top of the page. Use it for a standing summary, such as "Weekly bread and pastry buyer." Use Chatter for the running story.</p><nav class="pn"><a href="#/contacts-and-companies/creating-records"><small>Previous</small>Adding contacts and companies</a><a class="next" href="#/contacts-and-companies/importing"><small>Next</small>Importing contacts</a></nav></article>
+<article data-route="contacts-and-companies/importing" data-title="Importing contacts" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/contacts-and-companies/contacts-list">Contacts &amp; companies</a></p><h1>Importing contacts</h1><p class="lead">Bring in contacts from a CSV or vCard file, with no AI needed, or from other formats once AI is set up.</p><p>On the Contacts page, press <strong>Import Contacts</strong>.</p>
+<figure class="shot"><img data-shot="import-modal" width="1400" height="954" alt="Importing contacts screenshot"></figure>
+
+<h2>Steps</h2>
+<ol>
+<li>Click <strong>Click to select a file</strong> and choose your file.</li>
+<li>Press <strong>Parse Contacts</strong>. The app reads the file and shows the contacts it found, with name, email, phone and company.</li>
+<li>Untick any you do not want.</li>
+<li>Press <strong>Import Selected</strong>.</li>
+</ol>
+<h2>Which files work</h2>
+<ul>
+<li><strong>CSV</strong> (<code>.csv</code>) and <strong>vCard</strong> (<code>.vcf</code>) always work. No AI is involved and the result is the same every time.</li>
+<li><strong>Other formats</strong> (JSON, plain text, tab-separated, or a CSV too messy to read) need an AI provider. Until an admin connects one in <strong>AI Setup</strong>, the file picker only offers CSV and vCard. See <a href="#/baker/ai-setup">AI setup</a>.</li>
+</ul>
+<h2>Limits</h2>
+<ul>
+<li>1 MB per file.</li>
+<li>5,000 contacts per import.</li>
+<li>For other formats, only the first 200 KB of the file is read. A longer file comes with a warning that some contacts may be missing.</li>
+<li>A file whose contents are not text is refused with a message.</li>
+</ul>
+<h2>Columns in a CSV</h2>
+<p>Column headings are matched loosely and without regard to capitals. "Full Name", "Contact Name" and "Name" all count as the name. The same goes for email, phone, company, title, source, tags and notes.</p>
+<p>A CSV must have a name column. A row with a blank name is skipped and counted.</p>
+<h2>What happens to each contact</h2>
+<ul>
+<li><strong>You own every contact you import.</strong></li>
+<li>A company name is matched to an existing company, or a new company is created. <strong>New companies made this way are left unassigned</strong>, for someone to pick up.</li>
+<li>A row that fails is listed as an error, and the rest still import.</li>
+</ul>
+<h2>Duplicates are not checked</h2>
+<p>Import does not look for people already in the CRM. Every row becomes a new contact, even if someone with that email exists. Tidy your file first. See <a href="#/contacts-and-companies/duplicates">Duplicates</a>.</p><nav class="pn"><a href="#/contacts-and-companies/notes-mentions-attachments"><small>Previous</small>Notes, mentions and attachments</a><a class="next" href="#/contacts-and-companies/duplicates"><small>Next</small>Duplicates</a></nav></article>
+<article data-route="contacts-and-companies/duplicates" data-title="Duplicates" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/contacts-and-companies/contacts-list">Contacts &amp; companies</a></p><h1>Duplicates</h1><p class="lead">How to find duplicate records, and why contacts and companies cannot be merged.</p><p>Duplicate records are the commonest way a CRM goes stale. CakeCRM helps you avoid them, but it cannot merge contacts or companies, so prevention matters most.</p>
+<h2>Preventing duplicates</h2>
+<ul>
+<li><strong>Search before you add.</strong> Type the name or email in the Contacts or Companies search box first.</li>
+<li><strong>Pick, don't retype.</strong> When you link a company on a contact or deal form, pick it from the list rather than creating a new one. Company names are already matched without regard to capitals or extra spaces, so two spellings that differ only that way become one company.</li>
+<li><strong>Clean files before importing.</strong> Import does no duplicate check. See <a href="#/contacts-and-companies/importing">Importing contacts</a>.</li>
+</ul>
+<h2>Finding duplicates with Baker</h2>
+<p>With an AI provider connected, ask Baker to look for duplicates. The check is <strong>exact matching only</strong>, after ignoring capitals and extra spaces. It never guesses, so "Bob Smith" and "Robert Smith" are not reported.</p>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Record</th>
+<th>Compared by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Contacts</td>
+<td>Email address, and separately by name</td>
+</tr>
+<tr>
+<td>Companies</td>
+<td>Domain only</td>
+</tr>
+<tr>
+<td>Deals</td>
+<td>Title together with the linked contact</td>
+</tr>
+</tbody>
+</table></div>
+<p>There is no duplicate screen outside Baker. On an install with no AI provider, search the lists by hand.</p>
+<h2>Merging</h2>
+<p><strong>Only deals can be merged.</strong> There is no contact merge and no company merge. To clean up two contacts for one person, move what matters onto the one you keep, then delete the other.</p>
+<p>Baker can merge two deals for you. In Baker's <strong>Ask</strong> mode, a merge always waits for your approval (see <a href="#/baker/approvals">Approvals</a>), so check which deal it keeps. The deal you keep gets the other's activity, open todos and copied notes. Its own title, value, stage and links stay as they were. The other deal is archived, not deleted.</p><nav class="pn"><a href="#/contacts-and-companies/importing"><small>Previous</small>Importing contacts</a><a class="next" href="#/contacts-and-companies/archiving"><small>Next</small>Archiving</a></nav></article>
+<article data-route="contacts-and-companies/archiving" data-title="Archiving" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/contacts-and-companies/contacts-list">Contacts &amp; companies</a></p><h1>Archiving</h1><p class="lead">Hide a contact or company you no longer work with, without losing its history.</p><p>Archiving keeps a record and everything on it, while marking it as no longer current. For contacts and companies, <strong>Archived</strong> is a status, alongside Active (and Inactive, for contacts).</p>
+<p>Deals are archived differently. See <a href="#/pipeline/archived-deals">Archived deals</a>.</p>
+<h2>How to archive</h2>
+<ol>
+<li>Open the contact or company and press <strong>Edit</strong>.</li>
+<li>Set <strong>Status</strong> to <strong>Archived</strong>.</li>
+<li>Fill in <strong>Why archive?</strong>. Saving is refused until there is a reason.</li>
+<li>Save.</li>
+</ol>
+<p>With an AI provider connected, you can also ask Baker to archive a record. It asks you why if you have not said. In Baker's <strong>Ask</strong> mode, an archive always waits for your approval. See <a href="#/baker/approvals">Approvals</a>.</p>
+<p>A record cannot be created already archived. Create it first, then archive it.</p>
+<h2>What is kept</h2>
+<p>The record keeps every note, activity and deal. You can still find it: on the Contacts or Companies list, filter <strong>Status</strong> to Archived.</p>
+<h2>What is recorded</h2>
+<p>Archiving adds an "Archived — <em>reason</em>" note to the record, credited to you. Setting the status back to Active (or Inactive) adds a "Restored from archive." note.</p>
+<p>Neither note counts as being in touch, so a contact's <strong>Last contact</strong> date does not change.</p>
+<h2>Archive or delete?</h2>
+<p><strong>Delete</strong> removes a record for good and cannot be undone. Deleting a contact also deletes their activity history. Archive unless you are sure you will never need the record again.</p><nav class="pn"><a href="#/contacts-and-companies/duplicates"><small>Previous</small>Duplicates</a><a class="next" href="#/contacts-and-companies/ownership"><small>Next</small>Ownership</a></nav></article>
+<article data-route="contacts-and-companies/ownership" data-title="Ownership" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/contacts-and-companies/contacts-list">Contacts &amp; companies</a></p><h1>Ownership</h1><p class="lead">What a record&#x27;s owner means, and what it does not.</p><p>Contacts, companies, deals and todos each have an <strong>Owner</strong>.</p>
+<h2>Owner is not a permission</h2>
+<p><strong>Owner grants and withholds nothing.</strong> Anyone signed in can read, edit, delete and reassign any record, whoever owns it. There are no per-record permissions in CakeCRM.</p>
+<p>What owner is for:</p>
+<ul>
+<li>knowing whose desk a record sits on,</li>
+<li>filtering a list to one person's work,</li>
+<li>splitting reports and counts by person.</li>
+</ul>
+<h2>Unassigned is normal</h2>
+<p>A record can have no owner, and that is fine. Some records start out unassigned on purpose, such as a company created as a side effect of importing contacts or linking one on a form. Pages show <strong>Owner</strong> <em>Unassigned</em> rather than hiding the row.</p>
+<h2>Filtering by owner</h2>
+<p>The Pipeline has an <strong>Owner</strong> filter. When your team has more than one person, the Contacts, Companies and simple Todos lists have one too. Each offers an <strong>Unassigned</strong> choice beside the names.</p>
+<h2>Changing the owner</h2>
+<p>Edit the record and pick from the <strong>Owner</strong> list. It offers Unassigned and every active person. If the current owner has been deactivated, they still show, labelled as such, so opening a form never quietly reassigns the record.</p>
+<p>A new contact or company you add starts owned by you. Contacts you import are owned by you.</p>
+<h2>Owner versus author</h2>
+<p>The <strong>owner</strong> is who a record is assigned to. The <strong>author</strong> is who did a piece of work, such as who logged a call or wrote a note. A colleague's call on your contact is credited to them.</p>
+<h2>Admins and members</h2>
+<p>An admin sees exactly the same records as a member. The difference between the two roles is about install settings, not data. See <a href="#/settings/workspace">Workspace settings</a>.</p><nav class="pn"><a href="#/contacts-and-companies/archiving"><small>Previous</small>Archiving</a><a class="next" href="#/contacts-and-companies/custom-fields"><small>Next</small>Custom fields</a></nav></article>
+<article data-route="contacts-and-companies/custom-fields" data-title="Custom fields" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/contacts-and-companies/contacts-list">Contacts &amp; companies</a></p><h1>Custom fields</h1><p class="lead">Extra fields of your own on contacts, companies and deals.</p><p>Custom fields let you record things the built-in fields do not cover. They can be added to <strong>contacts</strong>, <strong>companies</strong> and <strong>deals</strong>.</p>
+<h2>Defining fields (admins)</h2>
+<p>An admin sets them up in <strong>Settings → Workspace → Custom fields</strong>. Pick <strong>Contacts</strong>, <strong>Companies</strong> or <strong>Deals</strong>, then <strong>+ Add custom field</strong>. Give the field a name and a type:</p>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Type</th>
+<th>What it holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>text</td>
+<td>Any text</td>
+</tr>
+<tr>
+<td>number</td>
+<td>A number</td>
+</tr>
+<tr>
+<td>boolean</td>
+<td>A checkbox</td>
+</tr>
+<tr>
+<td>date</td>
+<td>A calendar date</td>
+</tr>
+<tr>
+<td>select</td>
+<td>One choice from a list you supply</td>
+</tr>
+</tbody>
+</table></div>
+<p>See <a href="#/settings/workspace">Workspace settings</a>.</p>
+<h2>Filling them in (everyone)</h2>
+<p>Anyone signed in can fill in the values. Custom fields appear on the record's create and edit forms, and in a Custom fields section on its page. Only defining fields is limited to admins.</p>
+<p>You can always empty a field, even a number or date field.</p>
+<h2>"Required" is advisory</h2>
+<p>A field marked required shows as required on the form, but the app still saves a record without it. Treat it as a prompt, not a rule.</p>
+<h2>Baker and custom fields</h2>
+<p>With an AI provider connected, Baker can read and fill in custom fields on contacts, companies and deals, like any other field.</p>
+<h2>Deleting a field</h2>
+<p>Deleting a field definition deletes every value stored under it, on every record. There is no undo.</p>
+<p>Field definitions stay when you clear the example data. They are removed only by a full reset of the CRM.</p><nav class="pn"><a href="#/contacts-and-companies/ownership"><small>Previous</small>Ownership</a><a class="next" href="#/todos/todo-modes"><small>Next</small>Todo modes</a></nav></article>
+<article data-route="todos/todo-modes" data-title="Todo modes" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>Todo modes</h1><p class="lead">Choose between the full GTD workflow and a simple list. Both use the same todos, and you can switch at any time.</p><p>Everything you want to come back to lives in one place: your todos. The <strong>Todos</strong> page can show them in two ways.</p>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>What you get</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Todo-GTD</strong> (the default)</td>
+<td>The full Getting Things Done workflow: an inbox to sort, next actions, waiting-for and delegated items, someday/maybe, projects, contexts, tags, stars, repeats and a weekly review. The Todos page has nine tabs.</td>
+</tr>
+<tr>
+<td><strong>Simple list</strong></td>
+<td>Just todos with due dates and priorities, in one table. No inbox or contexts.</td>
+</tr>
+</tbody>
+</table></div>
+<figure class="shot"><img data-shot="todos-today" width="1400" height="954" alt="Todo modes screenshot"></figure>
+
+<h2>Switching changes nothing about your data</h2>
+<p>Both modes read the <strong>same</strong> todos. Switching:</p>
+<ul>
+<li>moves, copies and deletes nothing,</li>
+<li>takes effect straight away,</li>
+<li>can be undone by switching back.</li>
+</ul>
+<p>A todo made in one mode is the same todo in the other. GTD simply uses extra fields, like context and project, that the simple list leaves alone.</p>
+<h2>Who can switch</h2>
+<p><strong>Admins only</strong>, in <strong>Settings → Assistant → Todo mode</strong>. The mode is one setting for the whole team, so switching it changes the Todos page for everyone. See <a href="#/settings/assistant">Assistant settings</a>.</p>
+<h2>What else changes</h2>
+<p>With an AI provider connected, Baker's todo abilities follow the mode. In GTD mode it works with inboxes, contexts and projects. In Simple list mode it works with plain todos.</p>
+<p>Repeating todos work in both modes: completing one creates the next.</p>
+<h2>Where to next</h2>
+<ul>
+<li>GTD mode: start with <a href="#/todos/gtd-basics">GTD basics</a>.</li>
+<li>Simple list mode: see <a href="#/todos/simple-list">The simple list</a>.</li>
+</ul><nav class="pn"><a href="#/contacts-and-companies/custom-fields"><small>Previous</small>Custom fields</a><a class="next" href="#/todos/gtd-basics"><small>Next</small>GTD basics</a></nav></article>
+<article data-route="todos/gtd-basics" data-title="GTD basics" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>GTD basics</h1><p class="lead">The ideas behind the GTD tabs, and the fields every todo can carry.</p><p>GTD, short for Getting Things Done, rests on one habit: get everything out of your head into a trusted list, then decide what each item means. CakeCRM's GTD mode is built around that.</p>
+<h2>The workflow in four steps</h2>
+<ol>
+<li><strong>Capture everything.</strong> Type it into the <strong>Add to inbox</strong> box at the top of the Todos page. Sort it out later.</li>
+<li><strong>Clear the inbox.</strong> For each item, decide what kind of action it is and where you can do it. See <a href="#/todos/inbox">The Inbox</a>.</li>
+<li><strong>Work from your lists.</strong> <a href="#/todos/today">Today</a> shows what is due and starred. <a href="#/todos/to-do">To Do</a> shows next actions grouped by context.</li>
+<li><strong>Review weekly.</strong> The <a href="#/todos/done-and-review">Review</a> tab shows what needs attention.</li>
+</ol>
+<h2>Quick add</h2>
+<p>The <strong>Add to inbox</strong> box understands a few shortcuts. As you type, each one it recognises appears as a chip under the box.</p>
+<figure class="shot"><img data-shot="todos-quick-add" width="1400" height="954" alt="GTD basics screenshot"></figure>
+
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>#Wholesale</code></td>
+<td>File under the project "Wholesale" (created if it does not exist)</td>
+</tr>
+<tr>
+<td><code>@calls</code></td>
+<td>Context @calls</td>
+</tr>
+<tr>
+<td><code>!</code></td>
+<td>Star it for today</td>
+</tr>
+<tr>
+<td><code>today</code>, <code>tomorrow</code>, <code>next week</code>, <code>in 3 days</code>, <code>friday</code>, <code>aug 15</code>, <code>8/15</code>, <code>2026-08-15</code></td>
+<td>Due date</td>
+</tr>
+<tr>
+<td><code>daily</code>, <code>weekly</code>, <code>every weekday</code>, <code>every 3 days</code>, <code>every monday</code></td>
+<td>Repeat</td>
+</tr>
+</tbody>
+</table></div>
+<p>Click the ✕ on a chip if it guessed wrong. The words go back into the title. Everything you add this way lands in the inbox. "Today" and "tomorrow" follow the install's time zone, not your computer's clock.</p>
+<h2>The fields on a todo</h2>
+<ul>
+<li><strong>Status</strong> — Inbox, next action, waiting for, delegated, someday/maybe, done or dropped. Dropped means abandoned but recoverable.</li>
+<li><strong>Context</strong> — where or how you can do it, such as @calls, @computer or @errands.</li>
+<li><strong>Project</strong> — an outcome that needs more than one action.</li>
+<li><strong>Due date</strong> — for a real deadline only.</li>
+<li><strong>Bring back on</strong> — hides the todo from your lists until that day, then shows it on Today. It is not a deadline.</li>
+<li><strong>Repeat</strong> — daily, weekdays, weekly, monthly, yearly or every N days.</li>
+<li><strong>Star</strong> — today's priorities. Keep it to a handful.</li>
+<li><strong>Tags</strong> and <strong>Notes</strong> — anything else.</li>
+<li><strong>Links</strong> — a todo can point at a contact and a deal.</li>
+</ul>
+<p>Click a todo's title to open it and change any of these.</p>
+<h2>Where a todo came from</h2>
+<p>A todo nobody typed into the app carries a small label: <strong>Baker</strong>, <strong>Observer</strong> (Baker noticed a promise in a conversation and filed it), <strong>Capture link</strong> or <strong>Telegram</strong>. Read a <strong>Capture link</strong> item before you act on it, because anyone with that link could have written it.</p>
+<h2>Undo</h2>
+<p>Marking a todo done, or filing an inbox item, shows an <strong>Undo?</strong> button for seven seconds.</p><nav class="pn"><a href="#/todos/todo-modes"><small>Previous</small>Todo modes</a><a class="next" href="#/todos/today"><small>Next</small>Today</a></nav></article>
+<article data-route="todos/today" data-title="Today" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>Today</h1><p class="lead">The tab to start your day on: what is overdue, due today, back from waiting, and starred.</p><p><strong>Today</strong> is the first tab on the Todos page. It gathers four kinds of todo into sections:</p>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Section</th>
+<th>What is in it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Overdue</strong></td>
+<td>Todos whose due date has passed, in red</td>
+</tr>
+<tr>
+<td><strong>Due today</strong></td>
+<td>Todos due today</td>
+</tr>
+<tr>
+<td><strong>Brought back</strong></td>
+<td>Todos whose <strong>Bring back on</strong> date has arrived</td>
+</tr>
+<tr>
+<td><strong>★ Starred</strong></td>
+<td>Todos you starred as today's priorities</td>
+</tr>
+</tbody>
+</table></div>
+<p>When nothing qualifies, the page reads "Nothing on today's plate".</p>
+<p>You can see the Today tab in the picture on <a href="#/todos/todo-modes">Todo modes</a>.</p>
+<h2>Working the list</h2>
+<ul>
+<li>Tick the box to mark a todo done. An <strong>Undo?</strong> button appears for seven seconds.</li>
+<li>Click the star to star or unstar it.</li>
+<li>Click the title to open and edit it.</li>
+</ul>
+<p>Chips under a todo show what it is linked to, such as a deal, a contact or a project.</p>
+<h2>What "today" means</h2>
+<p>"Today" is the day in the time zone set for the whole install, not your own computer's clock. Someone working late in another time zone sees the same Overdue and Due today split as everyone else.</p>
+<h2>Stars</h2>
+<p>A star means "do this today." Keep starred items to a handful. On a repeating todo you can also choose to star each new copy automatically when it comes due.</p>
+<h2>Brought back is not overdue</h2>
+<p>A todo with a <strong>Bring back on</strong> date leaves every working list until that day, then appears under <strong>Brought back</strong>. That date is not a deadline, so a todo is never marked overdue because of it.</p><nav class="pn"><a href="#/todos/gtd-basics"><small>Previous</small>GTD basics</a><a class="next" href="#/todos/inbox"><small>Next</small>The Inbox</a></nav></article>
+<article data-route="todos/inbox" data-title="The Inbox" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>The Inbox</h1><p class="lead">Turn each captured item into a clear next step, one card at a time.</p><p>Everything you capture starts in the <strong>Inbox</strong>. The tab shows a red count of what is waiting. Your goal is to get it to zero.</p>
+<figure class="shot"><img data-shot="todos-inbox" width="1400" height="954" alt="The Inbox screenshot"></figure>
+
+<p>The item at the top of the queue opens as a card with three steps.</p>
+<h2>01 What kind of action?</h2>
+<p>Pick one:</p>
+<ul>
+<li><strong>Next action</strong> — you will do it yourself. It goes to <a href="#/todos/to-do">To Do</a>.</li>
+<li><strong>Waiting</strong> — you are waiting on someone else.</li>
+<li><strong>Delegated</strong> — you handed it to someone.</li>
+<li><strong>Someday</strong> — not now.</li>
+</ul>
+<p>Picking one saves nothing yet. The item stays on the card while you add detail.</p>
+<p>If the whole thing takes under two minutes, just do it and press <strong>Took 2 minutes — Done ✓</strong>.</p>
+<h2>02 Add detail (optional)</h2>
+<ul>
+<li><strong>Project</strong> — pick one, or choose <strong>+ New project…</strong>. The card shows that project's purpose and outcome, so you can check it is the right home.</li>
+<li><strong>Add due date</strong> — only for a real deadline.</li>
+<li><strong>Bring back on…</strong> — hides the todo until that day, then shows it on Today.</li>
+<li><strong>Notes</strong> — links, numbers, anything you will want when you do it.</li>
+<li><strong>Edit</strong> opens the full editor. <strong>Delete</strong> removes the item for good.</li>
+</ul>
+<h2>03 Last step — set context</h2>
+<p>Choose a context from <strong>Set context…</strong>, or <strong>+ New context…</strong>. Choosing one files the item into the list you picked in step 01 and clears it out of the inbox. That is why it comes last.</p>
+<h2>Undo</h2>
+<p>After filing, an <strong>Undo?</strong> button appears right under the card for seven seconds. It puts the item back exactly as it was.</p>
+<h2>Finding things in the inbox</h2>
+<p>Use <strong>Search inbox…</strong> and <strong>Filters</strong> above the card. Each item carries a label if it came from Baker, the capture link or Telegram.</p><nav class="pn"><a href="#/todos/today"><small>Previous</small>Today</a><a class="next" href="#/todos/to-do"><small>Next</small>To Do</a></nav></article>
+<article data-route="todos/to-do" data-title="To Do" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>To Do</h1><p class="lead">Your next actions, grouped by context, so you can see what you can do where you are.</p><p>The <strong>To Do</strong> tab lists every next action. The heading shows how many there are.</p>
+<figure class="shot"><img data-shot="todos-next" width="1400" height="954" alt="To Do screenshot"></figure>
+
+<h2>Grouped by context</h2>
+<p>Starred next actions are pinned at the top. The rest are grouped under their context, such as <strong>@calls</strong> or <strong>@computer</strong>. Todos with no context sit under <strong>No context</strong> at the end. At your desk, work down @computer. With a few minutes and a phone, work @calls.</p>
+<h2>Adding</h2>
+<ul>
+<li><strong>Add next action</strong> creates a todo directly in this list.</li>
+<li>The <strong>Add to inbox</strong> box above still adds to the inbox.</li>
+</ul>
+<h2>Working the list</h2>
+<ul>
+<li>Tick a todo to mark it done. <strong>Undo?</strong> stays available for seven seconds.</li>
+<li>Click the star to make it one of today's priorities.</li>
+<li>Click the title to edit it: status, context, project, dates, repeat, tags and notes.</li>
+</ul>
+<h2>Filtering</h2>
+<p>Type in <strong>Filter…</strong> to narrow the list, and use <strong>Filters</strong> to pick a context.</p>
+<h2>Renaming a context</h2>
+<p>Press <strong>Rename</strong> beside a context heading to rename it on every todo at once, finished ones included. If the context you want has no heading here, pick it in the context filter and <strong>Rename</strong> appears beside the filter.</p>
+<p>If the new name already exists, nothing changes yet. The form offers <strong>Merge</strong>, which folds one context into the other. Merged todos cannot be told apart afterwards, so only merge when you mean it.</p>
+<p>Renaming does not count as editing the todos, so the weekly review's stale list is unaffected.</p>
+<h2>Good next actions</h2>
+<p>Write each next action as a physical, visible step. "Call Maria to confirm the order" beats "Maria".</p><nav class="pn"><a href="#/todos/inbox"><small>Previous</small>The Inbox</a><a class="next" href="#/todos/projects"><small>Next</small>Projects</a></nav></article>
+<article data-route="todos/projects" data-title="Projects" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>Projects</h1><p class="lead">Group the steps toward one outcome, and make sure each active project has a next action.</p><p>A <strong>project</strong> is any outcome that needs more than one action, such as "Launch the holiday gift box line".</p>
+<figure class="shot"><img data-shot="todos-projects" width="1400" height="954" alt="Projects screenshot"></figure>
+
+<h2>The Projects tab</h2>
+<p>The buttons at the top pick which projects you see: <strong>Active</strong>, <strong>Someday</strong>, <strong>Completed</strong> or <strong>Dropped</strong>. Each project card shows its status and how many open items it has. <strong>Complete</strong> marks it finished.</p>
+<p>Use <strong>Search projects…</strong> to narrow the list, and <strong>Views</strong> to save a search for the team.</p>
+<h2>Making a project</h2>
+<ul>
+<li>Press <strong>New project</strong>, give it a name (the outcome you want) and optional notes.</li>
+<li>Or type <code>#Name</code> in the quick add box. A project with that name is created if it does not exist.</li>
+<li>Or pick <strong>+ New project…</strong> while sorting an inbox item.</li>
+</ul>
+<h2>A project's page</h2>
+<p>Click a project to open it. Its todos are grouped into <strong>Inbox</strong>, <strong>Next actions</strong>, <strong>Waiting / Delegated</strong>, <strong>Someday</strong> and <strong>Finished</strong>. Type into <strong>Add a next action…</strong> to add one straight to the project.</p>
+<p>You can edit the project in place:</p>
+<ul>
+<li>Click its <strong>name</strong> to rename it. Enter or clicking away saves. A blank name, or one another project already uses, is refused.</li>
+<li>Click its notes (<strong>Add notes…</strong> when empty) to edit them. Enter adds a new line; clicking away saves.</li>
+<li><strong>Purpose</strong> (why the project exists) and <strong>Outcome</strong> (what done looks like) are one line each.</li>
+<li>Escape cancels an edit.</li>
+<li><strong>Project status</strong> changes its status.</li>
+</ul>
+<p>The ‹ › buttons beside "All projects" step to the previous or next project with the same status. The left and right arrow keys do the same when you are not typing.</p>
+<h2>Keep projects moving</h2>
+<p>Every active project should have at least one next action. The <a href="#/todos/done-and-review">Review</a> tab lists active projects that have none.</p>
+<p>Deleting a project does not delete its todos. They stay, just without a project.</p><nav class="pn"><a href="#/todos/to-do"><small>Previous</small>To Do</a><a class="next" href="#/todos/waiting-and-someday"><small>Next</small>Waiting and Someday</a></nav></article>
+<article data-route="todos/waiting-and-someday" data-title="Waiting and Someday" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>Waiting and Someday</h1><p class="lead">Keep track of what others owe you, and park ideas that are not for now.</p><h2>Waiting</h2>
+<p>The <strong>Waiting</strong> tab has two sections:</p>
+<ul>
+<li><strong>Waiting For</strong> — things you are waiting on from someone else.</li>
+<li><strong>Delegated</strong> — things you handed to someone and need to follow up.</li>
+</ul>
+<figure class="shot"><img data-shot="todos-waiting" width="1400" height="954" alt="Waiting and Someday screenshot"></figure>
+
+<p>Each item shows how long since it was last touched, so you can see what is ripe for a chase. Write who and what in the title, such as "Hannah Lee: signed order form for the fundraiser".</p>
+<p>When the thing arrives or it is your move again, press <strong>→ Next</strong>. That makes it a next action on your <a href="#/todos/to-do">To Do</a> list.</p>
+<p>Type in <strong>Filter…</strong> to narrow the list.</p>
+<h2>Someday</h2>
+<p>The <strong>Someday</strong> tab holds ideas and maybes that are not commitments yet.</p>
+<figure class="shot"><img data-shot="todos-someday" width="1400" height="954" alt="Waiting and Someday screenshot"></figure>
+
+<ul>
+<li><strong>→ Next</strong> promotes an item to a next action when you are ready.</li>
+<li><strong>Filters</strong> narrows by context.</li>
+<li><strong>Views</strong> saves a search and filters for the whole team.</li>
+</ul>
+<p>Look through Someday during your weekly review. Promote what is ready and drop what no longer matters.</p>
+<h2>Filing items here</h2>
+<p>Choose <strong>Waiting</strong>, <strong>Delegated</strong> or <strong>Someday</strong> when you sort an item in the <a href="#/todos/inbox">Inbox</a>, or change a todo's status in its editor.</p><nav class="pn"><a href="#/todos/projects"><small>Previous</small>Projects</a><a class="next" href="#/todos/done-and-review"><small>Next</small>Done and Review</a></nav></article>
+<article data-route="todos/done-and-review" data-title="Done and Review" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>Done and Review</h1><p class="lead">See what you have finished, and run the weekly review that keeps your lists trustworthy.</p><h2>Done</h2>
+<p>The <strong>Done</strong> tab lists finished todos.</p>
+<figure class="shot"><img data-shot="todos-done" width="1400" height="954" alt="Done and Review screenshot"></figure>
+
+<ul>
+<li>The <strong>Done</strong> and <strong>Dropped</strong> buttons switch between completed todos and ones you abandoned.</li>
+<li><strong>Search finished todos…</strong>, <strong>Filters</strong> (by context) and <strong>Views</strong> work as on the other lists.</li>
+<li>Untick a todo to reopen it.</li>
+</ul>
+<p>Dropping a todo, rather than deleting it, keeps it here where you can recover it.</p>
+<h2>Review</h2>
+<p>The <strong>Review</strong> tab supports the weekly review: empty the inbox, give every active project a next action, follow up on stale waiting-fors and prune someday/maybe.</p>
+<figure class="shot"><img data-shot="todos-review" width="1400" height="954" alt="Done and Review screenshot"></figure>
+
+<p>It shows:</p>
+<ul>
+<li><strong>Counts</strong> of Inbox, Next, Waiting, Someday and Done todos.</li>
+<li><strong>Stale (14+ days untouched)</strong> — next actions, waiting-for and delegated items nothing has touched in a while, oldest first.</li>
+<li><strong>Active projects without a next action.</strong></li>
+<li><strong>Review due</strong> when no review has been marked done in the last seven days, or ever.</li>
+</ul>
+<p>When you finish, press <strong>Mark review done</strong>. That records today and clears the <strong>Review due</strong> hint for a week.</p>
+<h2>Reviewing with Baker</h2>
+<p>With an AI provider connected, ask Baker to start your weekly review. On the Review tab the assistant offers "Start my weekly review". Baker walks you through nine steps one at a time: a mind dump, clearing the inbox, looking back at the week, due items, projects, waiting items, stale next actions, someday/maybe, and a final look at your next actions. It makes the changes you agree to as you go.</p>
+<p>Baker cannot press <strong>Mark review done</strong> for you. A review only counts once you have finished it.</p><nav class="pn"><a href="#/todos/waiting-and-someday"><small>Previous</small>Waiting and Someday</a><a class="next" href="#/todos/contexts-and-search"><small>Next</small>Contexts and search</a></nav></article>
+<article data-route="todos/contexts-and-search" data-title="Contexts and search" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>Contexts and search</h1><p class="lead">Browse open todos by context, and search across all of them.</p><h2>The Contexts tab</h2>
+<p><strong>Contexts</strong> lets you browse todos grouped by context, each heading with a count. Todos without one sit under <strong>No context</strong>.</p>
+<figure class="shot"><img data-shot="todos-contexts" width="1400" height="954" alt="Contexts and search screenshot"></figure>
+
+<p>Use the <strong>All contexts</strong> list at the top right to show a single context.</p>
+<p>Press <strong>Rename</strong> beside a heading to rename that context on every todo at once, or to merge it into another. See <a href="#/todos/to-do">To Do</a> for how renaming and merging work.</p>
+<h2>Choosing contexts</h2>
+<p>A context says where or how you can do something. By habit it starts with an at-sign, such as @calls, @computer, @errands or @office. When you set a context, the app offers the ones already in use, plus <strong>+ New context…</strong>.</p>
+<p>Keep the list short. Five to eight contexts usually cover everything.</p>
+<h2>Searching all todos</h2>
+<p>The <strong>Search…</strong> box at the top right of the Todos page searches every todo, whatever its tab. Results appear on their own page under "Results for" what you typed, and the box keeps your search.</p>
+<p>A todo hidden by a <strong>Bring back on</strong> date still turns up in search, labelled with the day it comes back.</p>
+<h2>Searching within a tab</h2>
+<p>Most tabs also have their own box, such as <strong>Search inbox…</strong> or <strong>Filter…</strong>, which only narrows that tab. Someday, Done and Projects add <strong>Filters</strong> and <strong>Views</strong>, the same as the Contacts list.</p><nav class="pn"><a href="#/todos/done-and-review"><small>Previous</small>Done and Review</a><a class="next" href="#/todos/simple-list"><small>Next</small>The simple list</a></nav></article>
+<article data-route="todos/simple-list" data-title="The simple list" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>The simple list</h1><p class="lead">The Todos page in Simple list mode: one table of todos with due dates and priorities.</p><p>When an admin sets the todo mode to <strong>Simple list</strong>, the Todos page becomes a single table. See <a href="#/todos/todo-modes">Todo modes</a>.</p>
+<figure class="shot"><img data-shot="todos-simple-list" width="1400" height="954" alt="The simple list screenshot"></figure>
+
+<h2>The table</h2>
+<p>Each row has a done checkbox, the todo with what it is linked to (a contact and a deal), its <strong>Priority</strong> (High, Medium or Low) and its <strong>Due</strong> date. Overdue dates show in red.</p>
+<p>Tick a box to mark a todo done. Click a todo to open it.</p>
+<h2>Adding a todo</h2>
+<p>Press <strong>+ Add Todo</strong> and fill in:</p>
+<ul>
+<li><strong>What needs to be done?</strong> (required)</li>
+<li><strong>Description</strong></li>
+<li><strong>Priority</strong></li>
+<li><strong>Due Date</strong></li>
+<li><strong>Contact</strong></li>
+</ul>
+<p>You can also add a todo from a contact's page with <strong>+ Add</strong> next to Todos.</p>
+<h2>Filters and sorting</h2>
+<p><strong>Filters</strong> offers:</p>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Filter</th>
+<th>Choices</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Show</td>
+<td>Open (the default), Done or All</td>
+</tr>
+<tr>
+<td>Due</td>
+<td>Overdue, Due today, Next 7 days, No due date</td>
+</tr>
+<tr>
+<td>Priority</td>
+<td>High, Medium, Low</td>
+</tr>
+<tr>
+<td>Owner</td>
+<td>A teammate or Unassigned, on a team of more than one</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Sort</strong> offers Open first, then due (the default), Due date, Priority, Title and Recently added. <strong>Clear filters</strong> resets them. <strong>Views</strong> saves a search and filters for the whole team.</p>
+<h2>Repeating todos</h2>
+<p>A repeating todo still repeats in this mode. Ticking it creates the next one.</p><nav class="pn"><a href="#/todos/contexts-and-search"><small>Previous</small>Contexts and search</a><a class="next" href="#/todos/no-login-links"><small>Next</small>No-login links</a></nav></article>
+<article data-route="todos/no-login-links" data-title="No-login links" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>No-login links</h1><p class="lead">Add todos, or work your whole list, from a phone without signing in.</p><p>Two links let you reach your todos with no sign-in. They are <strong>not equally open</strong>, so read this before you turn them on. An admin sets both up in <strong>Settings → Assistant → Todo mode</strong>, under <strong>No-login links</strong>. See <a href="#/settings/assistant">Assistant settings</a>.</p>
+<h2>Quick capture (write-only)</h2>
+<p>A phone bookmark that drops text straight into your inbox. It cannot read anything back.</p>
+<ul>
+<li>It is <strong>on by default with a public address</strong>. Anyone who knows that address can add to your inbox. The card warns you about this.</li>
+<li>Press <strong>New secret link</strong> to give it a secret address. The plain address then stops working.</li>
+<li><strong>Make public</strong> removes the secret again.</li>
+</ul>
+<p>Items that arrive this way carry a <strong>Capture link</strong> label. Read them before acting on them.</p>
+<h2>Full todo app (read and write)</h2>
+<p>The whole todo app, sized for a phone, with no login. It is <strong>off by default</strong>.</p>
+<ul>
+<li>Tick <strong>Enable the no-login todo app</strong>. A secret link is made in the same step, so it is never published at a guessable address.</li>
+<li>On a phone, the lists sit in a bar along the bottom: <strong>Inbox</strong>, <strong>Today</strong>, <strong>To Do</strong>, <strong>Projects</strong> and <strong>More</strong> (Contexts, Waiting, Someday, Review and Done).</li>
+<li>Renaming contexts and saved Views are not available here.</li>
+</ul>
+<h2>Treat these links like passwords</h2>
+<p>Anyone holding the todo app link can read and change every todo. The link is not tied to any account, so deactivating the person who shared it does not stop it.</p>
+<ul>
+<li><strong>Copy</strong> puts a link on your clipboard. Open it on the device that needs it, rather than pasting it into a chat or ticket.</li>
+<li><strong>New secret link</strong> replaces the link at once. The old one stops working, including any home-screen app installed from it. This is how you revoke access.</li>
+</ul>
+<p>Neither link reaches anything else in the CRM: no contacts, deals, settings or assistant. Both work in either todo mode.</p>
+<h2>Capture from Telegram</h2>
+<p>If your phone is linked to the team's Telegram bot, in GTD mode a message starting with <code>capture</code> adds an inbox todo instantly, with no AI involved. See <a href="#/integrations/telegram">Telegram</a>.</p><nav class="pn"><a href="#/todos/simple-list"><small>Previous</small>The simple list</a><a class="next" href="#/reports/company-report"><small>Next</small>The company report</a></nav></article>
+<article data-route="reports/company-report" data-title="The company report" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/reports/company-report">Reports</a></p><h1>The company report</h1><p class="lead">One page with everything CakeCRM knows about one company: its deals, its contacts, and every note and activity across the account.</p><p><strong>Reports</strong> has one report: pick a company and get everything known about it on a single scroll. There are no other report types, no forecasting and no custom report builder. The page is read-only; nothing on it changes your data.</p>
+<h2>Building a report</h2>
+<ol>
+<li>Open <strong>Reports</strong>.</li>
+<li>In the <strong>Company</strong> box, start typing a company name and pick it from the list.</li>
+</ol>
+<p>The report appears below. The page address includes the company, so you can bookmark a report or send the link to a teammate.</p>
+<figure class="shot"><img data-shot="reports" width="1400" height="954" alt="The company report screenshot"></figure>
+
+<h2>What it shows</h2>
+<p><strong>Headline figures.</strong> Three chips at the top: <strong>Open deals</strong>, <strong>Open value</strong> and <strong>Active contacts</strong>. They are counted over the whole company, never by adding up the lists below, so expanding rows or including archived records never moves them.</p>
+<p><strong>Company details.</strong> Industry, domain, phone, address, source, owner and dates, the company's own notes and its custom fields.</p>
+<p><strong>Deals.</strong> Every deal linked to the company, with its stage, value, touch count (with an AI provider) and lead score. Click a deal to expand it in place and see its details, custom fields, activity, notes and open todos.</p>
+<p><strong>Contacts.</strong> Every contact linked to the company, including inactive and archived ones, which are marked. Click a contact to expand it. The Active contacts chip counts only active ones, so it can be smaller than this list.</p>
+<p><strong>Timeline.</strong> Notes and activity from across the account in one feed, with <strong>Load more</strong> at the bottom.</p>
+<p><strong>Expand all</strong> and <strong>Collapse all</strong> beside each section heading open or close every row at once. Expand all is not offered when a section is very long.</p>
+<h2>Archived deals and notes</h2>
+<p>Archived deals and archived notes are left out unless you tick <strong>Include archived deals and archived notes</strong>. Contacts are always listed; they have a status rather than an archive flag.</p>
+<h2>Mixed currencies</h2>
+<p>If the open deals do not all share one currency, the Open value chip reads <strong>Mixed currencies</strong> instead of a total. Adding different currencies together gives a number that is simply wrong, so this page declines to.</p>
+<h2>Where an activity is counted</h2>
+<p>An activity logged against a deal belongs to that deal, always, even if the deal is archived or belongs to a different company. It never also appears under the contact. Every activity has exactly one home, so nothing is counted twice.</p>
+<h2>Long lists</h2>
+<p>Long lists are capped. When a section has been cut short, the report says so rather than quietly showing only part of it.</p>
+<h2>Other numbers</h2>
+<p>The dashboard holds the pipeline-wide figures: win rate, average days to close, deal aging and per-person activity. See <a href="#/dashboard/dashboard">The dashboard</a>. With an AI provider connected, you can also ask Baker questions about wins, losses and how long deals spend in each stage.</p><nav class="pn"><a href="#/todos/no-login-links"><small>Previous</small>No-login links</a><a class="next" href="#/baker/meet-baker"><small>Next</small>Meet Baker</a></nav></article>
+<article data-route="baker/meet-baker" data-title="Meet Baker" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/baker/meet-baker">Baker, the assistant</a></p><h1>Meet Baker</h1><p class="lead">Baker is the AI sales assistant built into CakeCRM. It is optional, and the CRM works fully without it.</p><p>Baker is the one assistant built into CakeCRM. It reads your pipeline, contacts, companies and todos, answers questions about them, and can make changes for you with your approval. The name is fixed; every install's assistant is called Baker.</p>
+<p>Baker is optional. Every part of the CRM works with no AI provider connected. Until an admin connects one, Baker's chat stays hidden rather than showing errors. See <a href="#/baker/ai-setup">AI setup</a>.</p>
+<h2>Opening Baker</h2>
+<p>Baker lives behind the <strong>Ask Baker</strong> button in the bottom-right corner of every CRM page. After a few seconds the button folds down to an icon; move your pointer near it and the label comes back. Click it to open the chat drawer.</p>
+<p>On an install with no provider connected, the same button reads <strong>Hire your assistant</strong> and leads to AI setup instead of opening a chat.</p>
+<h2>Baker knows what you have open</h2>
+<p>The drawer is aware of the page behind it. Open a deal, a contact or a company and Baker sees which record you mean, and the empty chat offers suggestions to match, such as:</p>
+<ul>
+<li>"Summarize this deal" or "What should my next step be on this deal?"</li>
+<li>"Catch me up before I call them" on a contact</li>
+<li>"Which deals here need attention?" on a company</li>
+</ul>
+<p>You can also just type. Press Enter to send, Shift+Enter for a new line.</p>
+<h2>The drawer at a glance</h2>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Conversations</td>
+<td>Your past chats with Baker. Pick one to reopen it, or delete it.</td>
+</tr>
+<tr>
+<td>New chat</td>
+<td>Starts a fresh conversation.</td>
+</tr>
+<tr>
+<td>Assistant settings</td>
+<td>Shows Baker's name and personality. Only an admin can edit the personality.</td>
+</tr>
+<tr>
+<td>Attach a file</td>
+<td>Adds files to your message for Baker to read.</td>
+</tr>
+<tr>
+<td>Read / Ask / Auto</td>
+<td>How much Baker may change without asking. See <a href="#/baker/approvals">Approvals</a>.</td>
+</tr>
+<tr>
+<td>Stop</td>
+<td>Ends a reply Baker is still working on.</td>
+</tr>
+</tbody>
+</table></div>
+<h2>Leaving mid-answer</h2>
+<p>Closing the tab, locking your phone or switching to another conversation does not stop a reply. It keeps running on the server, and when you come back the drawer shows what Baker is doing and how long it has been at it. Press <strong>Stop</strong> to end it; Baker stops at its next step, and a step already running may still finish.</p>
+<h2>Yours, and the team's</h2>
+<p>Your conversations with Baker are yours alone. Nobody else can read them, admins included.</p>
+<p>Baker's memory is different: the facts it records and the files it keeps are shared by the whole team. Something you tell Baker in a private chat can become a fact every seat can see. See <a href="#/baker/memory">Memory</a>.</p>
+<h2>On your phone</h2>
+<p>Each person can link their own Telegram account and chat with Baker from there. See <a href="#/integrations/telegram">Telegram</a>.</p><nav class="pn"><a href="#/reports/company-report"><small>Previous</small>The company report</a><a class="next" href="#/baker/what-baker-can-do"><small>Next</small>What Baker can and cannot do</a></nav></article>
+<article data-route="baker/what-baker-can-do" data-title="What Baker can and cannot do" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/baker/meet-baker">Baker, the assistant</a></p><h1>What Baker can and cannot do</h1><p class="lead">The honest boundary of what Baker may touch, what it never touches, and what it does with nobody watching.</p><h2>The short version</h2>
+<p>Baker can read and change CRM records, work your todos, keep its own memory and knowledge files, search and read connected Gmail, and put drafts in your Gmail Drafts folder. It cannot send email, cannot change install settings, and cannot act outside CakeCRM.</p>
+<h2>CRM records and todos</h2>
+<p>Baker can search, create and update contacts, companies and deals, move a deal's stage, mark a deal won or lost, log activities, and create, update and complete todos. Whether each change runs straight away or waits for your <strong>Approve</strong> depends on the mode you pick. See <a href="#/baker/approvals">Approvals</a>.</p>
+<p>Deleting a contact, a company, a deal or a todo is permanent; there is no recycle bin. Archiving a deal is the recoverable option, and a todo can be dropped instead of deleted.</p>
+<p>One turn can make at most 20 changes. Past that, Baker's further changes are refused.</p>
+<h2>Email</h2>
+<p>Gmail is <strong>read and create-draft only</strong>. Baker can search your mail, read a thread and write a draft into your Gmail Drafts folder. It can never send an email. No tool in CakeCRM sends mail, and a test fails the build if one is ever added. You review and send every draft yourself, from Gmail. See <a href="#/integrations/gmail">Gmail</a>.</p>
+<p>By default only admins can have Baker use the connected mailbox.</p>
+<h2>Settings</h2>
+<p>Baker has no settings tools at all. It cannot add an AI key, connect Gmail, switch todo mode, define a custom field, add a user or change branding. It can explain how to do these things and point you to the right screen; you do the clicking.</p>
+<h2>Files you upload</h2>
+<p>Use <strong>Attach a file</strong> in the drawer to give Baker a file to read:</p>
+<ul>
+<li>up to 5 files per message, 10 MB each;</li>
+<li>CSV, XLSX, MD, TXT, PDF or DOCX.</li>
+</ul>
+<p>Only the text is extracted; the file itself is not stored. Uploaded text is treated as untrusted, so for the rest of that conversation every change Baker proposes asks for your approval. Baker cannot attach a file to a record; you add attachments yourself.</p>
+<h2>When nobody is watching</h2>
+<p>Baker also runs on a schedule, with nobody in the chat, for the daily digest and nudges about deals and leads that have gone quiet. Those unattended turns are much more limited, and the server enforces it:</p>
+<ul>
+<li>Baker gets read tools and a single notification, nothing else. It cannot create, update, log or delete anything.</li>
+<li>It cannot search or open your Gmail, even though those are reads.</li>
+<li>It sends at most one notification per run.</li>
+</ul>
+<p>So the worst a hostile instruction hidden in a note could achieve unattended is one notification.</p>
+<h2>Roles</h2>
+<p>Admins and members both get Baker. Baker follows the same rules you do: the server decides what each role may do, and Baker knowing your role only makes its advice accurate, never more permissive.</p><nav class="pn"><a href="#/baker/meet-baker"><small>Previous</small>Meet Baker</a><a class="next" href="#/baker/approvals"><small>Next</small>Approvals and modes</a></nav></article>
+<article data-route="baker/approvals" data-title="Approvals and modes" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/baker/meet-baker">Baker, the assistant</a></p><h1>Approvals and modes</h1><p class="lead">Choose how much Baker may change on its own, and what still asks for your approval in every mode.</p><h2>Three modes</h2>
+<p>At the bottom of the Baker drawer are three buttons: <strong>Read</strong>, <strong>Ask</strong> and <strong>Auto</strong>. Hover one to see its description. <strong>Ask</strong> is the default.</p>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>What it means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Read</td>
+<td>Read-only. Baker can look things up but not change data. It is not even offered the tools that change things, and would be refused if it tried one.</td>
+</tr>
+<tr>
+<td>Ask</td>
+<td>Everyday CRM edits run right away. Deletes, archives, merges, bulk changes, email drafts, notifications and memory always ask.</td>
+</tr>
+<tr>
+<td>Auto</td>
+<td>Changes run without asking, apart from the exceptions below.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Looking things up never asks, in any mode.</p>
+<h2>What Ask runs straight away</h2>
+<p>In Ask mode, a change runs without a card only when it stays inside a CakeCRM record, notifies nobody, removes nothing from view, is not a bulk change, and sends nothing outside your install. In practice that means:</p>
+<ul>
+<li>creating and updating contacts, companies and deals;</li>
+<li>moving a deal's stage, and marking a deal won or lost;</li>
+<li>logging an activity;</li>
+<li>creating, updating and completing todos, and creating or updating projects;</li>
+<li>setting custom-field values on a contact, company or deal.</li>
+</ul>
+<p>A few of those calls still ask, because of what they would do: archiving a contact or company, dropping a todo or project, or setting a bring-back date that hides a todo. Marking a todo done, completing a project, or filing either to someday runs without asking.</p>
+<h2>What always asks in Ask mode</h2>
+<p>Deleting, archiving, merging, bulk moves and bulk todo updates, recomputing lead scores, creating a Gmail draft, sending a notification, recording a memory fact, and any change to Baker's protected files. Anything new that has not been classified asks too.</p>
+<h2>What asks even in Auto</h2>
+<ul>
+<li><strong>Writing Baker's protected files</strong>, soul.md and MEMORY.md. These always ask, in every mode, and only an admin can change them. See <a href="#/baker/memory">Memory</a>.</li>
+<li><strong>A conversation that has read outside content.</strong> Once Baker has read an email or an uploaded file in a conversation, every change it proposes asks for approval for the rest of that conversation, even after that message has scrolled out of view. Text someone else wrote can never quietly steer Baker into changing your data.</li>
+</ul>
+<h2>Approving a change</h2>
+<p>When Baker wants to make a change that needs approval, its message carries a card naming the action and showing exactly what it will do, with <strong>Approve</strong> and <strong>Deny</strong>. Until you answer, nothing has happened.</p>
+<p>In Telegram the same thing arrives as two buttons, Approve and Deny, and only the linked account can press them. Telegram chats always run in Ask mode.</p><nav class="pn"><a href="#/baker/what-baker-can-do"><small>Previous</small>What Baker can and cannot do</a><a class="next" href="#/baker/memory"><small>Next</small>Baker&#x27;s memory</a></nav></article>
+<article data-route="baker/memory" data-title="Baker&#x27;s memory" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/baker/meet-baker">Baker, the assistant</a></p><h1>Baker&#x27;s memory</h1><p class="lead">See and edit what Baker knows, from its knowledge files to the individual facts it has recorded.</p><p>Baker keeps two kinds of memory: <strong>knowledge files</strong> it reads at the start of a conversation, and <strong>recorded facts</strong> it looks up as you talk. Both are shared by the whole team, and both work with or without an AI provider connected.</p>
+<p>To open them, go to <strong>Settings</strong>, <strong>Assistant</strong>, <strong>Assistant memory</strong> and click <strong>Open memory</strong>. The Memory page has two tabs: <strong>Knowledge files</strong> and <strong>Recorded facts</strong>.</p>
+<figure class="shot"><img data-shot="memory" width="1400" height="954" alt="Baker&#x27;s memory screenshot"></figure>
+
+<h2>Knowledge files</h2>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Shown as</th>
+<th>What it holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>soul.md</td>
+<td>Identity</td>
+<td>Baker's own description of itself: how you work, patterns it has noticed.</td>
+</tr>
+<tr>
+<td>MEMORY.md</td>
+<td>Snapshot</td>
+<td>A living summary of key people, active deals, decisions and lessons.</td>
+</tr>
+<tr>
+<td>topics/...</td>
+<td>Topic</td>
+<td>One file per subject, such as a process or a pricing rule.</td>
+</tr>
+<tr>
+<td>daily/...</td>
+<td>Daily note</td>
+<td>A running log for each day.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Pick a file to read it. Each file shows who last edited it: Baker, You, or Built-in. Edit the text and click <strong>Save</strong>, or <strong>Revert</strong> to throw your edits away. If Baker or another tab changed the file while you had it open, saving is refused and you are asked to reload, so nobody's edit is silently overwritten.</p>
+<h2>The two protected files</h2>
+<p>soul.md and MEMORY.md are protected because Baker reads them in every conversation:</p>
+<ul>
+<li><strong>Everyone can read them.</strong> On a member's seat they open read-only, with no Save.</li>
+<li><strong>Only an admin can change them</strong>, on this page or by asking Baker. On a member's seat Baker refuses the rewrite.</li>
+<li><strong>Baker always asks before changing them</strong>, in every mode, even Auto.</li>
+<li><strong>They cannot be deleted.</strong></li>
+</ul>
+<p>Topic files and daily notes are open to everyone: any seat can edit or delete them here or through Baker.</p>
+<h2>Recorded facts</h2>
+<p>Baker records durable things it learns as short facts, such as who prefers what or when a decision was made. On the <strong>Recorded facts</strong> tab you can search them and <strong>Delete</strong> any one. Deleting here is permanent. When Baker decides a fact is no longer true, it retires it with an end date instead, so the history stays readable.</p>
+<p>Each night a background tidy archives facts that have gone unused, without deleting them. It uses no AI, never archives decisions or preferences, and leaves anything under a month old alone.</p>
+<h2>Memory is team memory</h2>
+<p>What Baker remembers, every seat can see. A fact recorded from your private conversation shows up on this page for your colleagues too. If something should not be shared, ask Baker not to remember it.</p><nav class="pn"><a href="#/baker/approvals"><small>Previous</small>Approvals and modes</a><a class="next" href="#/baker/playbooks"><small>Next</small>Sales playbooks and help</a></nav></article>
+<article data-route="baker/playbooks" data-title="Sales playbooks and help" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/baker/meet-baker">Baker, the assistant</a></p><h1>Sales playbooks and help</h1><p class="lead">Baker has read ten published sales and negotiation books and CakeCRM&#x27;s own help, and draws on them when you ask.</p><p>Baker carries a small library: CakeCRM's own help topics, and a shelf of sales playbooks. There is no separate screen for either. You reach them by asking Baker.</p>
+<h2>Asking how CakeCRM works</h2>
+<p>Ask Baker how something in the app works, such as "How do notifications work?" or "Who can connect Gmail?", and it answers from CakeCRM's built-in help rather than guessing. When a task is admin-only, Baker should say so up front.</p>
+<h2>The playbooks</h2>
+<p>Each playbook is an own-words summary of a published book: its core ideas, when Baker reaches for it, how it applies inside the CRM, and a pointer to go and read the original.</p>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Book</th>
+<th>Author</th>
+<th>Reach for it when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The Challenger Sale</td>
+<td>Matthew Dixon and Brent Adamson</td>
+<td>The buyer likes you but nothing moves.</td>
+</tr>
+<tr>
+<td>Fanatical Prospecting</td>
+<td>Jeb Blount</td>
+<td>Your pipeline is thin and needs a steady prospecting habit.</td>
+</tr>
+<tr>
+<td>Gap Selling</td>
+<td>Keenan</td>
+<td>You need to find the real problem and the value of solving it.</td>
+</tr>
+<tr>
+<td>Getting to Yes</td>
+<td>Roger Fisher and William Ury with Bruce Patton</td>
+<td>You are negotiating and want to work from interests, not positions.</td>
+</tr>
+<tr>
+<td>How to Win Friends and Influence People</td>
+<td>Dale Carnegie</td>
+<td>A first meeting, or a relationship that needs repair.</td>
+</tr>
+<tr>
+<td>Influence: The Psychology of Persuasion</td>
+<td>Robert B. Cialdini</td>
+<td>You want to frame a follow-up honestly and persuasively.</td>
+</tr>
+<tr>
+<td>The JOLT Effect</td>
+<td>Matthew Dixon and Ted McKenna</td>
+<td>A late-stage deal is stuck on the buyer's indecision.</td>
+</tr>
+<tr>
+<td>Never Split the Difference</td>
+<td>Chris Voss with Tahl Raz</td>
+<td>Pushback, a price objection, or a contact who has gone quiet.</td>
+</tr>
+<tr>
+<td>SPIN Selling</td>
+<td>Neil Rackham</td>
+<td>A discovery call, or an early deal with no stated problem.</td>
+</tr>
+<tr>
+<td>To Sell Is Human</td>
+<td>Daniel H. Pink</td>
+<td>Reading the buyer, handling rejection and finding the real problem.</td>
+</tr>
+</tbody>
+</table></div>
+<h2>Using them</h2>
+<p>You do not have to name a book. Describe the situation, for example "David Kim keeps pushing back on price" or "this deal has gone quiet", and Baker looks up the technique that fits. When it uses a playbook, Baker names the book and its author, so you know where the advice comes from and can read further.</p>
+<p>The playbooks need an AI provider, because Baker is the only way to reach them. See <a href="#/baker/ai-setup">AI setup</a>.</p><nav class="pn"><a href="#/baker/memory"><small>Previous</small>Baker&#x27;s memory</a><a class="next" href="#/baker/ai-setup"><small>Next</small>AI setup</a></nav></article>
+<article data-route="baker/ai-setup" data-title="AI setup" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/baker/meet-baker">Baker, the assistant</a></p><h1>AI setup</h1><p class="lead">An admin connects an AI provider and picks a model; until then, AI features stay hidden and the CRM works as normal.</p><p>Connecting an AI provider is <strong>admin only</strong>. Admins find <strong>AI Setup</strong> in the top bar on a computer, or in the menu on a phone. Members do not see it.</p>
+<figure class="shot"><img data-shot="ai-setup" width="1400" height="954" alt="AI setup screenshot"></figure>
+
+<h2>With no provider</h2>
+<p>CakeCRM works fully without any AI key. Until a provider is connected:</p>
+<ul>
+<li>the Baker chat is hidden, and the corner button reads <strong>Hire your assistant</strong>;</li>
+<li>importing contacts accepts CSV and vCard only;</li>
+<li>the estimated touch-count on deal cards is hidden.</li>
+</ul>
+<p>A dismissible banner offers to add a key. It is a prompt, never a gate. Lead scores, duplicate checks, reports and the rest of the CRM need no AI at all.</p>
+<h2>The providers</h2>
+<p>The AI Assistant Setup page has one card per provider:</p>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Card</th>
+<th>How it connects</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Anthropic (Claude)</td>
+<td>API key</td>
+</tr>
+<tr>
+<td>OpenAI (GPT)</td>
+<td>API key</td>
+</tr>
+<tr>
+<td>Google (Gemini)</td>
+<td>API key</td>
+</tr>
+<tr>
+<td>Together AI</td>
+<td>API key</td>
+</tr>
+<tr>
+<td>Ollama (Local)</td>
+<td>The address of an Ollama server, no key</td>
+</tr>
+</tbody>
+</table></div>
+<p>Ollama runs models on your own hardware. Its card is not shown on a Railway deploy, which has no local machine to reach. The address must be a plain <code>http</code> or <code>https</code> origin, with no path or query.</p>
+<h2>Connecting</h2>
+<ol>
+<li>Paste the key into the provider's card and click <strong>Connect</strong>.</li>
+<li>CakeCRM checks the key straight away with a live call to the provider. If it fails, nothing is saved and you are told to check the key.</li>
+<li>Once connected, choose a <strong>Model</strong>. If this is not the active provider yet, click <strong>Set as active</strong>.</li>
+</ol>
+<p>Only one provider and model are active at a time. Keys are entered in the app, never as environment variables, and are encrypted before they are stored.</p>
+<h2>Model tiers</h2>
+<p>Models are grouped into three tiers: top, mid and light. Cheap background work uses the light tier, so routine automation does not cost top-tier prices. Each connected card except Ollama's lets an admin override which model sits in each tier, or leave it on <strong>Use inferred default</strong>.</p>
+<h2>Disconnecting</h2>
+<p><strong>Disconnect</strong> deletes that provider's stored key. If it was the active provider, the active provider and model are cleared too, and AI features hide again.</p><nav class="pn"><a href="#/baker/playbooks"><small>Previous</small>Sales playbooks and help</a><a class="next" href="#/settings/personal"><small>Next</small>Personal settings</a></nav></article>
+<article data-route="settings/personal" data-title="Personal settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Personal settings</h1><p class="lead">Notifications, your password, how the pipeline board opens, and linking your own Telegram.</p><p>Open <strong>Settings</strong> at the top right. Settings has four tabs: <strong>Personal</strong>, <strong>Assistant</strong>, <strong>Workspace</strong> and <strong>Integrations</strong>. Everyone sees Personal and Assistant. Workspace and Integrations are for admins only, and members do not see those tabs at all.</p>
+<figure class="shot"><img data-shot="settings-personal" width="1400" height="1829" alt="Personal settings screenshot"></figure>
+
+<h2>Notifications</h2>
+<ul>
+<li><strong>Enable Web Push</strong> turns on browser notifications for this browser on this device. Your browser asks for permission first. Turn it on separately on each device you use.</li>
+<li><strong>Send test notification</strong> sends a real notification and tells you whether it reached a device.</li>
+</ul>
+<p>Push works with no AI keys. See <a href="#/getting-started/notifications">Notifications</a> for what raises one.</p>
+<p><strong>Daily digest and nudges</strong> is shown to admins only, because it is one setting for the whole team. It sends a pipeline summary each morning, plus a nudge when a deal goes cold or a contact with open business has not been spoken to. It also works with no AI keys.</p>
+<h2>Change password</h2>
+<p>Enter your <strong>Current password</strong>, a <strong>New password</strong> of at least 8 characters, and confirm it. If two-step sign-in is on for your account, the form also asks for a code.</p>
+<p>When the change succeeds, every other session you have ends straight away. You stay signed in where you are. A wrong current password is refused and does not sign you out.</p>
+<p>Forgotten your password? Ask an admin to reset it. See <a href="#/settings/workspace">Workspace settings</a>.</p>
+<h2>Pipeline board</h2>
+<p>The pipeline hides the Won and Lost columns by default, so the board shows live work. Tick <strong>Show Won and Lost stages</strong> to bring them back on the board and in the list view. This is saved in this browser only. See <a href="#/pipeline/board">The pipeline board</a>.</p>
+<h2>Link my Telegram</h2>
+<p>Chat with Baker from your own phone. Once an admin has connected a Telegram bot:</p>
+<ol>
+<li>Press <strong>Get my link code</strong>.</li>
+<li>Press <strong>Open Telegram to link</strong>. If you are already in the chat with the bot, send <code>/link</code> and your code instead.</li>
+<li><strong>Regenerate code</strong> issues a fresh code and releases the device linked now. Use it to move to a new phone.</li>
+<li><strong>Unlink my Telegram</strong> ends your link. It affects nobody else.</li>
+</ol>
+<p>If no bot is connected yet, the card says so. See <a href="#/integrations/telegram">Telegram</a>.</p>
+<h2>Light and dark</h2>
+<p>The light and dark switch is in the top bar, not in Settings. See <a href="#/getting-started/light-and-dark">Light and dark mode</a>.</p><nav class="pn"><a href="#/baker/ai-setup"><small>Previous</small>AI setup</a><a class="next" href="#/settings/assistant"><small>Next</small>Assistant settings</a></nav></article>
+<article data-route="settings/assistant" data-title="Assistant settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Assistant settings</h1><p class="lead">Open Baker&#x27;s memory, choose the todo mode, and manage the no-login todo links.</p><p>The <strong>Assistant</strong> tab has two cards. Everyone sees <strong>Assistant memory</strong>. <strong>Todo mode</strong> is for admins only.</p>
+<figure class="shot"><img data-shot="settings-assistant" width="1400" height="1266" alt="Assistant settings screenshot"></figure>
+
+<h2>Assistant memory</h2>
+<p><strong>Open memory</strong> takes you to the Memory page. There you can read and edit what Baker knows: its description of itself, its running summary, topic notes, daily logs and the individual facts it has recorded. It works with or without an AI provider.</p>
+<p>Baker's memory is shared by the whole team. Anyone can read it. Changing the two protected files, <code>soul.md</code> and <code>MEMORY.md</code>, is for admins only. See <a href="#/baker/memory">Memory</a>.</p>
+<h2>Todo mode (admins)</h2>
+<p>Pick one of two buttons:</p>
+<ul>
+<li><strong>Todo-GTD (default)</strong> — inbox, contexts, projects, repeats and a weekly review.</li>
+<li><strong>Simple list</strong> — just todos with due dates and priorities, no inbox or contexts.</li>
+</ul>
+<p>Switching is safe and reversible. Both modes read the same todos, and nothing is moved, copied or deleted. The setting applies to everyone. See <a href="#/todos/todo-modes">Todo modes</a>.</p>
+<h2>No-login links (admins)</h2>
+<p>The same card controls two links that work without signing in. They show in both todo modes.</p>
+<p><strong>Quick capture (write-only)</strong> drops text into the inbox and cannot read anything back. It starts with a <strong>Public link</strong>, and the card warns that anyone who knows the address can add to your inbox. <strong>New secret link</strong> restricts it. <strong>Make public</strong> removes the secret again.</p>
+<p><strong>Full todo app (read and write)</strong> is off by default. Tick <strong>Enable the no-login todo app</strong> to turn it on. A secret link is made at the same time. <strong>New secret link</strong> replaces it at once, breaking the old link, including any home-screen app installed from it.</p>
+<p><strong>Copy</strong> puts a link on your clipboard. These links are shown on this card and nowhere else. Treat them like passwords. See <a href="#/todos/no-login-links">No-login links</a>.</p>
+<h2>AI provider keys</h2>
+<p>Connecting an AI provider is not on this tab. Admins use <strong>AI Setup</strong> in the top bar. See <a href="#/baker/ai-setup">AI setup</a>.</p><nav class="pn"><a href="#/settings/personal"><small>Previous</small>Personal settings</a><a class="next" href="#/settings/workspace"><small>Next</small>Workspace settings</a></nav></article>
+<article data-route="settings/workspace" data-title="Workspace settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Workspace settings</h1><p class="lead">Admin-only settings for your company name and logo, your team, and custom fields.</p><p>The <strong>Workspace</strong> tab is for admins only. Members do not see it.</p>
+<figure class="shot"><img data-shot="settings-workspace" width="1400" height="1494" alt="Workspace settings screenshot"></figure>
+
+<h2>Branding</h2>
+<ul>
+<li><strong>Company name</strong> — shown throughout the app.</li>
+<li><strong>Logo</strong> — press <strong>Upload logo</strong>. PNG, JPEG, GIF or WebP, up to 2 MB. SVG is not accepted. You can remove the logo from the same card.</li>
+</ul>
+<p>Press <strong>Save branding</strong> to keep your changes.</p>
+<p>There is no colour picker. CakeCRM has one fixed look, in light and dark. Light or dark is each person's own choice.</p>
+<h2>Team</h2>
+<p>Everyone shares one CRM. There are two roles:</p>
+<ul>
+<li><strong>Admin</strong> — can change how the install is set up: branding, team, custom fields, integrations, todo mode and Baker's protected memory files.</li>
+<li><strong>Member</strong> — can do everything else, including working with every contact, company, deal and todo.</li>
+</ul>
+<p>Records are the same for both. Owning a record is not a permission. See <a href="#/contacts-and-companies/ownership">Ownership</a>.</p>
+<p>What you can do here:</p>
+<ul>
+<li><strong>Add user</strong> — email, name, password (at least 8 characters) and role.</li>
+<li>Change a person's role from the list beside their name.</li>
+<li><strong>Reset password</strong> — set a new password for someone else. An optional box also clears their two-step sign-in, for someone who lost their authenticator. Use it only when needed.</li>
+<li><strong>Deactivate</strong> — stop someone signing in. You can reactivate them later.</li>
+</ul>
+<p>Accounts are never deleted, so a past colleague's name still shows on the records they owned. You cannot deactivate yourself, remove your own admin role, or demote or deactivate the last active admin. To change your own password, use <a href="#/settings/personal">Personal settings</a>.</p>
+<p>There is no seat limit.</p>
+<h2>Custom fields</h2>
+<p>Pick <strong>Contacts</strong>, <strong>Companies</strong> or <strong>Deals</strong>, then <strong>+ Add custom field</strong>. Give it a name and a type: text, number, boolean, date or select. Deleting a field deletes its values everywhere, with no undo. See <a href="#/contacts-and-companies/custom-fields">Custom fields</a>.</p><nav class="pn"><a href="#/settings/assistant"><small>Previous</small>Assistant settings</a><a class="next" href="#/settings/integrations"><small>Next</small>Integrations settings</a></nav></article>
+<article data-route="settings/integrations" data-title="Integrations settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Integrations settings</h1><p class="lead">Admin-only cards for connecting the team&#x27;s Telegram bot and a Gmail mailbox.</p><p>The <strong>Integrations</strong> tab is for admins only. Members do not see it. It holds two cards.</p>
+<figure class="shot"><img data-shot="settings-integrations" width="1400" height="1331" alt="Integrations settings screenshot"></figure>
+
+<h2>Telegram</h2>
+<p>Connect one Telegram bot for the whole team, so people can chat with Baker from their phones. Create a bot with @BotFather in Telegram, paste its token into <strong>Bot token</strong> and press <strong>Connect bot</strong>. The token is checked straight away and stored encrypted. It is never shown again.</p>
+<p>After that, each person links their own phone from <strong>Settings → Personal → Link my Telegram</strong>. Connecting a different bot later resets everyone's links.</p>
+<p>Full steps: <a href="#/integrations/telegram">Telegram</a>.</p>
+<h2>Gmail</h2>
+<p>Connect one Gmail mailbox, using your own Google OAuth app. The card shows the <strong>Redirect URI</strong> to add to your Google OAuth client. Paste the <strong>Client ID</strong> and <strong>Client secret</strong>, press <strong>Save app credentials</strong>, then connect. Baker can then search and read mail and create drafts. <strong>Baker never sends email.</strong> A draft always waits in your Gmail drafts folder for you to review and send yourself.</p>
+<p>By default only admins' Baker can use the mailbox. The <strong>Share this mailbox with all seats</strong> box gives every member the same access. It switches itself off whenever the connection changes.</p>
+<p>Full steps: <a href="#/integrations/gmail">Gmail</a>.</p>
+<h2>Without AI keys</h2>
+<p>Both cards can be set up before any AI provider is connected. In GTD mode, Telegram's <code>capture</code> message works with no AI at all. Chatting with Baker, in Telegram or about mail, needs a provider. See <a href="#/baker/ai-setup">AI setup</a>.</p><nav class="pn"><a href="#/settings/workspace"><small>Previous</small>Workspace settings</a><a class="next" href="#/integrations/gmail"><small>Next</small>Gmail</a></nav></article>
+<article data-route="integrations/gmail" data-title="Gmail" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/integrations/gmail">Integrations</a></p><h1>Gmail</h1><p class="lead">Connect one Gmail mailbox so Baker can search and read mail and write drafts. Baker can never send email.</p><h2>The guarantee</h2>
+<p>Baker gets exactly two abilities over your mailbox: <strong>read</strong> and <strong>create a draft</strong>. It can never send an email. No tool in CakeCRM sends mail, and none may be added: only three mail actions exist, any other Gmail operation is refused, and a test fails the build if a send ability ever appears. Every draft waits in your Gmail Drafts folder for you to review and send yourself.</p>
+<h2>Who can do this</h2>
+<p>Setting Gmail up is <strong>admin only</strong>; members do not see the Integrations section of Settings.</p>
+<p>Using it is admin only too, by default. There is one mailbox per install, and Baker offers its mail tools only on an admin's seat. If your team works one shared inbox, an admin can tick <strong>Share this mailbox with all seats</strong> on the Gmail card to give every member the same access. It is off by default, and it switches itself off again whenever the connection changes, so a newly connected mailbox always starts private.</p>
+<h2>Connecting</h2>
+<p>You bring your own Google OAuth app, so your mail never passes through anyone else's project.</p>
+<figure class="shot"><img data-shot="settings-integrations" width="1400" height="1331" alt="Gmail screenshot"></figure>
+
+<ol>
+<li>Open <strong>Settings</strong>, <strong>Integrations</strong>. The <strong>Gmail</strong> card shows a redirect URI. Copy it.</li>
+<li>In the Google Cloud console, under APIs and Services, enable the <strong>Gmail API</strong>, create an <strong>OAuth client (Web application)</strong>, and add that redirect URI to it.</li>
+<li>Paste the <strong>Client ID</strong> and <strong>Client secret</strong> into the card and click <strong>Save app credentials</strong>.</li>
+<li>Click <strong>Connect Gmail</strong>. Google asks you to approve, then sends you back, and the card shows the connected account.</li>
+</ol>
+<p>CakeCRM asks Google for two permissions only: read-only mail access, and compose access for drafts. Leave both ticked on Google's screen, or the connection is refused.</p>
+<p>If you run CakeCRM behind your own domain or reverse proxy, set <code>BACKEND_URL</code> to your public address so the redirect URI is right. See <a href="#/self-hosting/deploying">Deploying CakeCRM</a>.</p>
+<h2>What Baker can do once connected</h2>
+<ul>
+<li>Search your mail.</li>
+<li>Read one conversation.</li>
+<li>Create a draft in your Gmail Drafts folder. This always asks for your approval first.</li>
+</ul>
+<p>Email Baker reads is treated as untrusted text. It can never act as an instruction, and once Baker has read mail in a conversation, every change it proposes asks for approval. See <a href="#/baker/approvals">Approvals</a>. Baker never runs mail searches on its own schedule; only a conversation with a person in it reaches the mailbox.</p>
+<p>What Baker reads, and any draft it writes, is sent to your AI provider as part of the conversation. Attached files in an email are never downloaded; Baker sees only their name, type and size.</p>
+<h2>Email touches, logged for you</h2>
+<p>While Gmail is connected, a background job reads recent inbox mail, matches senders to contacts by exact email address, and logs an email touch on that contact, so conversations nobody wrote down still count. It links the touch to a deal only when the contact has exactly one open deal. It needs no AI key. Someone who writes three times with no matching contact raises a single "create a contact?" alert.</p>
+<h2>Expired or disconnected</h2>
+<p>If Google revokes or expires access, the card says your Gmail connection expired and offers to reconnect; your app credentials are kept. <strong>Disconnect Gmail</strong> ends the connection and revokes its access, and also keeps the app credentials for next time.</p><nav class="pn"><a href="#/settings/integrations"><small>Previous</small>Integrations settings</a><a class="next" href="#/integrations/telegram"><small>Next</small>Telegram</a></nav></article>
+<article data-route="integrations/telegram" data-title="Telegram" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/integrations/gmail">Integrations</a></p><h1>Telegram</h1><p class="lead">Chat with Baker from your phone. An admin connects one bot for the workspace, then each person links their own chat.</p><p>Telegram lets you ask Baker about a deal, log a call or capture a todo from your phone. It has two halves: an admin connects one <strong>bot</strong> for the whole workspace, and then each person <strong>links</strong> their own Telegram account to it.</p>
+<p>Telegram is a way to reach Baker, so it needs an AI provider connected, apart from quick capture below.</p>
+<h2>Connecting the bot (admins)</h2>
+<figure class="shot"><img data-shot="settings-integrations" width="1400" height="1331" alt="Telegram screenshot"></figure>
+
+<ol>
+<li>In Telegram, talk to <strong>@BotFather</strong> and create a bot. It gives you a bot token.</li>
+<li>In CakeCRM, open <strong>Settings</strong>, <strong>Integrations</strong>, paste the token into <strong>Bot token</strong> on the Telegram card, and click <strong>Connect bot</strong>. A bad token is refused.</li>
+<li>Tell your team to link their phones.</li>
+</ol>
+<p>The token is stored encrypted and never shown again. Connecting a different bot later resets everyone's link, and each person links again.</p>
+<h2>Linking your phone (everyone)</h2>
+<p>Go to <strong>Settings</strong>, <strong>Personal</strong>, <strong>Link my Telegram</strong>. If no bot is connected yet, the card says so.</p>
+<ol>
+<li>Click <strong>Get my link code</strong>.</li>
+<li>Click <strong>Open Telegram to link</strong>, which opens a private chat with the bot carrying your code. Or send <code>/link</code> followed by your code in that chat.</li>
+<li>The code links the first device that uses it, then expires. <strong>Regenerate code</strong> issues a new one and releases your current device, which is how you move to a new phone.</li>
+</ol>
+<p><strong>Unlink my Telegram</strong> ends your link without affecting anyone else. See <a href="#/settings/personal">Personal settings</a>.</p>
+<h2>Chatting with Baker</h2>
+<p>Each linked chat is a full conversation with Baker. It sees the same CRM and tools as the drawer in the app, and anything it changes is recorded as you. Telegram chats run in Ask mode: when Baker wants to make a change that needs approval, the message arrives with <strong>Approve</strong> and <strong>Deny</strong> buttons, and only your account can press them. See <a href="#/baker/approvals">Approvals</a>.</p>
+<p>When Baker mentions a deal it looked at, the reply links to that deal on the pipeline board.</p>
+<h2>Quick capture</h2>
+<p>In GTD todo mode, a message starting with <code>capture</code> (or <code>/capture</code>) goes straight into your todo inbox without Baker running. It is instant, costs nothing, and works with no AI provider connected. See <a href="#/todos/todo-modes">Todo modes</a>.</p>
+<h2>What is not supported</h2>
+<ul>
+<li>Group chats. Baker only answers in a private chat.</li>
+<li>More than one bot per workspace.</li>
+</ul><nav class="pn"><a href="#/integrations/gmail"><small>Previous</small>Gmail</a><a class="next" href="#/self-hosting/deploying"><small>Next</small>Deploying CakeCRM</a></nav></article>
+<article data-route="self-hosting/deploying" data-title="Deploying CakeCRM" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/self-hosting/deploying">Self-hosting</a></p><h1>Deploying CakeCRM</h1><p class="lead">Run your own CakeCRM, either with the one-click Railway template or on your own machine.</p><p>CakeCRM is free and open source (AGPL-3.0), and you run your own copy. It needs a <strong>PostgreSQL</strong> database and nothing else: no Redis, no object store, no mail server. AI keys are optional and are entered in the app later, never as environment variables.</p>
+<h2>Deploy to Railway</h2>
+<p>The quickest route is the <strong>Deploy on Railway</strong> button in the project README.</p>
+<ol>
+<li>Click the button and set <code>AUTH_PASSWORD</code>, the first admin's starting password. It is the only input you provide.</li>
+<li>Railway creates the PostgreSQL database and deploys CakeCRM.</li>
+<li>Open your CakeCRM address and sign in. Optionally, add an AI provider in the app. See <a href="#/baker/ai-setup">AI setup</a>.</li>
+</ol>
+<p>The template supplies <code>DATABASE_URL</code>. <code>JWT_SECRET</code> (which signs sign-ins) and <code>ENCRYPTION_KEY</code> (which encrypts stored keys and tokens) are generated once and kept on the template's persistent volume, so a redeploy does not sign everyone out and stored credentials stay readable. Setting <code>JWT_SECRET</code> yourself is still recommended for production, because a secret you control survives the volume being recreated.</p>
+<h2>Run it on your own machine</h2>
+<p>You need Python and Node.js. Then:</p>
+<pre><code>git clone https://github.com/wwilson1017/CakeCRM.git
+cd CakeCRM
+python run.py
+</code></pre>
+<p><code>run.py</code> asks for an admin email and password, writes a <code>.env</code> file, installs dependencies, builds the app and starts it at <code>http://localhost:8000</code>. If PostgreSQL is not reachable and Docker is installed, it starts the bundled database with Docker Compose. Without Docker, point <code>DATABASE_URL</code> in <code>.env</code> at a PostgreSQL server you already have.</p>
+<h2>Settings in the environment</h2>
+<div class="wrap"><table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AUTH_PASSWORD</code></td>
+<td>Starting password for the first admin. Required.</td>
+</tr>
+<tr>
+<td><code>ADMIN_EMAIL</code>, <code>ADMIN_NAME</code></td>
+<td>The first admin's sign-in email and name. Default email <code>admin@cakecrm.local</code>.</td>
+</tr>
+<tr>
+<td><code>DATABASE_URL</code></td>
+<td>The PostgreSQL connection string.</td>
+</tr>
+<tr>
+<td><code>JWT_SECRET</code></td>
+<td>Signs sign-in sessions. Generated and kept if left unset.</td>
+</tr>
+<tr>
+<td><code>ENCRYPTION_KEY</code></td>
+<td>Encrypts AI keys, the Gmail secret and other stored credentials. Keep it stable.</td>
+</tr>
+<tr>
+<td><code>AUTH_PASSWORD_RESET</code></td>
+<td>Emergency admin password reset. See <a href="#/self-hosting/first-admin-and-passwords">First admin and passwords</a>.</td>
+</tr>
+<tr>
+<td><code>HEARTBEAT_ENABLED</code></td>
+<td>Baker's scheduled background work. On by default on Railway, off for a local run.</td>
+</tr>
+<tr>
+<td><code>BACKEND_URL</code></td>
+<td>Your public address, if you run behind your own domain or proxy. Gmail's redirect URI is built from it.</td>
+</tr>
+</tbody>
+</table></div>
+<p>The full list, with comments, is in <code>.env.example</code> in the repository.</p>
+<h2>Good to know</h2>
+<ul>
+<li>Only the <code>backend/data/</code> folder survives a Railway redeploy; everything else lives in PostgreSQL.</li>
+<li>The Ollama provider is for your own hardware and is hidden on Railway.</li>
+<li>To contribute changes back, read <code>CONTRIBUTING.md</code>. Contributions are signed off under the DCO; there is no CLA.</li>
+</ul><nav class="pn"><a href="#/integrations/telegram"><small>Previous</small>Telegram</a><a class="next" href="#/self-hosting/first-admin-and-passwords"><small>Next</small>First admin and passwords</a></nav></article>
+<article data-route="self-hosting/first-admin-and-passwords" data-title="First admin and passwords" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/self-hosting/deploying">Self-hosting</a></p><h1>First admin and passwords</h1><p class="lead">How the first admin account is created, how passwords change, and how to get back in when one is lost.</p><p>You sign in with an <strong>email and a password</strong>.</p>
+<figure class="shot"><img data-shot="login" width="1400" height="954" alt="First admin and passwords screenshot"></figure>
+
+<h2>The first admin</h2>
+<p>On its very first start, CakeCRM creates one admin account. Its email is <code>ADMIN_EMAIL</code> (default <code>admin@cakecrm.local</code>) and its password is <code>AUTH_PASSWORD</code>. Both are printed to the server logs on that first start, so check there if you are not sure what was used.</p>
+<p><code>AUTH_PASSWORD</code> is only the <strong>starting</strong> password. Once you change your password in the app, the new one is what counts, and editing <code>AUTH_PASSWORD</code> later has no effect.</p>
+<h2>Adding your team</h2>
+<p>Add people at <strong>Settings</strong>, <strong>Workspace</strong>, <strong>Team</strong>. There are two roles:</p>
+<ul>
+<li><strong>Member</strong> can use the whole CRM: records, pipeline, todos, notes, import, and Baker.</li>
+<li><strong>Admin</strong> can do all of that, plus manage users, AI keys, branding, integrations and the destructive operations.</li>
+</ul>
+<p>There is no seat limit. Accounts are never deleted, only deactivated, so a former colleague's name still shows on their records. See <a href="#/settings/workspace">Workspace settings</a>.</p>
+<h2>Changing your password</h2>
+<p>Go to <strong>Settings</strong>, <strong>Personal</strong>, <strong>Change password</strong>, and give your current password and the new one. The new password must be at least 8 characters. If two-factor is on for your account, the form also asks for a code.</p>
+<p>Changing your password <strong>signs out every other device immediately</strong>; the one you are using stays signed in.</p>
+<h2>When someone is locked out</h2>
+<ul>
+<li><strong>A member</strong> who forgot their password: an admin resets it at <strong>Settings</strong>, <strong>Workspace</strong>, <strong>Team</strong>, then tells them the new one. There is no emailed reset link, because a self-hosted install has no mail server to send one.</li>
+<li><strong>The admin</strong>, or everyone: the person running the server rescues it from the environment.</li>
+</ul>
+<p>To rescue the admin account:</p>
+<ol>
+<li>Set <code>AUTH_PASSWORD_RESET</code> to a new password and restart. On Railway, adding the variable redeploys, which is the restart.</li>
+<li>Sign in as the admin with that password. The logs carry a warning that the reset ran.</li>
+<li><strong>Remove <code>AUTH_PASSWORD_RESET</code> and restart again.</strong> While it is set, every restart applies it again, so a password you change in the app would not survive.</li>
+</ol>
+<p>The reset reactivates the admin account if it was deactivated, turns off its two-factor sign-in, and ends its sessions.</p>
+<h2>Two-factor sign-in</h2>
+<p>When two-factor is on for an account, the sign-in screen asks for the 6-digit code from an authenticator app, or a backup code. There is currently no screen in the app for turning two-factor on.</p><nav class="pn"><a href="#/self-hosting/deploying"><small>Previous</small>Deploying CakeCRM</a><span></span></nav></article>
+    <footer>Screenshots show fictional sample data. Found a mistake? <a href="https://github.com/wwilson1017/CakeCRM/issues">Open an issue</a>. CakeCRM is free software under the <a href="https://github.com/wwilson1017/CakeCRM/blob/main/LICENSE">AGPL-3.0</a>.</footer>
+  </main>
+</div>
+<div id="lightbox"><img alt=""></div>
+<script id="shots" type="application/json">{"add-contact": "shots/add-contact.webp", "add-deal": "shots/add-deal.webp", "ai-setup": "shots/ai-setup.webp", "companies-list": "shots/companies-list.webp", "company-detail": "shots/company-detail.webp", "contact-detail": "shots/contact-detail.webp", "contacts-list": "shots/contacts-list.webp", "dark-mode": "shots/dark-mode.webp", "dashboard": "shots/dashboard.webp", "deal-detail": "shots/deal-detail.webp", "import-modal": "shots/import-modal.webp", "login": "shots/login.webp", "memory": "shots/memory.webp", "mobile-dashboard": "shots/mobile-dashboard.webp", "mobile-menu": "shots/mobile-menu.webp", "pipeline-board": "shots/pipeline-board.webp", "pipeline-list": "shots/pipeline-list.webp", "reports": "shots/reports.webp", "sample-data-banner": "shots/sample-data-banner.webp", "settings-assistant": "shots/settings-assistant.webp", "settings-integrations": "shots/settings-integrations.webp", "settings-personal": "shots/settings-personal.webp", "settings-workspace": "shots/settings-workspace.webp", "todos-contexts": "shots/todos-contexts.webp", "todos-done": "shots/todos-done.webp", "todos-inbox": "shots/todos-inbox.webp", "todos-next": "shots/todos-next.webp", "todos-projects": "shots/todos-projects.webp", "todos-quick-add": "shots/todos-quick-add.webp", "todos-review": "shots/todos-review.webp", "todos-simple-list": "shots/todos-simple-list.webp", "todos-someday": "shots/todos-someday.webp", "todos-today": "shots/todos-today.webp", "todos-waiting": "shots/todos-waiting.webp"}</script>
+<script>
+const SHOTS = JSON.parse(document.getElementById('shots').textContent);
+const arts = [...document.querySelectorAll('main article')];
+const navLinks = [...document.querySelectorAll('aside a[data-route]')];
+const results = document.getElementById('results'), q = document.getElementById('q');
+function show(route) {
+  let hit = arts.find(a => a.dataset.route === route) || arts[0];
+  results.hidden = true;
+  arts.forEach(a => a.hidden = a !== hit);
+  hit.querySelectorAll('img[data-shot]:not([src])').forEach(img => img.src = SHOTS[img.dataset.shot]);
+  navLinks.forEach(a => a.classList.toggle('on', a.dataset.route === hit.dataset.route));
+  const sec = hit.dataset.route.split('/')[0];
+  document.querySelectorAll('aside details').forEach(d => { if (d.dataset.sec === sec) d.open = true; });
+  document.querySelector('aside a.on')?.scrollIntoView({ block: 'nearest' });
+  document.title = (hit.dataset.route ? hit.dataset.title + ' · ' : '') + 'CakeCRM Manual';
+  document.body.classList.remove('nav-open');
+}
+function route() { show(decodeURIComponent(location.hash.replace(/^#\/?/, ''))); window.scrollTo(0, 0); }
+addEventListener('hashchange', route); route();
+document.getElementById('menuBtn').onclick = () => document.body.classList.toggle('nav-open');
+const lb = document.getElementById('lightbox');
+document.addEventListener('click', e => {
+  if (e.target.matches('figure.shot img')) { lb.querySelector('img').src = e.target.src; lb.classList.add('open'); }
+  else if (lb.contains(e.target)) lb.classList.remove('open');
+});
+addEventListener('keydown', e => { if (e.key === 'Escape') lb.classList.remove('open'); });
+const index = arts.filter(a => a.dataset.route).map(a => ({ a, route: a.dataset.route, title: a.dataset.title,
+  lead: a.querySelector('.lead')?.textContent || '', sec: a.querySelector('.crumb a:last-child')?.textContent || '', text: a.textContent.toLowerCase() }));
+q.addEventListener('input', () => {
+  const s = q.value.trim().toLowerCase();
+  if (!s) return route();
+  const words = s.split(/\s+/);
+  const hits = index.filter(i => words.every(w => i.text.includes(w)))
+    .sort((x, y) => (y.title.toLowerCase().includes(s) - x.title.toLowerCase().includes(s)));
+  arts.forEach(a => a.hidden = true);
+  results.hidden = false;
+  results.innerHTML = `<p class="eyebrow">${hits.length} page${hits.length === 1 ? '' : 's'} match “${s.replace(/[<>&]/g, '')}”</p>` +
+    hits.map(i => `<a href="#/${i.route}"><em>${i.sec}</em><strong>${i.title}</strong><span>${i.lead}</span></a>`).join('');
+});
+results.addEventListener('click', e => { if (e.target.closest('a')) { q.value = ''; setTimeout(route); } });
+</script>
+</body>
+</html>

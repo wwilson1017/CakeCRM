@@ -87,3 +87,41 @@
   card before an email draft; Auto runs both; a draft is never sent. Re-check it against
   `frontend/src/assistant/AssistantPanelBody.tsx` and `backend/assistant/confirm_tier.py`
   whenever those change, the same as any other safety sentence on the page.
+
+- **The user manual is `mycakecrm.com/manual/` (#309)**, ported from the PlaybackCRM fork's
+  manual pattern (its PR #24) with CakeCRM's own pages. Source: one Markdown file per page in
+  `docs/manual/pages/<NN-section>/<NN-page>.md`, front matter `title`, `summary`,
+  `shots: [a, b]`, and `{{shot:name}}` on its own line where a screenshot goes; relative links
+  to other page files become `#/section/page` routes and a link to a missing page fails the
+  build. `docs/manual/build.py` renders every page into `docs/manual/template.html` and writes
+  `website/manual/index.html` + `website/manual/shots/*.webp`, both committed, so the existing
+  FTP deploy ships them with no workflow change (its action stays SHA-pinned). The page is one
+  hash-routed file (search, collapsible contents, lightbox, phone layout under 900 px), so the
+  pair.com docroot needs no rewrite rules. **It is not in the app bundle**; the app links to it
+  from a "?" in the desktop header and a Manual item in the phone drawer, and the site from its
+  nav and footer.
+  **Theme:** light only like the rest of the site; the template's tokens are a literal copy of
+  `style.css` `:root` and it loads the site's own Geist woff2 (no new font, no OFL change);
+  re-copy the tokens when the site palette changes. The mark sits left of the wordmark (the
+  hero exception does not extend here).
+  **Screenshots:** `node docs/manual/shoot.mjs --seed` (env `CAKECRM_URL`, `CAKECRM_EMAIL`,
+  `CAKECRM_PASSWORD`, `PLAYWRIGHT_CORE`) WIPES the CRM (`clear-all`), loads the fictional
+  sample data, adds what the sample set lacks (a GTD project, two waiting todos, a someday
+  todo), dismisses the AI nudge, then shoots 1280×800 at 2× into the git-ignored
+  `docs/manual/shots/`; it hides the example-data banner and the floating launcher, and
+  rewrites `localhost` URLs to `crm.example.com`. Point it only at a scratch or demo install;
+  the worker recipe is `~/.claude/bin/local-cakecrm.sh --slot S` then the Vite URL. `build.py`
+  frames each new PNG with `scripts/frame_readme_shots.frame` (light ground; `dark-mode` on the
+  dark one), caps it at 1400 px and saves WebP q80 with Pillow; a PNG not on this machine
+  keeps its committed webp, so a prose edit needs no reshoot. Not shot (need a provider key or
+  a phone): the Baker drawer, the Approve card, Telegram; notifications and recorded facts are
+  empty on fresh sample data, so those pages are prose.
+  **Guard:** `backend/tests/test_manual.py` rebuilds the HTML (`build_html`) and compares it
+  with the committed file, so an unbuilt page edit fails CI; it also pins declared vs placed
+  shots, no orphan webp, unique routes, a < 8 MB / ≤ 1400 px image budget, with self-tests for
+  the shot detector, the front-matter parser and the link check. That is why `markdown` sits in
+  `requirements-dev.txt`. Prose truth is convention: a PR that changes a user-facing flow
+  updates its manual page (AGENTS.md), and the Baker and Gmail pages owe the same check against
+  `AssistantPanelBody.MODES` and `confirm_tier.py` as the marketing copy. The help topic
+  `assistant/confirmations.md` was brought in line with the shipped Read / Ask / Auto modes in
+  the same PR. **Follow-up:** a Reminders page once #283 lands.
