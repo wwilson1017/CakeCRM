@@ -15,8 +15,9 @@
  * - Entries are **merge patches** (`{...row, ...patch}`), not replacements. Several CRM
  *   write responses are narrower than a list row (a derived `last_contact_at`, a joined
  *   `contact_name`), and a replacement would blank exactly the columns the list renders.
- * - There is a **`remove(id)` tombstone**, because CakeCRM hard-deletes contacts and todos
- *   where the blueprint archives them.
+ * - There is a **`remove(id)` tombstone**, because CakeCRM hard-deletes contacts where the
+ *   blueprint archives them, and a todo can leave the list mid-sweep (dropped since #299,
+ *   never deleted).
  * - `retry()` **clears the overlay before restarting the sweep**. Without that, a patch
  *   written before the re-sweep merges back over the fresh rows and resurrects stale state
  *   — e.g. completing a repeating todo re-sweeps to pick up the spawned occurrence, and a
