@@ -99,3 +99,14 @@ def test_update_and_void_on_a_missing_reminder_are_tool_errors(monkeypatch):
     ex = tools.get_reminder_tools(SEAT)[1]
     assert ex["reminder_update"](reminder_id=9, note="x") == {"error": "Not found"}
     assert ex["reminder_void"](reminder_id=9, reason="x") == {"error": "Not found"}
+
+
+def test_the_update_schema_can_clear_the_time_and_the_repeat():
+    """A model must be able to turn a timed or repeating reminder into a date-only or
+    one-time one: "" clears, and the service reads "" as none."""
+    from reminders import recurrence
+
+    props = {d["name"]: d["input_schema"]["properties"] for d in tools.REMINDER_TOOL_DEFS}
+    assert "" in props["reminder_update"]["repeat"]["enum"]
+    assert "" not in props["reminder_create"]["repeat"]["enum"]
+    assert recurrence.validate_repeat("") is None and recurrence.parse_time("") is None

@@ -39,6 +39,11 @@ _DUE_TIME = {"type": "string",
              "description": "HH:MM, 24-hour. Omit for a date-only reminder (sent at 09:00)."}
 _REPEAT = {"type": "string", "enum": list(REPEATS),
            "description": "Repeat on this cadence from the first date. Omit for one-time."}
+# The update variants also take "" to CLEAR the value (omitting a field leaves it as is).
+_DUE_TIME_UPDATE = {"type": "string",
+                    "description": "HH:MM, 24-hour, or \"\" to make it date-only (sent at 09:00)."}
+_REPEAT_UPDATE = {"type": "string", "enum": [*REPEATS, ""],
+                  "description": "A new cadence, or \"\" to make it one-time."}
 
 
 def _wrap(fn: Callable[..., dict]) -> Callable[..., dict]:
@@ -181,9 +186,9 @@ REMINDER_TOOL_DEFS: list[dict] = [
                 "reminder_id": {"type": "integer"},
                 "note": {"type": "string"},
                 "due_date": _DUE_DATE,
-                "due_time": _DUE_TIME,
+                "due_time": _DUE_TIME_UPDATE,
                 "people": _PEOPLE,
-                "repeat": _REPEAT,
+                "repeat": _REPEAT_UPDATE,
             },
             "required": ["reminder_id"],
         },

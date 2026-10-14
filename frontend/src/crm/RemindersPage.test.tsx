@@ -59,8 +59,10 @@ function setValue(el: HTMLTextAreaElement | HTMLInputElement, value: string) {
 }
 
 async function mount(rows: CrmReminder[], onWrite: (url: string, init?: { body?: string }) => unknown) {
-  apiMock.mockImplementation(async (url: string, init?: { body?: string }) =>
-    String(url).startsWith('/api/crm/reminders?') ? { reminders: rows } : onWrite(url, init));
+  apiMock.mockImplementation(async (url: string, init?: { body?: string }) => {
+    if (String(url).endsWith('/gtd/filters')) return { tz: 'UTC' };
+    return String(url).startsWith('/api/crm/reminders?') ? { reminders: rows } : onWrite(url, init);
+  });
   act(() => { root.render(<RemindersPage />); });
   await settle();
 }
@@ -93,9 +95,23 @@ afterEach(() => {
 describe('RemindersPage', () => {
   it('sweeps the corpus by id and lists each reminder with its people', async () => {
     await mount([reminder()], () => { throw new Error('no writes'); });
-    expect(String(apiMock.mock.calls[0][0])).toContain('sort=id');
+    const list = apiMock.mock.calls.map(c => String(c[0])).find(u => u.startsWith('/api/crm/reminders?'));
+    expect(list).toContain('sort=id');
     expect(container.textContent).toContain('Call the bakery');
     expect(container.textContent).toContain('Ada, Bo');
+  });
+
+  it('defaults a new reminder to the INSTALL\'s day, not the browser\'s', async () => {
+    // 03:00 UTC on the 14th is still the 13th in this test's pinned America/Chicago.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-14T03:00:00Z'));
+    try {
+      await mount([], () => { throw new Error('no writes'); });
+      await act(async () => { button('Add Reminder').click(); });
+      expect((document.querySelector('#reminder-date') as HTMLInputElement).value).toBe('2026-10-14');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('voids with a reason and shows the row as voided', async () => {

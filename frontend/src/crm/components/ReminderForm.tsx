@@ -16,7 +16,6 @@ import type { CrmReminder, ReminderRepeat } from '../../core/types';
 import { labelStyle, inputStyle, CORAL_TEXT, INK_MUTE } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary, btnDanger } from '../styles';
 import { writeMayHaveLanded } from '../usePatchableAssembly';
-import { useLocalDay } from '../useLocalDay';
 import { useUsers } from '../useUsers';
 import { REPEAT_LABELS, changedFields } from '../remindersCollection';
 
@@ -24,6 +23,8 @@ const MAX_NOTE = 2000;
 const MAX_REASON = 500;
 
 interface Props {
+  /** The install's day (YYYY-MM-DD): the default date and the earliest one offered. */
+  today: string;
   /** Edit this reminder. */
   reminder?: CrmReminder;
   /** Remind again: a new one-time reminder copying this one's note and people. */
@@ -33,9 +34,8 @@ interface Props {
   onWriteUncertain?: (err: unknown) => void;
 }
 
-export function ReminderForm({ reminder, againFrom, onClose, onSaved, onWriteUncertain }: Props) {
+export function ReminderForm({ today, reminder, againFrom, onClose, onSaved, onWriteUncertain }: Props) {
   const { currentUser } = useAuth();
-  const { today } = useLocalDay();
   const { users, nameFor } = useUsers();
   const source = reminder ?? againFrom;
   const [note, setNote] = useState(reminder?.note ?? '');

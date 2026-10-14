@@ -6,7 +6,7 @@
  * edited or voided; any reminder can be copied with Remind again. Each action closes the
  * detail before opening its form, as TodosPage does, so no modal is nested in another.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../core/api/client';
 import { useAuth } from '../core/auth/AuthContext';
 import type { CrmReminder } from '../core/types';
@@ -22,7 +22,8 @@ import { REPEAT_LABELS, makeRemindersCollectionConfig, reminderWhen } from './re
 import { useCrmCorpus, type CrmCorpus } from './usePatchableAssembly';
 import { useLocalDay } from './useLocalDay';
 import { useUsers } from './useUsers';
-import { formatDay } from './gtd/util';
+import { getFilters } from './gtd/api';
+import { formatDay, todayStr } from './gtd/util';
 
 const NO_ROWS: CrmReminder[] = [];
 
@@ -39,7 +40,15 @@ type Modal =
 export function RemindersPage() {
   const isMobile = useIsMobile();
   const { currentUser } = useAuth();
-  const { today } = useLocalDay();
+  // The INSTALL's day, not the browser's: the server validates and fires reminders in the
+  // install timezone (the GTD screens read it the same way, #259). On a UTC install a US
+  // browser's evening is already tomorrow there, so the browser day would default the
+  // form to a date the server refuses as past. useLocalDay re-renders at midnight; until
+  // the zone lands, the browser's day stands in.
+  useLocalDay();
+  const [tz, setTz] = useState<string | undefined>();
+  useEffect(() => { getFilters().then(f => setTz(f.tz)).catch(() => {}); }, []);
+  const today = todayStr(new Date(), tz);
   const { nameFor, loading: usersLoading } = useUsers();
   const [modal, setModal] = useState<Modal | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -104,12 +113,12 @@ export function RemindersPage() {
           />
         )}
 
-      {modal?.kind === 'create' && <ReminderForm onClose={close} onSaved={saved} onWriteUncertain={retry} />}
+      {modal?.kind === 'create' && <ReminderForm today={today} onClose={close} onSaved={saved} onWriteUncertain={retry} />}
       {modal?.kind === 'edit' && (
-        <ReminderForm reminder={modal.reminder} onClose={close} onSaved={saved} onWriteUncertain={retry} />
+        <ReminderForm today={today} reminder={modal.reminder} onClose={close} onSaved={saved} onWriteUncertain={retry} />
       )}
       {modal?.kind === 'again' && (
-        <ReminderForm againFrom={modal.reminder} onClose={close} onSaved={saved} onWriteUncertain={retry} />
+        <ReminderForm today={today} againFrom={modal.reminder} onClose={close} onSaved={saved} onWriteUncertain={retry} />
       )}
       {modal?.kind === 'void' && (
         <VoidReminderForm reminder={modal.reminder} onClose={close} onSaved={saved} onWriteUncertain={retry} />
