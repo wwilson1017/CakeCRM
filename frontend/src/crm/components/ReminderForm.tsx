@@ -110,7 +110,7 @@ export function ReminderForm({ reminder, againFrom, onClose, onSaved, onWriteUnc
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
               <label htmlFor="reminder-date" style={labelStyle}>Date *</label>
-              <input id="reminder-date" type="date" value={dueDate} min={today}
+              <input id="reminder-date" type="date" value={dueDate} min={reminder ? undefined : today}
                 onChange={e => setDueDate(e.target.value)} style={inputStyle} />
             </div>
             <div>
