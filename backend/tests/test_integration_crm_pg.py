@@ -291,12 +291,27 @@ def test_crud_fk_search_and_aggregates(pg_db):
     assert stats["overdue_todos"] == 1  # due 2000-01-01, incomplete
     assert stats["total_pipeline_value"] == 5000
 
-    # delete contact: deal.contact_id -> NULL (SET NULL), todo + activity deleted (cascade)
+    # #299: there is no todo delete route; the row is untouched by the attempt.
+    client = _client()
+    assert client.delete(f"/api/crm/todos/{t['id']}").status_code == 405
+    assert service.get_todo(t["id"])["title"] == "Follow up"
+
+    # #299: a finished todo on the contact is kept exactly as it is.
+    done = service.create_todo("Sent the quote", contact_id=c["id"])
+    service.complete_todo(done["id"])
+    dropped = service.create_todo("Old idea", contact_id=c["id"], status="dropped")
+
+    # delete contact: deal.contact_id -> NULL (SET NULL), activity deleted (cascade);
+    # todos are never deleted — they stay unlinked, and the open one is dropped (#299)
     assert service.delete_contact(1) is True
     assert service.get_contact(1) is None
     surviving = service.get_deal(d["id"])
     assert surviving is not None and surviving["contact_id"] is None
-    assert service.get_todo(1) is None
+    kept = {i: service.get_todo(i) for i in (t["id"], done["id"], dropped["id"])}
+    assert all(row is not None and row["contact_id"] is None for row in kept.values())
+    assert kept[t["id"]]["status"] == "dropped" and kept[t["id"]]["completed"] == 0
+    assert kept[done["id"]]["status"] == "done" and kept[done["id"]]["completed"] == 1
+    assert kept[dropped["id"]]["status"] == "dropped"
     assert service.get_activity_log() == []
 
 

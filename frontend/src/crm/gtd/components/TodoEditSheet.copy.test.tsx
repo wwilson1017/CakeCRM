@@ -15,7 +15,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../api', () => ({
   createTodo: vi.fn(),
   updateTodo: vi.fn(),
-  deleteTodo: vi.fn(),
 }));
 
 import { TodoEditSheet } from './TodoEditSheet';
