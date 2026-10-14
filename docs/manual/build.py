@@ -1,6 +1,6 @@
 """Build the user manual: docs/manual/pages/**/*.md -> website/manual/index.html (+ shots/*.webp).
 
-    pip install -r backend/requirements-dev.txt   # Python-Markdown; Pillow comes from requirements.txt
+    pip install -r backend/requirements-dev.txt   # Python-Markdown + pytest; Pillow comes from requirements.txt
     python docs/manual/build.py
 
 Screenshots: `node docs/manual/shoot.mjs --seed` writes raw 2x PNGs to the git-ignored docs/manual/shots/;
@@ -152,7 +152,16 @@ def encode_webp(name):
     img = frame(Image.open(src), "dark" if name in DARK_SHOTS else "light")
     if img.width > MAX_WIDTH:
         img = img.resize((MAX_WIDTH, round(img.height * MAX_WIDTH / img.width)), Image.LANCZOS)
-    img.save(out, "WEBP", quality=QUALITY, method=6)
+    # The genericization guard scans committed binaries too, and a short denylisted token can turn
+    # up in compressed bytes by chance; step the quality down until its own scanner passes.
+    sys.path.insert(0, str(ROOT / "backend" / "tests"))
+    from test_prompt_genericization import _decode, _repo_offenders
+    for q in range(QUALITY, QUALITY - 12, -1):
+        img.save(out, "WEBP", quality=q, method=6)
+        if not _repo_offenders(((out.relative_to(ROOT).as_posix(), _decode(out.read_bytes())),)):
+            return
+    out.unlink()
+    raise SystemExit(f"{name}: every quality down to {q} trips test_prompt_genericization; reshoot it")
 
 
 def main():
