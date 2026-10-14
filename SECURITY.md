@@ -226,51 +226,77 @@ Three rules override the tier entirely, in every mode:
 - the unattended assistant (heartbeat, proactive nudges) cannot reach any of
   these tools at all: its allowlist is read tools plus a single notification.
 
-## The no-login todo links
+## The no-login todo surfaces
 
-CakeCRM has **two unauthenticated todo surfaces**, and they are asymmetric — read the
-Default row in the table below before you assume both are off.
+CakeCRM has **two todo surfaces you can use without logging in**, and they are
+asymmetric — read the Default row in the table below before you assume both are off.
 
 Neither depends on which todo mode you are in. They are mounted always and gated only
 on their own settings, so switching between Todo-GTD and normal todos does not turn
-either one on or off — and because it does not, Settings → Todos shows their controls in
-either mode, whether or not either surface is currently configured. Switching to the
-simple todo list never hides a link that is still serving, and never hides the control
-that restricts one. Those controls are **admin-only**.
-
-They are authorized by an unguessable **secret token in the URL path**, not by a
-session — that is what makes them work as a phone bookmark or a home-screen app. A URL
-is a credential: anyone you send it to has the access it grants, it will sit in browser
-history and may appear in referrer headers or a proxy log. Treat it like a password.
+either one on or off — and because it does not, Settings → Assistant → Todo mode shows
+their controls in either mode. Those controls are **admin-only**.
 
 | | Quick capture | Full todo app |
 |---|---|---|
-| Path | `/capture` or `/capture/{token}` | `/todo` or `/todo/{token}` |
+| Path | `/capture` or `/capture/{token}` | `/todo`, the same for everyone |
+| Credential | A secret token in the URL path | A per-device browser session (a cookie) |
 | Grants | **Write-only** — creates one inbox item | **Read and write** on every todo |
 | Default | Reachable without a token (harmless: nothing is readable) | **Off entirely** |
-| Manage | Settings → Assistant → Todo mode | Settings → Assistant → Todo mode |
+| Manage | Settings → Assistant → Todo mode (admin) | Switch: Settings → Assistant → Todo mode (admin). Devices: Settings → Personal → Todo app devices (each seat, for its own devices) |
+
+**Quick capture** is authorized by an unguessable token in the URL path, which is what
+makes it work as a phone bookmark. That URL is a credential: anyone you send it to can
+post to your inbox, and it sits in browser history and proxy logs.
 
 - **Capture is genuinely write-only.** It accepts a block of text, files it in your
   inbox, and answers with nothing but the new item's id. There is no read endpoint on
   that surface — a caller cannot list, search or retrieve anything.
-- **The full app is the one that matters.** Its token grants the whole todo store,
-  read and write. It is off by default, and switching it on mints a secret token in
-  the same action rather than publishing your list at a guessable address. You *can*
-  clear the token to make it truly public; the Settings card says plainly what that
-  means.
-- **These tokens reach the todos and nothing else.** The public mount serves only the
-  todo/project endpoints. Contacts, deals, settings, the assistant and every other
-  part of the CRM stay behind your login.
-- **Rotating a token immediately kills the old link**, including any home-screen app
-  installed from it.
-- **Unknown tokens get a 404, never a 401 or 403** — an uninvited caller learns
-  nothing about whether a surface exists. Comparison is constant-time, and a
-  non-ASCII probe is a 404 rather than a server error.
+- **Rotating the capture token immediately kills the old link.**
+- **Unknown tokens get a 404, never a 401 or 403** — an uninvited caller learns nothing
+  about whether the surface exists. Comparison is constant-time, and a non-ASCII probe is
+  a 404 rather than a server error.
+
+**The full todo app** opens by **per-device browser sessions** (since #293; before that it
+was a secret link). There is nothing to copy, keep or re-send:
+
+- **A device signs in once with a sign-in code.** A signed-in person makes one under
+  Settings → Personal → Todo app devices: a QR code and a link that work **once, for one
+  hour**. Opening the link changes nothing; only pressing "Open my list on this device"
+  spends it. A wrong, used or expired code gets the same 404, and only codes that match
+  nothing consume the strict guess budget. The server stores only a SHA-256 hash of each
+  code, and at most ten unspent per person.
+- **The session lives in a cookie the page cannot read**: `HttpOnly`, `SameSite=Lax`,
+  `Path=/`, one year, and `Secure` with the `__Host-` prefix whenever the install's
+  address is https. The server stores only its hash, keeps at most 20 per person (one more
+  ends the least recently used) and treats a session idle for a year as ended.
+- **Sign out** on a device ends that device only. **Sign out everywhere** in Settings ends
+  every device that person signed in and cancels their unused codes. Signing a phone in
+  never signs another device out. A session belongs to the person who made its code, and
+  **deactivating that person ends their sessions** on the next request.
+- **Every write, and the sign-in itself, must come from the app's own pages.** A request
+  whose `Sec-Fetch-Site` is anything but `same-origin` — or, from a browser that does not
+  send it, whose `Origin` is not this install's own address — is refused with a 403 before
+  anything is read or written. A request with neither header is refused too.
+- **No session means "not signed in", never a login redirect.** `/todo` shows a short page
+  saying how to sign in, and the app's API answers 401 with no `WWW-Authenticate` header.
+  An address saved from before shows "This address is no longer used".
+- **The session reaches the todos and nothing else.** The app's API serves only the
+  todo/project endpoints, and nothing else in CakeCRM reads its cookie. Contacts, deals,
+  Settings, the assistant and every other part of the CRM stay behind your login.
+- **Switching the app off** answers 404 on every route of the surface at once.
+- **Upgrading from a link-based release**: the app stays on, and every device signs in
+  once. A home-screen icon added from the old link opens the "no longer used" page;
+  remove it and add `/todo` again once signed in.
+
+**Both surfaces:**
+
 - **Abuse protection ships with the feature**: per-IP rate limits on every public
-  endpoint, with a separate, stricter budget that only *wrong* tokens consume — so
-  guessing costs an attacker 30 tries per five minutes per IP while normal use never
-  touches it. Request bodies are size-checked before they are parsed. Every response
-  carries `Cache-Control: no-store` and `X-Robots-Tag: noindex, nofollow`.
+  endpoint, with a separate, stricter budget that only *wrong* tokens and sign-in codes
+  consume — so guessing costs an attacker 30 tries per five minutes per IP while normal
+  use never touches it. Request bodies are size-checked before they are parsed. Every
+  page, every successful API answer and every refusal at the surface's door (switched
+  off, not signed in, cross-site, wrong code, rate-limited) carries
+  `Cache-Control: no-store` and `X-Robots-Tag: noindex, nofollow`.
 - **What a stranger can do at worst**, with capture public: add junk to your inbox,
   up to the rate limit. Three controls keep that from becoming more than junk. Text
   captured this way is wrapped in a tamper-proof marker wherever the assistant reads it,
@@ -286,17 +312,18 @@ history and may appear in referrer headers or a proxy log. Treat it like a passw
   outright, and is the right move if the URL has been shared widely.
 - **The app keeps link tokens out of its own logs.** Every line CakeCRM writes — the
   request log, error tracebacks, the app's own messages — replaces the secret part of a
-  `/todo/…`, `/capture/…` or `/api/todo-web/…` address with `<redacted>`, including on
-  the "wrong token" path. In the Docker image the server writes no request log at all
-  unless you turn gunicorn's access log on, and that is scrubbed too.
+  `/capture/…` address, a sign-in link (`/todo/signin/…`, `/api/todo-web/signin/…`) and an
+  old `/todo/…` or `/api/todo-web/…` address with `<redacted>`, including on the "wrong
+  token" path. In the Docker image the server writes no request log at all unless you turn
+  gunicorn's access log on, and that is scrubbed too.
 - **A proxy in front of the app keeps its own log, and CakeCRM cannot scrub it.** On
   Railway, the platform's HTTP log records each request's method, full path and query
-  string, status and client IP before the request reaches CakeCRM, so a full todo link is
-  visible there to anyone with access to your Railway project. The same holds for any
-  reverse proxy, load balancer or CDN you put in front of a self-hosted install. Treat
-  access to those logs like access to the link, and rotate the token if the log has been
-  shared. Moving the secret out of the address, into a cookie set by a one-time landing
-  page, would close this; it is a planned follow-up, not something this release does.
+  string, status and client IP before the request reaches CakeCRM. For the todo app that
+  log now sees only sign-in links, each dead within the hour and spent on first use; the
+  session itself travels in a cookie, which those logs do not record. A capture link
+  there is still live: treat access to those logs like access to the link, and rotate the
+  capture token if the log has been shared. The same holds for any reverse proxy, load
+  balancer or CDN you put in front of a self-hosted install.
 
 ## The assistant's self-written identity (`soul.md`)
 

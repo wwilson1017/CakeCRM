@@ -239,7 +239,7 @@
   broadcasts with no reload. The flow is described to users in the
   `backend/help/content/todos/gtd.md` topic.
   Undoing a repeating todo leaves its spawned successor in place and says so. There is
-  no undo endpoint: the revert is the ordinary PUT, so the no-login `/todo/{token}` app
+  no undo endpoint: the revert is the ordinary PUT, so the no-login `/todo` app
   gets the feature too.
   **Where the block renders has two answers, from one queue** (#265, port of todo-gtd
   `162dcb3`): every page gets the floating bottom-right block `TodoShell` mounts, except
@@ -439,22 +439,22 @@
   contradicted). Neither consults `todo_mode`, so #102's default flip leaves both exactly
   as they were. `/capture[/{token}]` is **write-only** (creates one inbox row, returns only
   its id — no read endpoint exists on it) and is reachable while no token is set;
-  `/todo[/{token}]` serves the **whole todo app read+write** and is **off** until
-  `todo_web_enabled`, which mints a token in the same action rather than publishing
-  the list at a guessable address. Both mount ONLY `gtd_router.build_router` — the
-  token reaches todos and nothing else — and both carry `core/ratelimit.IPRateLimiter`
-  (a separate strict budget burned only by WRONG tokens), 404-never-401,
-  `hmac.compare_digest` on **bytes** (a non-ASCII probe must be a 404, not a 500),
-  `no-store` + `noindex` on every response *including* the unbuilt-frontend 503, and a
-  body-size check BEFORE JSON parsing. All four routers mount before the SPA catch-all
-  in `main.py` or the catch-all swallows them. Tokens are clamped to `[A-Za-z0-9_-]`
-  and rejected if they equal a page slug (`RESERVED_TODO_WEB_SLUGS`) — `todos` is
-  reserved because `/api/todo-web/todos/…` would otherwise shadow the API mount.
+  `/todo` serves the **whole todo app read+write** and is **off** until `todo_web_enabled`.
+  Since #293 the todo app opens by per-device browser sessions, not a path token (next-but-one
+  bullet). Both mount ONLY `gtd_router.build_router` (capture: one write) — the credential
+  reaches todos and nothing else — and both carry `core/ratelimit.IPRateLimiter` (a separate
+  strict budget burned only by WRONG tokens / sign-in codes), 404-never-401 on anything
+  token-shaped, `hmac.compare_digest` on **bytes** for the capture token (a non-ASCII probe
+  must be a 404, not a 500), `no-store` + `noindex` on every page and every refusal raised
+  at the door, and a body-size check BEFORE JSON parsing. All the routers mount before the
+  SPA catch-all in `main.py` or the catch-all swallows them. Capture tokens are clamped to
+  `[A-Za-z0-9_-]` and rejected if they equal a page slug (`RESERVED_TODO_WEB_SLUGS`).
   Documented in SECURITY.md.
 
 - **The link tokens never reach a log line the app writes** (#267, ported from todo-gtd's
   `logscrub.py`). `core/logscrub.ScrubTokens`, installed by `main.py` right after
-  `basicConfig`, replaces the segment after `/todo/`, `/capture/` or `/todo-web/` with
+  `basicConfig`, replaces the segment after `/todo/`, `/capture/` or `/todo-web/` (after
+  `…/signin/` for a #293 sign-in link, so the code is redacted, not the word) with
   `<redacted>` in a record's message, its tuple or dict args and its rendered traceback.
   The message is judged by what it PRINTS, like an argument: `log.error(exc)` passes the
   exception itself, which a string-only check let through unscrubbed until #292.
@@ -470,7 +470,69 @@
   serves `main.app` through a real uvicorn server, since a TestClient writes no access line,
   and attaches its capture straight to the uvicorn loggers without re-running `install()`, so
   the suite fails if `main` stops installing it. Railway's edge HTTP log is out of its reach;
-  SECURITY.md says what that log keeps and names the cookie redesign as the follow-up.
+  SECURITY.md says what that log keeps; since #293 the todo app's credential is a cookie,
+  so that log sees only hour-long single-use sign-in links.
+
+- **`/todo` opens by per-device browser sessions** (#293, port of todo-gtd `b55cacb` by way
+  of cake_os #3764 `fbbfadab8`). `crm/todo_sessions.py` owns two tables (migration
+  `*_todo_web_sessions.sql`): `todo_web_sessions` (one row per signed-in browser: SHA-256 of
+  the cookie token, the seat `user_id`, `created_at`, `last_used_at`) and
+  `todo_web_signin_tokens` (hash, seat, `expires_at`). Hashes only; `id BIGSERIAL` so every
+  ORDER BY ends on `id`; FK `ON DELETE CASCADE` to `users`. They are auth state and sit in
+  **neither** `_truncate_all` branch (like `saved_views`): a CRM reset does not sign phones
+  out. `crm_meta.todo_web_token` is kept but no longer read; dropping it is a follow-up once
+  no running revision reads it.
+  **Lifecycle:** a seat mints a code (`POST /api/crm/gtd/web-signin-link`, one hour, single
+  use, at most 10 unspent per seat, QR rendered server-side by `core/qr.py`). `GET
+  /todo/signin/{token}` is the page and redeems nothing; its button POSTs
+  `/api/todo-web/signin/{token}`, which in ONE transaction reads the seat (plain SELECT joined
+  to `users.is_active`), takes `pg_advisory_xact_lock(2930, user_id)`, spends the code with
+  `DELETE … RETURNING` (the single-use step; a racing loser gets None), ends the browser's
+  previous session if it belongs to the same seat, prunes the seat to 19 sessions by
+  `last_used_at DESC, id DESC` and inserts. Lock order is seat lock then row locks for every
+  writer; a cross-seat `replaces` is left alone precisely so no writer row-locks another
+  seat's rows. Cookie: `HttpOnly; SameSite=Lax; Path=/`, one fixed year, `Secure` + the
+  `__Host-` prefix iff `frontend_url` is https (a plain-http LAN install would never store a
+  Secure cookie); only the redemption sets it and nothing clears it. `last_used_at` slides at
+  most hourly (Python skip + `WHERE last_used_at < threshold`, never backward); a session idle
+  a year is dead; dead rows are ignored on read and swept for that seat whenever a session or
+  code is made — no scheduled job.
+  **HTTP rules (`crm/todo_web.py`):** `_session_api_guard` (the `build_router` guard, also on
+  `/session` and `/signout`) 404s while off, runs `_same_origin` on every non-GET, rate-limits,
+  then 401s with NO `WWW-Authenticate` when there is no live session — a signed-out browser
+  never charges the guess limiter. `_same_origin`: `Sec-Fetch-Site` decides when present
+  (only `same-origin` passes); else `Origin` must equal the configured `frontend_url` origin,
+  or on an unconfigured install the request's own scheme+Host; neither header is refused. The
+  redemption checks it FIRST (login CSRF: SameSite cannot protect a request that reads no
+  cookie). The page route answers three ways, none a redirect: a first segment outside
+  `_PAGE_SLUGS` (pinned against `PublicTodoApp.tsx` by `test_page_slugs_match_the_spa_routes`)
+  is an old tokened address → the byte-identical "This address is no longer used" 404 with
+  no lookup; no session → the signed-out page (200); else the shell (one manifest, `scope`
+  `/todo`, `referrer: no-referrer`). `/api/todo-web/{token}/{rest:path}` is a JSON-404
+  tombstone so an old client's GET does not fall through to the SPA shell.
+  **Seats:** any signed-in seat signs in its own devices; the three member routes
+  (`web-signin-link`, `web-sessions`, `web-signout-all`) are on `gtd_router.router` (never
+  `build_router`) and act on the caller's seat only; "Sign out everywhere" is that seat's
+  sessions + unspent codes. The on/off switch stays admin-only on `/api/crm/todo-surfaces`.
+  A session does NOT act as its seat inside the app (install-wide view, as before); the seat
+  is recorded only so deactivating it ends its sessions — every lookup joins
+  `users.is_active`. Settings: the member card `TodoDevicesCard` (Personal, `todo_devices`)
+  shows the count, the code and **Sign out everywhere**; while the app is off it says so and
+  offers nothing; `TodoModeCard` keeps the switch and the capture link.
+  **Frontend:** `publicMode.ts` is a fixed base (`/todo`, `/api/todo-web`); `session.ts` is a
+  state-only store (no api import, so no cycle); `PublicTodoApp`'s `SessionGate` asks `GET
+  /api/todo-web/session` once and shows `SignedOutPage` on 401 (a state, never a navigation);
+  `api.ts` raw fetch throws `ApiError` and flips the store on any 401; `/signin/:token` sits
+  outside the gate; the shell header carries `ThisDevice` (Sign out this device).
+  **Upgrade:** the app stays on; every device signs in once, and a home-screen icon from the
+  old link opens the "no longer used" page until it is re-added.
+  **Not ported:** sign-in by email, list creation, caps/idle lifecycle beyond the two caps and
+  the idle year, a per-device list, and upstream's `X-List`/`X-Todo-Owner` tab-pinning 409 —
+  there is one install-wide list here, so a second seat signing in on the same browser
+  changes nothing a tab shows. Tests: `test_todo_public.py` (routes, with an in-memory
+  session fake), `test_todo_sessions.py` (transaction shape), and
+  `test_todo_web_sessions_integration.py` (real Postgres: single use under a race, caps,
+  idle year, deactivation, CRM reset).
 
 - **The follow-up feature is Todos in every layer** (#169), and "task" is not a synonym
   for it anywhere: tables `todos`/`todo_projects`, column `crm_meta.todo_mode`, REST
@@ -495,7 +557,7 @@
   only the zone read it with `useTodoMeta.useListTz()`, a `useSyncExternalStore` over the
   shared meta cache that never fetches (every GTD page sits inside `TodoShell`, whose
   `useTodoMeta` does). **The rule: a new client-side day decision in GTD takes
-  `todayStr(new Date(), useListTz())`, never a bare `todayStr()`.** The public `/todo/<token>`
+  `todayStr(new Date(), useListTz())`, never a bare `todayStr()`.** The public `/todo`
   app inherits it, since `build_router` serves the same filters route there. `dueLabel`'s
   "Tomorrow" moved from `+24h` to `day + 1` in the same pass, because the day the clocks
   change is 23 or 25 hours long. `listTimeZone.test.tsx` pins the issue's acceptance case

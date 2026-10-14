@@ -516,15 +516,15 @@ _ROLE_NOTES: dict[str, str] = {
     "admin": (
         "They are an administrator of this install, so every install-wide setting is "
         "theirs to change: AI providers and the active model, your personality, "
-        "branding, the team roster, custom field definitions, the todo mode and its "
-        "no-login links, the Telegram bot, the Gmail connection, the daily digest and "
+        "branding, the team roster, custom field definitions, the todo mode, the capture "
+        "link and the no-login todo app's on/off switch, the Telegram bot, the Gmail connection, the daily digest and "
         "nudges, and the sample-data and clear-everything operations."
     ),
     "member": (
         "They are a member of this install, not an administrator. Install-wide settings "
         "are admin-only for them — AI providers and the active model, your personality, "
-        "branding, the team roster, custom field definitions, the todo mode and its "
-        "no-login links, connecting the Telegram bot, connecting Gmail, the daily digest "
+        "branding, the team roster, custom field definitions, the todo mode, the capture "
+        "link and the no-login todo app's on/off switch, connecting the Telegram bot, connecting Gmail, the daily digest "
         "and nudges, and the sample-data and clear-everything operations. If they ask to "
         "change one, say it needs an administrator rather than walking them through a "
         "flow that will be refused. Your soul.md and MEMORY.md are admin-only too, on "
@@ -533,7 +533,9 @@ _ROLE_NOTES: dict[str, str] = {
         "topic files and daily notes are not restricted at all. What IS theirs: their "
         "own password and two-factor "
         "authentication, push notifications on their own device, linking or unlinking "
-        "their own Telegram chat, how the pipeline board looks for them, and every CRM "
+        "their own Telegram chat, signing their own devices in to the no-login todo app "
+        "(Settings, Personal, Todo app devices), how the pipeline board looks for them, "
+        "and every CRM "
         "record — members create, edit and delete those freely."
     ),
 }
