@@ -7,7 +7,7 @@ upstream change, check here for whether it already landed.
 Rows are added **only by the port PR itself**, so the ledger is something a human
 reviewed rather than something a machine asserted.
 
-**Schema** — both tables below use the same four columns:
+**Schema** — both tables below use the same four columns, so tooling parses one shape:
 
 | Column | Contents |
 |---|---|
@@ -18,7 +18,7 @@ reviewed rather than something a machine asserted.
 
 > **Privacy note.** The `Feature` cell is human prose written in a reviewed PR. That is
 > review policy, not a structural guarantee. Keep entries generic: no customer, staff, or
-> product names. See `SECURITY.md`.
+> product names. `backend/tests/test_sync_ledger.py` rejects email addresses and diff fences.
 
 ---
 
