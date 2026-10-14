@@ -390,6 +390,17 @@ def test_wrong_codes_burn_the_strict_guess_limiter(client, on):
     assert r.headers["cache-control"] == "no-store"
 
 
+def test_a_spent_guess_budget_refuses_even_a_good_code(client, on, sessions):
+    """Otherwise a guesser past the budget still wins on the first correct try."""
+    for _ in range(30):
+        client.post("/api/todo-web/signin/nope", headers=SAME_ORIGIN)
+    sessions.codes["real"] = 7
+    r = client.post("/api/todo-web/signin/real", headers=SAME_ORIGIN)
+    assert r.status_code == 429
+    assert "set-cookie" not in r.headers
+    assert sessions.codes == {"real": 7}, "nothing was looked up or spent"
+
+
 def test_a_good_code_never_charges_the_guess_limiter(client, on, sessions):
     for i in range(35):
         _sign_in(client, sessions, code=f"c{i}")

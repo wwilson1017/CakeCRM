@@ -504,7 +504,8 @@
   (only `same-origin` passes); else `Origin` must equal the configured `frontend_url` origin,
   or on an unconfigured install the request's own scheme+Host; neither header is refused. The
   redemption checks it FIRST (login CSRF: SameSite cannot protect a request that reads no
-  cookie). The page route answers three ways, none a redirect: a first segment outside
+  cookie), then refuses with 429 while the guess budget is spent (`IPRateLimiter.exhausted`,
+  a non-spending peek) so a guesser past the budget cannot still win on a correct try. The page route answers three ways, none a redirect: a first segment outside
   `_PAGE_SLUGS` (pinned against `PublicTodoApp.tsx` by `test_page_slugs_match_the_spa_routes`)
   is an old tokened address → the byte-identical "This address is no longer used" 404 with
   no lookup; no session → the signed-out page (200); else the shell (one manifest, `scope`
@@ -515,8 +516,9 @@
   `build_router`) and act on the caller's seat only; "Sign out everywhere" is that seat's
   sessions + unspent codes. The on/off switch stays admin-only on `/api/crm/todo-surfaces`.
   A session does NOT act as its seat inside the app (install-wide view, as before); the seat
-  is recorded only so deactivating it ends its sessions — every lookup joins
-  `users.is_active`. Settings: the member card `TodoDevicesCard` (Personal, `todo_devices`)
+  is recorded only so deactivating it ends its sessions — `users.service.update_user`
+  deletes the seat's sessions and codes in the deactivating transaction (so reactivation
+  does not revive an old phone), and every lookup also joins `users.is_active`. Settings: the member card `TodoDevicesCard` (Personal, `todo_devices`)
   shows the count, the code and **Sign out everywhere**; while the app is off it says so and
   offers nothing; `TodoModeCard` keeps the switch and the capture link.
   **Frontend:** `publicMode.ts` is a fixed base (`/todo`, `/api/todo-web`); `session.ts` is a

@@ -239,7 +239,8 @@ was a secret link). There is nothing to copy, keep or re-send:
 - **Sign out** on a device ends that device only. **Sign out everywhere** in Settings ends
   every device that person signed in and cancels their unused codes. Signing a phone in
   never signs another device out. A session belongs to the person who made its code, and
-  **deactivating that person ends their sessions** on the next request.
+  **deactivating that person deletes their sessions and codes**, so reactivating them
+  later does not sign an old device back in.
 - **Every write, and the sign-in itself, must come from the app's own pages.** A request
   whose `Sec-Fetch-Site` is anything but `same-origin` — or, from a browser that does not
   send it, whose `Origin` is not this install's own address — is refused with a 403 before

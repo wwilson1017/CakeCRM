@@ -178,7 +178,11 @@ def test_deactivating_a_seat_ends_its_sessions_and_codes(seats):
     assert ts.resolve_session(session, now=NOW) is None
     assert ts.redeem_signin_token(code, now=NOW) is None
     assert ts.resolve_session(theirs, now=NOW)
+    # Reactivating the seat does not bring the old device or code back.
     users.update_user(a, is_active=True)
+    assert ts.resolve_session(session, now=NOW) is None
+    assert ts.redeem_signin_token(code, now=NOW) is None
+    assert _rows("SELECT 1 FROM todo_web_sessions WHERE user_id = %s", (a,)) == []
 
 
 def test_the_21st_session_evicts_the_least_recently_used(seats):

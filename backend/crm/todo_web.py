@@ -340,11 +340,16 @@ def todo_web_redeem(token: str, request: Request, response: Response):
     Same-origin FIRST, before any limiter spend or lookup: SameSite=Lax cannot protect
     a request that reads no cookie, so this check is what stops a cross-site page
     signing a victim's browser into someone else's session. One 404 for a wrong, spent
-    or expired code; only those charge the strict guess limiter.
+    or expired code; only those charge the strict guess limiter, and once it is spent
+    every redemption from that address is a 429 until it refills.
     """
     _enabled_or_404()
     _same_origin(request)
     _rate_or_429(request)
+    # A spent guess budget stops the next try too, even one that would succeed —
+    # otherwise guessing past the budget costs only the 429s on the misses.
+    if guess_limiter.exhausted(_client_ip(request)):
+        raise _too_many()
     redeemed = todo_sessions.redeem_signin_token(token, replaces=_cookie_token(request))
     if redeemed is None:
         if not guess_limiter.allow(_client_ip(request)):
