@@ -2497,7 +2497,9 @@ def _apply_todo_update_cur(cur, todo_id: int, fields: dict) -> bool:
     # `status` always wins — a caller that sends both means the status.
     fields = dict(fields)
     if "completed" in fields:
-        completed = bool(fields.pop("completed"))
+        # Validated, not truthiness: the agent tool is untyped, so the text "false" reaches
+        # here and bool() would complete the todo (#298). A refusal writes nothing.
+        completed = gtd_common.validate_flag(fields.pop("completed"), "completed")
         if "status" not in fields:
             if completed:
                 fields["status"] = "done"

@@ -1846,8 +1846,12 @@ def crm_complete_todo(todo_id: int) -> dict:
 
 def crm_update_todo(todo_id: int, **kwargs) -> dict:
     # The service filters to its own allow-list, so an unknown key is ignored rather
-    # than reaching the UPDATE.
-    result = crm.update_todo(todo_id, **kwargs)
+    # than reaching the UPDATE. A refused value (a malformed due date, `completed` that is
+    # not true/false) comes back as the tool's error, not the registry's generic failure.
+    try:
+        result = crm.update_todo(todo_id, **kwargs)
+    except ValueError as e:
+        return {"error": str(e)}
     if not result:
         return {"error": f"Todo {todo_id} not found"}
     return _with_target(result, "todo", todo_id, record=result)
