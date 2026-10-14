@@ -25,6 +25,8 @@ Every todo has exactly one:
 do it instead of tracking it. Not a next action, file it as waiting-for, delegated or
 someday-maybe. Otherwise, setting the context is the **last** step — it files the item as a
 next action and clears it out of the inbox — so agree the context before writing it.
+**Edit** on the triage card opens the full edit sheet once any note or date you just changed
+has saved; the card is locked until then, so nothing changed meanwhile gets undone.
 
 **Next actions are physical, visible verbs.** "Call the dentist to book a cleaning", not
 "dentist". Rewrite vague todos whenever you touch them.
