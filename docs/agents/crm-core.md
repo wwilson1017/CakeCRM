@@ -1199,3 +1199,19 @@
   UTC midnight renders a day early west of Greenwich. **A test here must pin the zone-LESS case
   to be falsifiable at all** — every engine parses a microsecond string either way, so the
   obvious test passes against the code it is meant to reject.
+
+- **All-data CSV export** (#302, port of PlaybackCRM #34) — admin-only `GET /api/crm/export`
+  streams a ZIP with one CSV per table (`crm/export.py`), surfaced as the Workspace **Export
+  data** card. Every schema table is placed in `export.TABLES` or `export.NOT_EXPORTED` with
+  its reason; `test_crm_export.py` replays the migrations (creates, renames, drops) and reads
+  both `_truncate_all` statements off a fake cursor, so **a new table fails CI until it is
+  placed** — a new data table that joins `_truncate_all` joins one of the two sets in the
+  same PR. Out: credentials and tokens, integration state, assistant bookkeeping, note
+  attachment bytes, and assistant conversations (owner-only with no admin override, so an
+  admin export must not carry them). `users` ships public columns only. One REPEATABLE READ
+  read-only snapshot; each table goes through a server-side cursor `PAGE_ROWS` at a time
+  and each page's compressed bytes are yielded before the next fetch, so neither a table
+  nor the ZIP is held whole. An abandoned download closes the generator and the pool rolls
+  the snapshot back (pinned in `test_crm_export_integration.py`). Cells a spreadsheet would
+  run as a formula (`= + - @`, tab, CR) get a leading apostrophe; JSON columns are written
+  as JSON.
