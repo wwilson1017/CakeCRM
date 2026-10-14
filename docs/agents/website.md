@@ -112,7 +112,9 @@
   rewrites `localhost` URLs to `crm.example.com`. Point it only at a scratch or demo install;
   the worker recipe is `~/.claude/bin/local-cakecrm.sh --slot S` then the Vite URL. `build.py`
   frames each new PNG with `scripts/frame_readme_shots.frame` (light ground; `dark-mode` on the
-  dark one), caps it at 1400 px and saves WebP q80 with Pillow; a PNG not on this machine
+  dark one), caps it at 1400 px and saves WebP q80 with Pillow, stepping the quality down while the
+  genericization guard's own scanner finds a denylisted token in the compressed bytes (it
+  happened on the first build: the guard scans committed binaries); a PNG not on this machine
   keeps its committed webp, so a prose edit needs no reshoot. Not shot (need a provider key or
   a phone): the Baker drawer, the Approve card, Telegram; notifications and recorded facts are
   empty on fresh sample data, so those pages are prose.
