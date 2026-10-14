@@ -10,7 +10,7 @@ import inspect
 
 import psycopg2
 
-from crm import chatter_service, field_service, service, tools
+from crm import chatter_service, field_service, gtd_common, service, tools
 from crm.tools import CRM_TOOL_DEFS, TOOL_EXECUTORS, get_crm_tools
 
 
@@ -209,6 +209,15 @@ def test_contact_deal_tools_translate_fk_violation(monkeypatch):
     assert tools.crm_update_contact(1, company_id=999) == {"error": "Referenced company does not exist"}
     assert tools.crm_create_deal("D", company_id=999) == {"error": "Referenced contact or company does not exist"}
     assert tools.crm_update_deal(1, company_id=999) == {"error": "Referenced contact or company does not exist"}
+
+
+def test_update_todo_tool_returns_a_refused_value_as_its_error(monkeypatch):
+    """#298: the service's refusal reaches the assistant as the tool's own error, not the
+    registry's generic "failed, please try again"."""
+    def refuse(*a, **kw):
+        raise gtd_common.ValidationError("completed must be true or false")
+    monkeypatch.setattr(service, "update_todo", refuse)
+    assert tools.crm_update_todo(1, completed="false") == {"error": "completed must be true or false"}
 
 
 def test_chatter_tools_present_and_shaped():

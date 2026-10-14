@@ -506,8 +506,9 @@
   boolean, 0/1 or None and refuses everything else, and `service._create_todo_cur` /
   `_apply_todo_update_cur` use it for `star` and `auto_star_on_due`. `bulk_update`'s `fields`
   dict and the assistant's tools reach those functions untyped, so `bool("false")` used to
-  star every listed todo. (`completed` keeps its truthiness: normal mode sends it as an int
-  and `test_update_todo_writes_completed_and_status_together` pins that.) **Quick Add and a project's "Add a next action" clear only
+  star every listed todo. #298 extended it to `completed` in `_apply_todo_update_cur`, so
+  `"false"` or `2` is refused and writes nothing, and `crm_update_todo` returns the refusal
+  as its error. **Quick Add and a project's "Add a next action" clear only
   the draft that was sent**: both boxes stay editable while the add is in flight, so text typed
   meanwhile survives the add landing. Each box counts its edits and clears only if untouched
   since the send — a text compare would clear a next todo that starts with the same words —
