@@ -12,7 +12,7 @@ Baker can read and change CRM records, work your todos, keep its own memory and 
 
 Baker can search, create and update contacts, companies and deals, move a deal's stage, mark a deal won or lost, log activities, and create, update and complete todos. Whether each change runs straight away or waits for your **Approve** depends on the mode you pick. See [Approvals](03-approvals.md).
 
-Deleting a contact, a company, a deal or a todo is permanent; there is no recycle bin. Archiving a deal is the recoverable option, and a todo can be dropped instead of deleted.
+Deleting a contact, a company or a todo is permanent; there is no recycle bin. Deals cannot be deleted at all: archiving is the way to remove one, and it can be restored. A todo can be dropped instead of deleted.
 
 One turn can make at most 20 changes. Past that, Baker's further changes are refused.
 

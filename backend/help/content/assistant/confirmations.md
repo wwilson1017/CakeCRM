@@ -53,6 +53,6 @@ budget still.
 
 ## Deleting is real
 
-Deleting a contact, a company, a deal or a todo is permanent — there is no recycle bin.
-Archiving a deal is the recoverable option (`pipeline/archived-deals`), and a todo can be set
+Deleting a contact, a company or a todo is permanent — there is no recycle bin. Deals have no
+delete at all; archiving is how one is removed, and it is recoverable (`pipeline/archived-deals`), and a todo can be set
 to dropped instead of deleted.

@@ -10,7 +10,7 @@ You sign in with an **email and a password**.
 
 ## The first admin
 
-On its very first start, CakeCRM creates one admin account. Its email is `ADMIN_EMAIL` (default `admin@cakecrm.local`) and its password is `AUTH_PASSWORD`. Both are printed to the server logs on that first start, so check there if you are not sure what was used.
+On its very first start, CakeCRM creates one admin account. Its email is `ADMIN_EMAIL` (default `admin@cakecrm.local`) and its password is `AUTH_PASSWORD`. The server log on that first start names the email address but never prints the password: read `AUTH_PASSWORD` from your deployment's settings, or set a new one with `AUTH_PASSWORD_RESET` (below).
 
 `AUTH_PASSWORD` is only the **starting** password. Once you change your password in the app, the new one is what counts, and editing `AUTH_PASSWORD` later has no effect.
 

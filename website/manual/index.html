@@ -1468,7 +1468,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <p>Baker can read and change CRM records, work your todos, keep its own memory and knowledge files, search and read connected Gmail, and put drafts in your Gmail Drafts folder. It cannot send email, cannot change install settings, and cannot act outside CakeCRM.</p>
 <h2>CRM records and todos</h2>
 <p>Baker can search, create and update contacts, companies and deals, move a deal's stage, mark a deal won or lost, log activities, and create, update and complete todos. Whether each change runs straight away or waits for your <strong>Approve</strong> depends on the mode you pick. See <a href="#/baker/approvals">Approvals</a>.</p>
-<p>Deleting a contact, a company, a deal or a todo is permanent; there is no recycle bin. Archiving a deal is the recoverable option, and a todo can be dropped instead of deleted.</p>
+<p>Deleting a contact, a company or a todo is permanent; there is no recycle bin. Deals cannot be deleted at all: archiving is the way to remove one, and it can be restored. A todo can be dropped instead of deleted.</p>
 <p>One turn can make at most 20 changes. Past that, Baker's further changes are refused.</p>
 <h2>Email</h2>
 <p>Gmail is <strong>read and create-draft only</strong>. Baker can search your mail, read a thread and write a draft into your Gmail Drafts folder. It can never send an email. No tool in CakeCRM sends mail, and a test fails the build if one is ever added. You review and send every draft yourself, from Gmail. See <a href="#/integrations/gmail">Gmail</a>.</p>
@@ -1928,7 +1928,7 @@ python run.py
 <figure class="shot"><img data-shot="login" width="1400" height="954" alt="First admin and passwords screenshot"></figure>
 
 <h2>The first admin</h2>
-<p>On its very first start, CakeCRM creates one admin account. Its email is <code>ADMIN_EMAIL</code> (default <code>admin@cakecrm.local</code>) and its password is <code>AUTH_PASSWORD</code>. Both are printed to the server logs on that first start, so check there if you are not sure what was used.</p>
+<p>On its very first start, CakeCRM creates one admin account. Its email is <code>ADMIN_EMAIL</code> (default <code>admin@cakecrm.local</code>) and its password is <code>AUTH_PASSWORD</code>. The server log on that first start names the email address but never prints the password: read <code>AUTH_PASSWORD</code> from your deployment's settings, or set a new one with <code>AUTH_PASSWORD_RESET</code> (below).</p>
 <p><code>AUTH_PASSWORD</code> is only the <strong>starting</strong> password. Once you change your password in the app, the new one is what counts, and editing <code>AUTH_PASSWORD</code> later has no effect.</p>
 <h2>Adding your team</h2>
 <p>Add people at <strong>Settings</strong>, <strong>Workspace</strong>, <strong>Team</strong>. There are two roles:</p>
