@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
-// The no-login todo surface (#70) is decided at module load from the basename the backend
-// injected, and since #149 that decision lives in `Root.tsx` with BOTH branches lazy. This
+// The no-login todo surface (#70) is decided at module load from the fixed /todo address
+// (a browser session since #293, no token in the URL), and since #149 that decision lives in `Root.tsx` with BOTH branches lazy. This
 // renders the REAL boot path — `Root`, the exact component `main.tsx` renders — not
 // PublicTodoApp in isolation, so a wrong branch, a lost basename, or a Suspense that never
 // resolves fails here rather than as a blank page on someone's phone.
@@ -30,23 +30,23 @@ vi.mock('./api', () => ({
   getFilters: vi.fn().mockResolvedValue({ contexts: [], tags: [], status_counts: {} }),
   getReviewStatus: vi.fn().mockResolvedValue({ review_due: false, days_since_review: 1 }),
   markReviewDone: vi.fn(),
+  // #293's session calls. Signed in unless a case says otherwise.
+  getSession: vi.fn().mockResolvedValue({ ok: true }),
+  redeemSignIn: vi.fn(),
+  signOut: vi.fn(),
 }));
 
-/** The secret itself, separately, because `auditLinks` checks it does not leave the origin. */
-const TOKEN = 'SECRETTOKEN';
-const TOKEN_BASE = `/todo/${TOKEN}`;
+/** The app's one fixed address (#293). */
+const BASE = '/todo';
 /** TodoShell's tagline — rendered by every GTD page in both modes, and by nothing in the CRM. */
 const TODO_SHELL_MARKER = 'Mind like water.';
 
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot> | null = null;
 
-/** Put the window on a path, with or without the server's base injection. Both are read at
- *  publicMode's module load, so every test re-imports Root after calling this. */
-function visit(pathname: string, injectedBase?: string): void {
-  const w = window as unknown as { __CAKECRM_TODO_BASE__?: string };
-  if (injectedBase) w.__CAKECRM_TODO_BASE__ = injectedBase;
-  else delete w.__CAKECRM_TODO_BASE__;
+/** Put the window on a path. It is read at publicMode's module load, so every test
+ *  re-imports Root after calling this. */
+function visit(pathname: string): void {
   window.history.replaceState({}, '', pathname);
 }
 
@@ -58,7 +58,7 @@ beforeEach(() => {
     addEventListener: () => {}, removeEventListener: () => {},
     addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
   }));
-  visit(TOKEN_BASE, TOKEN_BASE);
+  visit(BASE);
   host = document.createElement('div');
   document.body.appendChild(host);
 });
@@ -116,20 +116,9 @@ async function settle(marker: string, timeoutMs = SETTLE_TIMEOUT_MS): Promise<vo
 }
 
 /**
- * Every link currently on screen stays inside the token'd prefix, and the token never leaves
- * the origin.
- *
- * TWO separate questions, and the second is the one a same-origin-only check silently drops:
- *
- *   1. **Containment.** In-app links are built by `todoPath()` and the router basename turns
- *      them into /todo/{token}/… . Checked on the RESOLVED absolute URL rather than the raw
- *      attribute, because a relative `href="inbox"` resolves against the current URL — from
- *      /todo/SECRETTOKEN that is /todo/inbox, the token silently dropped and the installed PWA
- *      dead-ended — and a `startsWith('/')` filter would skip exactly that shape.
- *   2. **Leakage.** A cross-origin anchor is not "not our problem": the token is the whole
- *      secret of this surface, and an external href that embeds it hands it to another origin
- *      (and to that request's Referer). Filtering cross-origin URLs out before checking is what
- *      makes a leak invisible, so they are checked HERE rather than excluded.
+ * Every link currently on screen stays inside the /todo app. Checked on the RESOLVED
+ * absolute URL rather than the raw attribute, because a relative `href="inbox"` resolves
+ * against the current URL, and a `startsWith('/')` filter would skip exactly that shape.
  */
 function auditLinks() {
   const urls = [...host.querySelectorAll('a')].map((a) => new URL(a.href, window.location.href));
@@ -138,14 +127,8 @@ function auditLinks() {
 
   const escaping = sameOrigin
     .map((u) => u.pathname)
-    .filter((path) => path !== TOKEN_BASE && !path.startsWith(`${TOKEN_BASE}/`));
-  expect(escaping, 'every in-app link stays inside the token base').toEqual([]);
-
-  const leaking = urls
-    .filter((u) => u.origin !== window.location.origin)
-    .map((u) => u.href)
-    .filter((href) => href.includes(TOKEN));
-  expect(leaking, 'no off-origin link carries the token').toEqual([]);
+    .filter((path) => path !== BASE && !path.startsWith(`${BASE}/`));
+  expect(escaping, 'every in-app link stays inside the todo app').toEqual([]);
 }
 
 describe('the /todo surface boots through Root (#149)', () => {
@@ -164,21 +147,14 @@ describe('the /todo surface boots through Root (#149)', () => {
     // half of that rule is pinned in components/BottomBar.test.tsx.
     const bar = host.querySelector('nav[aria-label="Main lists"]');
     expect(bar).not.toBeNull();
-    // Open More so its five links are in the DOM for the token audit below — they only
+    // Open More so its five links are in the DOM for the link audit below — they only
     // mount once the panel opens.
     await act(async () => { (bar!.querySelector('button[aria-expanded]') as HTMLButtonElement).click(); });
     expect(host.querySelectorAll('nav[aria-label="Main lists"] a').length).toBe(9);
 
     // Every in-app link goes through todoPath(); the router basename is what turns those into
-    // /todo/{token}/... . A bare /inbox here would mean the basename was lost and a tap would
-    // leave the no-login surface for the authed app.
-    //
-    // RESOLVED, not raw. Filtering to hrefs that start with '/' would skip exactly the
-    // dangerous class: a relative `href="inbox"` written into a page one day resolves against
-    // the CURRENT url, so from /todo/SECRETTOKEN/inbox it lands on /todo/SECRETTOKEN/inbox
-    // (fine) but from /todo/SECRETTOKEN it lands on /todo/inbox — the token silently dropped,
-    // a 404, and an installed PWA that dead-ends. `a.href` is the resolved absolute URL, so
-    // relative and absolute are checked the same way and neither can slip past.
+    // /todo/... . A bare /inbox here would mean the basename was lost and a tap would leave
+    // the no-login surface for the authed app.
     auditLinks();
   }, BOOT_TIMEOUT_MS);
 
@@ -187,7 +163,7 @@ describe('the /todo surface boots through Root (#149)', () => {
   // reload to Today via the `*` → <Navigate to="/"> catch-all — presenting as "the installed
   // app always forgets which tab I was on". Reload-on-a-sub-path is the dominant PWA gesture.
   it('resolves a deep link to its own page, not the catch-all', async () => {
-    visit(`${TOKEN_BASE}/inbox`, TOKEN_BASE);
+    visit(`${BASE}/inbox`);
     await bootApp();
     await settle('Inbox zero');
 
@@ -241,7 +217,7 @@ describe('the pages on the collection layer, in public mode (#234)', () => {
   it('Someday renders through CollectionView and offers no saved views', async () => {
     // Saved views are authenticated team data: the menu's `api()` answers a 401 by sending the
     // tab to /login, which on this surface is a dead end for someone with only a link.
-    visit(`${TOKEN_BASE}/someday`, TOKEN_BASE);
+    visit(`${BASE}/someday`);
     await seed();
     await bootApp();
     await settle(TODO.title);
@@ -251,7 +227,7 @@ describe('the pages on the collection layer, in public mode (#234)', () => {
   }, BOOT_TIMEOUT_MS);
 
   it('Done renders through CollectionView and offers no saved views', async () => {
-    visit(`${TOKEN_BASE}/done`, TOKEN_BASE);
+    visit(`${BASE}/done`);
     await seed();
     await bootApp();
     await settle(TODO.title);
@@ -260,8 +236,8 @@ describe('the pages on the collection layer, in public mode (#234)', () => {
     expect(savedViewsMenu()).toBeNull();
   }, BOOT_TIMEOUT_MS);
 
-  it('a project card keeps its button OUT of its link, and the link inside the token base', async () => {
-    visit(`${TOKEN_BASE}/projects`, TOKEN_BASE);
+  it('a project card keeps its button OUT of its link, and the link inside the app', async () => {
+    visit(`${BASE}/projects`);
     await seed();
     await bootApp();
     await settle(PROJECT.name);
@@ -270,8 +246,40 @@ describe('the pages on the collection layer, in public mode (#234)', () => {
     expect(complete, 'the card renders its close-out button').toBeDefined();
     // An <a> may not contain interactive content; the stretched-link card is what fixed that.
     expect(complete!.closest('a')).toBeNull();
-    const open = host.querySelector(`a[href="${TOKEN_BASE}/projects/${PROJECT.id}"]`);
+    const open = host.querySelector(`a[href="${BASE}/projects/${PROJECT.id}"]`);
     expect(open?.textContent).toBe(`Open project ${PROJECT.name}`);
     auditLinks();
+  }, BOOT_TIMEOUT_MS);
+});
+
+describe('the browser session (#293)', () => {
+  it('a signed-out browser gets the signed-out page, never the CRM login', async () => {
+    const api = await import('./api');
+    const { ApiError } = await import('../../core/api/client');
+    vi.mocked(api.getSession).mockRejectedValue(new ApiError('API error 401: Not signed in', 401, 'Not signed in'));
+    await bootApp();
+    await settle('Sign in to your Todos');
+    expect(host.textContent).not.toContain(TODO_SHELL_MARKER);
+    expect(window.location.pathname).toBe(BASE);
+  }, BOOT_TIMEOUT_MS);
+
+  it('the sign-in page sits outside the gate and loading it redeems nothing', async () => {
+    visit(`${BASE}/signin/abc`);
+    const api = await import('./api');
+    vi.mocked(api.getSession).mockRejectedValue(new Error('signed out'));
+    await bootApp();
+    await settle('Open my list on this device');
+    expect(api.redeemSignIn).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain(TODO_SHELL_MARKER);
+  }, BOOT_TIMEOUT_MS);
+
+  it('the shell offers this device a Sign out', async () => {
+    // The mocked module outlives vi.resetModules, so restore the signed-in answer.
+    const api = await import('./api');
+    vi.mocked(api.getSession).mockResolvedValue({ ok: true });
+    await bootApp();
+    await settle(TODO_SHELL_MARKER);
+    const buttons = [...host.querySelectorAll('button')].map((b) => b.textContent);
+    expect(buttons).toContain('Sign out');
   }, BOOT_TIMEOUT_MS);
 });

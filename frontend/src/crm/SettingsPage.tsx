@@ -40,6 +40,7 @@ import { GmailCard } from './components/GmailCard';
 import { MemoryCard } from './components/MemoryCard';
 import { NotificationSettings } from './components/NotificationSettings';
 import { PipelineBoardCard } from './components/PipelineBoardCard';
+import { TodoDevicesCard } from './components/TodoDevicesCard';
 import { TodoModeCard } from './components/TodoModeCard';
 import { TeamSettings } from './components/TeamSettings';
 import { TelegramLinkCard } from './components/TelegramLinkCard';
@@ -52,6 +53,7 @@ const CARD_COMPONENTS: Record<SettingsCardId, ComponentType<{ isMobile: boolean 
   change_password: ChangePasswordCard,
   pipeline_board: PipelineBoardCard,
   telegram_link: TelegramLinkCard,
+  todo_devices: TodoDevicesCard,
   memory: MemoryCard,
   todo_mode: TodoModeCard,
   branding: BrandingCard,

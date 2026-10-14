@@ -76,7 +76,8 @@ _SIGNIN_SEGMENT = "signin"
 
 _HOW_TO_SIGN_IN = (
     "On a computer, open CakeCRM &rarr; <strong>Settings</strong> &rarr; "
-    "<strong>Todo app devices</strong> &rarr; <strong>Show a sign-in code</strong>. Scan "
+    "<strong>Personal</strong> &rarr; <strong>Todo app devices</strong> &rarr; "
+    "<strong>Show a sign-in code</strong>. Scan "
     "the code with this phone and press <strong>Open my list on this device</strong>."
 )
 

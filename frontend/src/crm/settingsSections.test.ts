@@ -26,6 +26,7 @@ const MEMBER_CARDS: SettingsCardId[] = [
   'notifications', 'change_password', 'pipeline_board', 'memory',
   // #193. Linking YOUR phone is personal; the bot token stays admin-only below.
   'telegram_link',
+  'todo_devices',
 ];
 const ADMIN_ONLY_CARDS: SettingsCardId[] = [
   'branding', 'team', 'custom_fields', 'telegram', 'gmail',
@@ -42,10 +43,10 @@ describe('settingsSections — the member/admin partition', () => {
     expect(visibleCardIds(false).sort()).toEqual([...MEMBER_CARDS].sort());
   });
 
-  it('shows an admin all eleven cards, each exactly once', () => {
+  it('shows an admin all twelve cards, each exactly once', () => {
     const ids = visibleCardIds(true);
-    expect(ids).toHaveLength(11);
-    expect(new Set(ids).size).toBe(11);
+    expect(ids).toHaveLength(12);
+    expect(new Set(ids).size).toBe(12);
     expect(ids.sort()).toEqual([...MEMBER_CARDS, ...ADMIN_ONLY_CARDS].sort());
   });
 
@@ -146,7 +147,7 @@ describe('settingsSections — every card has a home', () => {
   it('declares each card id exactly once across all sections', () => {
     const ids = SETTINGS_SECTIONS.flatMap(s => s.cards).map(c => c.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(11);
+    expect(ids).toHaveLength(12);
   });
 
   it('gives every section a non-empty label', () => {
@@ -182,6 +183,7 @@ describe('SettingsCard is the only owner of card chrome', () => {
     'TodoModeCard.tsx': 'todo_mode',
     'TeamSettings.tsx': 'team',
     'TelegramLinkCard.tsx': 'telegram_link',
+    'TodoDevicesCard.tsx': 'todo_devices',
     'TelegramSettings.tsx': 'telegram',
   };
   const SETTINGS_CARD_FILES = Object.keys(CARD_FILE_IDS);

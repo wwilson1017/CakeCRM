@@ -35,7 +35,7 @@ const setTodoMode = vi.fn();
 // modules, so one mock each covers the whole tree.
 
 const api = vi.hoisted(() => vi.fn());
-vi.mock('../core/api/client', () => ({ api }));
+vi.mock('../core/api/client', () => ({ api, ApiError: class ApiError extends Error {} }));
 
 const auth = vi.hoisted(() => ({ isAdmin: false }));
 vi.mock('../core/auth/AuthContext', () => ({
@@ -88,7 +88,8 @@ const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Telegram', 'Gma
 // 'Link my Telegram' is the personal half of the Telegram split (#193); the bot card
 // above stays admin-only.
 const MEMBER_TITLES = [
-  'Notifications', 'Change password', 'Pipeline board', 'Link my Telegram', 'Assistant memory',
+  'Notifications', 'Change password', 'Pipeline board', 'Link my Telegram', 'Todo app devices',
+  'Assistant memory',
 ];
 
 let container: HTMLDivElement;
@@ -181,13 +182,13 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     }
   });
 
-  it('reaches an admin all eleven cards, across four sections', async () => {
+  it('reaches an admin all twelve cards, across four sections', async () => {
     auth.isAdmin = true;
     await render();
     expect(navLabels()).toEqual(['Personal', 'Assistant', 'Workspace', 'Integrations']);
 
     const reachable = await allReachableTitles();
-    expect(reachable).toHaveLength(11);
+    expect(reachable).toHaveLength(12);
     expect(reachable.sort()).toEqual([...MEMBER_TITLES, ...ADMIN_ONLY_TITLES].sort());
   });
 
@@ -210,7 +211,7 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     expect(navLabels()).not.toContain('Workspace');
     expect(container.querySelector('[aria-current="page"]')!.textContent).toBe('Personal');
     expect(cardTitles()).toEqual([
-      'Notifications', 'Change password', 'Pipeline board', 'Link my Telegram',
+      'Notifications', 'Change password', 'Pipeline board', 'Link my Telegram', 'Todo app devices',
     ]);
   });
 

@@ -618,7 +618,12 @@ describe('boot split (#149) — the public todo download', () => {
 
   it('PublicTodoApp imports its pages through that one module', () => {
     const specs = staticImportSpecifiers(read('./crm/gtd/PublicTodoApp.tsx')).map(bare);
-    expect(specs.sort()).toEqual(['../../shared/ToastViewport', './pages', './publicMode', 'react-router-dom']);
+    // #293 added the session gate: the store, the sign-in and signed-out pages, the
+    // bootstrap call and the shell's loading/failed rows — all inside crm/gtd/.
+    expect(specs.sort()).toEqual([
+      '../../core/api/client', '../../shared/ToastViewport', './SignInPage', './SignedOutPage',
+      './TodoShell', './api', './pages', './session', 'react', 'react-router-dom',
+    ]);
   });
 
   it('nothing reachable from PublicTodoApp is a CRM module or a heavy package', () => {

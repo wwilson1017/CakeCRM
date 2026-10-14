@@ -22,7 +22,7 @@
 export type SettingsSectionId = 'personal' | 'assistant' | 'workspace' | 'integrations';
 
 export type SettingsCardId =
-  | 'notifications' | 'change_password' | 'pipeline_board' | 'telegram_link'
+  | 'notifications' | 'change_password' | 'pipeline_board' | 'telegram_link' | 'todo_devices'
   | 'memory' | 'todo_mode'
   | 'branding' | 'team' | 'custom_fields'
   | 'telegram' | 'gmail';
@@ -55,6 +55,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
       // (POST /api/telegram/{link-code,unlink}) are `get_current_user` and act on the
       // caller's own link — the bot token itself stays in Integrations, admin-only.
       { id: 'telegram_link', adminOnly: false },
+      // #293. Signing a phone in to the no-login todo app is per seat: the routes it drives
+      // (/api/crm/gtd/web-{signin-link,sessions,signout-all}) are `get_current_user` and act
+      // on the caller's own devices. The on/off switch stays on the admin-only todo_mode card.
+      { id: 'todo_devices', adminOnly: false },
     ],
   },
   {

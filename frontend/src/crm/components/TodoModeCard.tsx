@@ -13,10 +13,11 @@
  * The mode itself is NOT local state (#102): CrmLayout owns it for the whole CRM, and
  * a second copy here meant a switch did not reach /crm/todos until a page reload.
  *
- * The public-surface half is deliberately blunt about what each link exposes. A
+ * The public-surface half is deliberately blunt about what each surface exposes. A
  * tokenless capture URL is a write-only inbox drop that anyone with the address can
- * post to; a tokenless todo URL hands over the whole list, read and write. Users
- * should not have to infer that from the word "public".
+ * post to. The no-login todo app has no link since #293: this card only switches it on
+ * or off (install-wide, admin-only); each person signs their own devices in on the
+ * member card `TodoDevicesCard`.
  */
 
 import { useEffect, useState } from 'react';
@@ -36,11 +37,8 @@ import { SettingsCard } from './SettingsCard';
 interface Surfaces {
   todo_capture_token: string;
   todo_web_enabled: boolean;
-  todo_web_token: string;
   capture_path: string;
   capture_public: boolean;
-  web_path: string | null;
-  web_public: boolean;
 }
 
 export function TodoModeCard({ isMobile }: { isMobile: boolean }) {
@@ -166,43 +164,20 @@ export function TodoModeCard({ isMobile }: { isMobile: boolean }) {
           <div style={{ marginTop: 20 }}>
             <p style={{ ...labelStyle, marginBottom: 4 }}>Full todo app (read and write)</p>
             <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, margin: '0 0 8px' }}>
-              The whole todo app, with no login. Off by default.{' '}
-              {surfaces.todo_web_enabled && surfaces.web_public && (
-                <strong style={{ color: CORAL_TEXT }}>
-                  Anyone who knows this address can read and edit every todo. Add a secret link.
-                </strong>
-              )}
+              The whole todo app, sized for a phone, at one address for everyone: /todo.
+              Off by default. Each device signs in once with a code made under Settings →
+              Personal → Todo app devices; a device that is signed out sees a short page saying how
+              to sign in.
             </p>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: FONT_SANS, fontSize: 14 }}>
               <input
                 type="checkbox"
                 checked={surfaces.todo_web_enabled}
                 disabled={busy}
-                onChange={e => void patchSurfaces({
-                  web_enabled: e.target.checked,
-                  // Turning it on without a token would publish the whole list, so mint
-                  // one in the same request unless the user already chose one.
-                  ...(e.target.checked && !surfaces.todo_web_token ? { regenerate_web: true } : {}),
-                })}
+                onChange={e => void patchSurfaces({ web_enabled: e.target.checked })}
               />
               Enable the no-login todo app
             </label>
-            {surfaces.todo_web_enabled && surfaces.web_path && (
-              <div style={{ marginTop: 8 }}>
-                <SurfaceRow
-                  path={surfaces.web_path}
-                  linkFor={linkFor}
-                  onCopy={() => void copy(surfaces.web_path!)}
-                  onRegenerate={() => void patchSurfaces({ regenerate_web: true })}
-                  busy={busy}
-                  secretLabel={surfaces.todo_web_token ? 'Secret link' : 'Public link'}
-                />
-                <p style={{ fontFamily: FONT_SANS, fontSize: 12, color: INK_MUTE, marginTop: 6 }}>
-                  Regenerating immediately breaks the old link, including any home-screen
-                  app installed from it.
-                </p>
-              </div>
-            )}
           </div>
         </div>
       )}
