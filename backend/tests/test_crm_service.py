@@ -8,7 +8,7 @@ writes go through ``get_connection`` and use the shared ``fake_conn`` fixture.
 
 import pytest
 
-from crm import scoring_service, service
+from crm import gtd_common, scoring_service, service
 
 
 class Recorder:
@@ -253,14 +253,25 @@ def test_list_todos_completed_as_int_and_due_before_guard(rec):
 
 def test_update_todo_writes_completed_and_status_together(monkeypatch, rec, todo_txn):
     """`completed` and `status` are two views of one fact, bound by a CHECK constraint
-    since #70 — a stray truthy value must still normalize to exactly 1, and the paired
-    status must be written in the SAME statement."""
+    since #70 — `completed` is written as exactly 1, with the paired status in the SAME
+    statement."""
+    for value in (True, 1):
+        cur = todo_txn(monkeypatch, prior_status="next_action")
+        rec.fetchone_queue = [{"id": 1, "completed": 1}]
+        service.update_todo(1, completed=value)
+        sql, params = next((s, p) for s, p in cur.executed if "UPDATE todos SET" in s)
+        assert "status = %s" in sql and "completed = %s" in sql
+        assert "done" in params and 1 in params
+
+
+@pytest.mark.parametrize("value", ["false", "true", 2, "1"])
+def test_update_todo_refuses_a_completed_that_is_not_true_or_false(monkeypatch, rec, todo_txn, value):
+    """#298: the agent tool is untyped, so the text "false" reached `bool()` and completed
+    the todo. Only a real true/false or 0/1 is accepted; anything else writes nothing."""
     cur = todo_txn(monkeypatch, prior_status="next_action")
-    rec.fetchone_queue = [{"id": 1, "completed": 1}]
-    service.update_todo(1, completed=2)  # stray truthy value must normalize to 1
-    sql, params = next((s, p) for s, p in cur.executed if "UPDATE todos SET" in s)
-    assert "status = %s" in sql and "completed = %s" in sql
-    assert "done" in params and 1 in params and 2 not in params
+    with pytest.raises(gtd_common.ValidationError, match="completed must be true or false"):
+        service.update_todo(1, completed=value)
+    assert not any("UPDATE todos SET" in s for s, _ in cur.executed)
 
 
 def test_update_todo_uncompleting_a_done_todo_reopens_it(monkeypatch, rec, todo_txn):
