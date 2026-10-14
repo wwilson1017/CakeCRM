@@ -13,22 +13,23 @@ todo list — see the note on untrusted text below.
 
 Four of the eight writes also carry `confirm_tier: ROUTINE` (#186), so normal ("Ask")
 mode runs them with no Approve card. The rule is #180's, in `assistant/confirm_tier.py`;
-this is how the twelve came out against it:
+this is how the eleven came out against it (#299 removed `todo_delete`: a todo is
+never deleted, only dropped):
 
   * `todo_create` — ROUTINE. Capture into the inbox, and the very same
     `crm.service.create_todo` that `crm_create_todo` (routine since #180) calls, so
     classifying one and not the other would be incoherent.
   * `todo_update` — ROUTINE, minus `status='dropped'` and minus setting a `bring_back_on`
     date (#261), which hides the todo from every list until then. Retitling, filing, starring and
-    completing are ordinary; dropping is this product's delete gesture (`todo_delete`'s
-    own description sends the model there), so that one CALL keeps its card.
+    completing are ordinary; dropping is this product's only delete gesture (#299 —
+    `todo_update`'s own description says so), so that one CALL keeps its card.
   * `todo_create_project` — ROUTINE. A new grouping row.
   * `todo_update_project` — ROUTINE, minus `status='dropped'`, for the same reason.
     `completed` is completion, not removal, exactly as `'done'` is on a todo.
   * `todo_bulk_update` — NOT routine. Rule 4: bulk by construction (up to 500 ids).
   * `todo_bulk_create` — NOT routine (#284). Rule 4: an import of up to 500 todos, so the
     Approve card lists every item before anything is written.
-  * `todo_delete` / `todo_delete_project` — NOT routine. Rule 3: a hard DELETE.
+  * `todo_delete_project` — NOT routine. Rule 3: a hard DELETE (its todos are kept).
   * `todo_list` / `todo_get` / `todo_list_projects` / `todo_weekly_review` — not
     eligible; the tier is write-only and `ToolRegistry` fails loud on one declared on a read.
 
@@ -128,13 +129,6 @@ def _todo_update(todo_id: int, **fields) -> dict:
 def _todo_bulk_update(ids: list[int], fields: dict) -> dict:
     result = gtd_service.bulk_update(ids, fields)
     return _with_targets(result, "todo", result.get("updated", []))
-
-
-def _todo_delete(todo_id: int) -> dict:
-    target = _lookup_target("todo", todo_id)  # before the row is gone
-    if not gtd_service.delete_todo(todo_id):
-        return {"error": f"Todo {todo_id} not found"}
-    return {"ok": True, "deleted": todo_id, "target": target}
 
 
 def _todo_list_projects(status: str | None = None) -> dict:
@@ -262,7 +256,8 @@ GTD_TOOL_DEFS: list[dict] = [
         "description": (
             "Update one todo — clarify its title, file it to a status, set its context or "
             "project, star it, or complete it (status='done'). Completing a repeating todo "
-            "automatically creates its next occurrence."
+            "automatically creates its next occurrence. Todos are never deleted: to remove "
+            "one, even one captured in error, set status='dropped'; it stays recoverable."
         ),
         "input_schema": {
             "type": "object",
@@ -348,20 +343,6 @@ GTD_TOOL_DEFS: list[dict] = [
                 },
             },
             "required": ["todos"],
-        },
-        "kind": "integration",
-    },
-    {
-        "name": "todo_delete",
-        "writes": True,
-        "description": (
-            "Permanently delete a todo. Use only for something captured in error — to drop "
-            "work the user has decided against, set status='dropped' so it stays recoverable."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {"todo_id": {"type": "integer"}},
-            "required": ["todo_id"],
         },
         "kind": "integration",
     },
@@ -464,7 +445,6 @@ GTD_TOOL_EXECUTORS: dict[str, Callable[..., dict]] = {
     "todo_update": _wrap(_todo_update),
     "todo_bulk_update": _wrap(_todo_bulk_update),
     "todo_bulk_create": _wrap(_todo_bulk_create),
-    "todo_delete": _wrap(_todo_delete),
     "todo_list_projects": _wrap(_todo_list_projects),
     "todo_weekly_review": _wrap(_todo_weekly_review),
     "todo_create_project": _wrap(_todo_create_project),

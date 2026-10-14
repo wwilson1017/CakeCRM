@@ -10,7 +10,7 @@ import inspect
 
 import psycopg2
 
-from crm import chatter_service, field_service, service, tools
+from crm import chatter_service, field_service, gtd_common, service, tools
 from crm.tools import CRM_TOOL_DEFS, TOOL_EXECUTORS, get_crm_tools
 
 
@@ -22,12 +22,12 @@ def test_def_and_executor_counts():
     # get_stale_deals, get_contact_staleness, find_duplicates, scan_gaps) + 2 (#22
     # Phase 2: get_deal_health, get_pipeline_analytics) + 2 (#70 todo parity:
     # crm_update_todo, crm_delete_todo) + 1 (#55 crm_bulk_move_deals) + 1 (#200
-    # crm_get_setup_status) + N (sibling
+    # crm_get_setup_status) - 1 (#299 removed crm_delete_todo) + N (sibling
     # additions) — SUM the additions, never overwrite the number. On rebase behind a
     # sibling that also adds a tool, recompute cumulative (do NOT keep-both a single
     # number). The executor count is always defs + 1 (crm_log_note alias).
-    assert len(CRM_TOOL_DEFS) == 48
-    assert len(TOOL_EXECUTORS) == 49
+    assert len(CRM_TOOL_DEFS) == 47
+    assert len(TOOL_EXECUTORS) == 48
     # Relative invariant (robust to any future additions): exactly one alias-only executor.
     assert len(TOOL_EXECUTORS) == len(CRM_TOOL_DEFS) + 1
 
@@ -82,7 +82,7 @@ def test_get_crm_tools_has_no_enable_gate(todo_mode):
     """The CRM tools are always on — there is no per-integration enable flag.
 
     The mode is pinned explicitly because #70 made the def list conditional on ONE
-    thing (GTD hides the five todo tools) and #102 made GTD the fail-safe answer with
+    thing (GTD hides the four todo tools) and #102 made GTD the fail-safe answer with
     no database. Before that this test read the full list by accident of the old
     'normal' fallback; asking for normal mode is what it always meant.
     """
@@ -117,7 +117,7 @@ _OWNED_WRITE_TOOLS = {
     "crm_create_contact", "crm_update_contact", "crm_delete_contact",
     "crm_create_deal", "crm_update_deal", "crm_update_deal_stage",
     "crm_log_activity", "crm_create_todo", "crm_complete_todo",
-    "crm_update_todo", "crm_delete_todo",  # #70
+    "crm_update_todo",  # #70
     "crm_set_contact_fields", "crm_set_company_fields", "crm_set_deal_fields",
     "crm_recompute_lead_scores",  # #18
     "crm_bulk_move_deals",  # #55
@@ -209,6 +209,15 @@ def test_contact_deal_tools_translate_fk_violation(monkeypatch):
     assert tools.crm_update_contact(1, company_id=999) == {"error": "Referenced company does not exist"}
     assert tools.crm_create_deal("D", company_id=999) == {"error": "Referenced contact or company does not exist"}
     assert tools.crm_update_deal(1, company_id=999) == {"error": "Referenced contact or company does not exist"}
+
+
+def test_update_todo_tool_returns_a_refused_value_as_its_error(monkeypatch):
+    """#298: the service's refusal reaches the assistant as the tool's own error, not the
+    registry's generic "failed, please try again"."""
+    def refuse(*a, **kw):
+        raise gtd_common.ValidationError("completed must be true or false")
+    monkeypatch.setattr(service, "update_todo", refuse)
+    assert tools.crm_update_todo(1, completed="false") == {"error": "completed must be true or false"}
 
 
 def test_chatter_tools_present_and_shaped():

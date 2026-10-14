@@ -110,6 +110,8 @@ ADMIN_ONLY = {
     ("/api/crm/load-sample-data", "POST"),
     ("/api/crm/demo-clear", "POST"),
     ("/api/crm/clear-all", "POST"),
+    # #302: the whole database as CSV
+    ("/api/crm/export", "GET"),
     ("/api/crm/deals/touch-count/backfill", "POST"),
     ("/api/crm/scores/backfill", "POST"),
     # Todo mode is install-wide (it lives on the crm_meta singleton, so one member

@@ -3,7 +3,9 @@ import { api } from '../../core/api/client';
 import { writeMayHaveLanded } from '../usePatchableAssembly';
 import { useAuth } from '../../core/auth/AuthContext';
 import { OwnerSelect } from './OwnerSelect';
-import { labelStyle, inputStyle, CORAL_TEXT } from '../../shared/styles';
+import { BigTextEditor } from '../../shared/BigTextEditor';
+import { overflows } from '../../shared/overflows';
+import { labelStyle, inputStyle, CORAL_TEXT, ACCENT_TEXT } from '../../shared/styles';
 import { formModalOverlay, formModalContent, formTitle, btnPrimary, btnSecondary } from '../styles';
 import type { CrmContact, CrmTodo } from '../../core/types';
 
@@ -47,6 +49,9 @@ export function TodoForm({ todo, contactId, dealId, onClose, onSaved, onWriteUnc
   const [ownerTouched, setOwnerTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // #305: the two-line description box opens in a larger window on demand, and on its own
+  // when a click lands in a box that already holds more than it shows.
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     if (!contactId) {
@@ -96,8 +101,15 @@ export function TodoForm({ todo, contactId, dealId, onClose, onSaved, onWriteUnc
             <input value={title} onChange={e => setTitle(e.target.value)} style={inputStyle} />
           </div>
           <div>
-            <label style={labelStyle}>Description</label>
-            <textarea value={description} onChange={e => setDescription(e.target.value)} rows={2} style={{ ...inputStyle, resize: 'none' }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <label style={labelStyle}>Description</label>
+              <button type="button" onClick={() => setExpanded(true)}
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12, color: ACCENT_TEXT }}
+              >Open larger ⤢</button>
+            </div>
+            <textarea value={description} onChange={e => setDescription(e.target.value)} rows={2}
+              onClick={e => { if (overflows(e.currentTarget)) setExpanded(true); }}
+              style={{ ...inputStyle, resize: 'none' }} />
           </div>
           {!contactId && (
             <div>
@@ -138,6 +150,14 @@ export function TodoForm({ todo, contactId, dealId, onClose, onSaved, onWriteUnc
           }}>{saving ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Todo'}</button>
         </div>
       </form>
+      {expanded && (
+        <BigTextEditor
+          title={title.trim() ? `Description — ${title.trim()}` : 'Description'}
+          value={description}
+          onSave={text => { setDescription(text); setExpanded(false); }}
+          onCancel={() => setExpanded(false)}
+        />
+      )}
     </div>
   );
 }

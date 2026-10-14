@@ -26,6 +26,7 @@ Deals:
   GET    /api/crm/deals/:id             — detail
   POST   /api/crm/deals                 — create
   PUT    /api/crm/deals/:id             — update
+  POST   /api/crm/deals/:id/archive     — soft-archive a deal, recording who and why
   POST   /api/crm/deals/:id/restore     — un-archive a soft-archived deal
   POST   /api/crm/deals/:id/mark-lost   — close as lost, recording a written reason
   POST   /api/crm/deals/bulk-move       — move many deals to one stage (one transaction)
@@ -38,7 +39,6 @@ Todos:
   POST   /api/crm/todos                 — create
   PUT    /api/crm/todos/:id             — update
   PUT    /api/crm/todos/:id/complete    — mark done
-  DELETE /api/crm/todos/:id             — delete
 
 Activity:
   GET    /api/crm/activity              — log
@@ -109,12 +109,14 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, StrictInt, field_validator
 
 from core.auth import get_current_user, require_admin
 from crm import (
     attachment_service,
     chatter_service,
+    export,
     field_service,
     gtd_common,
     mention_notify,
@@ -233,6 +235,12 @@ class DealMarkLost(BaseModel):
     # rep's typed prose losing its tail with no feedback is data loss, so the REST
     # boundary rejects instead. The service cap stays for the agent-tool path.
     lost_reason: str = Field("", max_length=crm.MAX_LOST_REASON)
+
+
+class DealArchive(BaseModel):
+    # Same shape as ContactUpdate.archive_reason (#239): capped here so the service never
+    # truncates typed prose, and REQUIRED — the service refuses a blank one, mapped to 400.
+    reason: str = Field(..., max_length=crm.MAX_ARCHIVE_REASON)
 
 
 class BulkDealMove(BaseModel):
@@ -621,8 +629,8 @@ async def bulk_move_deals(body: BulkDealMove, user=Depends(get_current_user)):
 
 # Restore is the recoverability half of issue #83: archiving a deal was reachable only
 # through the assistant, so on a keyless install an accidental archive (or `merge_deals`'
-# source-archival) was permanent. ARCHIVE deliberately gets no route here — the gate scope
-# is view + restore only; a UI archive affordance lands with the deal-detail parity port.
+# source-archival) was permanent. #301 adds the archive route below so a keyless install
+# can put away a junk deal without marking it Lost.
 #
 # Sync `def` on purpose, which makes this the one non-async handler in the file: the work
 # is blocking psycopg2 plus a lead-score recompute, and FastAPI runs a sync endpoint in a
@@ -641,6 +649,21 @@ async def bulk_move_deals(body: BulkDealMove, user=Depends(get_current_user)):
 def restore_deal(deal_id: int, user=Depends(get_current_user)):
     # actor_id: the "Restored from archive." note credits whoever pressed Restore (#239).
     result = crm.archive_deal(deal_id, archived=False, actor_id=user["id"])
+    if not result:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    return result
+
+
+# #301: the Archive button's write. Same tier and shape as restore —
+# member-accessible record CRUD, sync `def`, the server's row back so the panel can patch
+# the host instead of trusting a refetch. The service writes the "Archived — <reason>"
+# note crediting `actor_id` and is idempotent on an already-archived deal.
+@router.post("/deals/{deal_id}/archive")
+def archive_deal(deal_id: int, body: DealArchive, user=Depends(get_current_user)):
+    try:
+        result = crm.archive_deal(deal_id, reason=body.reason, actor_id=user["id"])
+    except ValueError as e:  # a blank reason — the caller can act on it
+        raise HTTPException(status_code=400, detail=str(e)) from None
     if not result:
         raise HTTPException(status_code=404, detail="Deal not found")
     return result
@@ -812,13 +835,6 @@ async def complete_todo(todo_id: int, user=Depends(get_current_user)):
     if not result:
         raise HTTPException(status_code=404, detail="Todo not found")
     return result
-
-
-@router.delete("/todos/{todo_id}")
-async def delete_todo(todo_id: int, user=Depends(get_current_user)):
-    if not crm.delete_todo(todo_id):
-        raise HTTPException(status_code=404, detail="Todo not found")
-    return {"deleted": True, "todo_id": todo_id}
 
 
 # ── Activity ──────────────────────────────────────────────────────────────────
@@ -1853,3 +1869,19 @@ def reset_stage_criteria(stage: str, user=Depends(require_admin)):
         return stage_criteria.reset_criteria(stage)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from None
+
+
+# ── All-data CSV export (#302) ───────────────────────────────────────────────
+
+@router.get("/export")
+def export_all(user=Depends(require_admin)):
+    """Every table as CSV in one streamed ZIP. Admin-only: it is the whole database.
+
+    Sync def: the generator does blocking psycopg2 work, which Starlette iterates in its
+    threadpool."""
+    stamp = gtd_common.today_local_str()
+    return StreamingResponse(
+        export.stream_zip(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="cakecrm-export-{stamp}.zip"'},
+    )

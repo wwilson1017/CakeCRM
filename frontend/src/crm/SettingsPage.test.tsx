@@ -84,7 +84,7 @@ const RESPONSES: Record<string, unknown> = {
 };
 
 // 'Todo mode' is admin-only as of #102, which makes its routes require_admin.
-const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Telegram', 'Gmail', 'Todo mode'];
+const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Export data', 'Telegram', 'Gmail', 'Todo mode'];
 // 'Link my Telegram' is the personal half of the Telegram split (#193); the bot card
 // above stays admin-only.
 const MEMBER_TITLES = [
@@ -182,13 +182,13 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     }
   });
 
-  it('reaches an admin all twelve cards, across four sections', async () => {
+  it('reaches an admin all thirteen cards, across four sections', async () => {
     auth.isAdmin = true;
     await render();
     expect(navLabels()).toEqual(['Personal', 'Assistant', 'Workspace', 'Integrations']);
 
     const reachable = await allReachableTitles();
-    expect(reachable).toHaveLength(12);
+    expect(reachable).toHaveLength(13);
     expect(reachable.sort()).toEqual([...MEMBER_TITLES, ...ADMIN_ONLY_TITLES].sort());
   });
 
@@ -219,7 +219,7 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     auth.isAdmin = true;
     await render('/crm/settings?section=workspace');
     expect(container.querySelector('[aria-current="page"]')!.textContent).toBe('Workspace');
-    expect(cardTitles()).toEqual(['Branding', 'Team', 'Custom Fields']);
+    expect(cardTitles()).toEqual(['Branding', 'Team', 'Custom Fields', 'Export data']);
   });
 });
 

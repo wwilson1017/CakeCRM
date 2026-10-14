@@ -612,10 +612,12 @@ def update_contact(
 
 
 def delete_contact(contact_id: int) -> bool:
-    """Delete a contact and its dependent activity/todos in one transaction.
+    """Delete a contact and its dependent activity in one transaction.
 
-    FKs are ON DELETE SET NULL, so the explicit cascade (matching chatty)
-    preserves the delete-the-rows behavior rather than orphaning them.
+    Activity FKs are ON DELETE SET NULL, so the explicit cascade (matching chatty)
+    preserves the delete-the-rows behavior rather than orphaning them. Todos are the
+    exception (#299): a todo is never deleted, so this contact's todos stay, unlinked
+    by the FK, and the open ones are dropped.
     """
     with get_connection() as conn:
         cur = conn.cursor()
@@ -635,7 +637,16 @@ def delete_contact(contact_id: int) -> bool:
         cur.execute("SELECT DISTINCT deal_id FROM activity_log WHERE contact_id = %s AND deal_id IS NOT NULL", (contact_id,))
         affected_deal_ids |= {r[0] for r in cur.fetchall()}
         cur.execute("DELETE FROM activity_log WHERE contact_id = %s", (contact_id,))
-        cur.execute("DELETE FROM todos WHERE contact_id = %s", (contact_id,))
+        # #299: todos are dropped, never deleted. The FK (ON DELETE SET NULL) clears the
+        # link when the contact row goes below; the open ones are dropped first, through
+        # the one status writer. Finished (done/dropped) todos are left exactly as they are.
+        cur.execute(
+            f"SELECT id FROM todos WHERE contact_id = %s AND completed = 0 AND {NOT_DROPPED_TODO} "
+            "ORDER BY id",
+            (contact_id,),
+        )
+        for (todo_id,) in cur.fetchall():
+            _apply_todo_update_cur(cur, todo_id, {"status": "dropped"})
         # crm_chatter, crm_field_values and crm_field_provenance are polymorphic (no
         # FK), so their rows are dropped explicitly — otherwise a reused contact SERIAL
         # id would inherit this contact's notes / custom-field values / AI badges.
@@ -2486,7 +2497,9 @@ def _apply_todo_update_cur(cur, todo_id: int, fields: dict) -> bool:
     # `status` always wins — a caller that sends both means the status.
     fields = dict(fields)
     if "completed" in fields:
-        completed = bool(fields.pop("completed"))
+        # Validated, not truthiness: the agent tool is untyped, so the text "false" reaches
+        # here and bool() would complete the todo (#298). A refusal writes nothing.
+        completed = gtd_common.validate_flag(fields.pop("completed"), "completed")
         if "status" not in fields:
             if completed:
                 fields["status"] = "done"
@@ -2640,10 +2653,6 @@ def update_todo(todo_id: int, **fields) -> dict | None:
         cur = conn.cursor()
         found = _apply_todo_update_cur(cur, todo_id, filtered)
     return get_todo(todo_id) if found else None
-
-
-def delete_todo(todo_id: int) -> bool:
-    return pg_execute("DELETE FROM todos WHERE id = %s", (todo_id,)) > 0
 
 
 # ── Activity log ──────────────────────────────────────────────────────────────

@@ -606,3 +606,16 @@ def test_minted_tokens_survive_their_own_clamp():
     for _ in range(20):
         token = todo_tokens.mint_token()
         assert token and todo_tokens.clamp_token(token) == token
+
+
+def test_no_todo_delete_route_on_any_mount():
+    """#299: a todo is never deleted. `build_router` is mounted signed-in AND on the
+    no-login app (behind a browser session since #293); neither may offer DELETE on a todo."""
+    from crm import gtd_router, todo_web
+    from crm.router import router as crm_router
+
+    mounts = [gtd_router.router, todo_web.session_api_router, crm_router]
+    for mount in mounts:
+        todo_paths = [r for r in mount.routes if r.path.endswith("/todos/{todo_id}")]
+        assert todo_paths, mount  # vacuity: the todo routes are on this mount
+        assert not any("DELETE" in r.methods for r in todo_paths), mount

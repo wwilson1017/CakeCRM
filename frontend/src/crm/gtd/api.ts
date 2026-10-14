@@ -138,10 +138,6 @@ export function updateTodo(id: number, fields: Record<string, unknown>): Promise
   return todoFetch<Todo>(`/todos/${id}`, { method: 'PUT', body: JSON.stringify(fields) });
 }
 
-export function deleteTodo(id: number): Promise<void> {
-  return todoFetch(`/todos/${id}`, { method: 'DELETE' }).then(() => undefined);
-}
-
 export function bulkUpdate(
   ids: number[], fields: Record<string, unknown>,
 ): Promise<{ updated: number[]; not_found: number[] }> {

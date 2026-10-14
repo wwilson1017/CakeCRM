@@ -291,12 +291,27 @@ def test_crud_fk_search_and_aggregates(pg_db):
     assert stats["overdue_todos"] == 1  # due 2000-01-01, incomplete
     assert stats["total_pipeline_value"] == 5000
 
-    # delete contact: deal.contact_id -> NULL (SET NULL), todo + activity deleted (cascade)
+    # #299: there is no todo delete route; the row is untouched by the attempt.
+    client = _client()
+    assert client.delete(f"/api/crm/todos/{t['id']}").status_code == 405
+    assert service.get_todo(t["id"])["title"] == "Follow up"
+
+    # #299: a finished todo on the contact is kept exactly as it is.
+    done = service.create_todo("Sent the quote", contact_id=c["id"])
+    service.complete_todo(done["id"])
+    dropped = service.create_todo("Old idea", contact_id=c["id"], status="dropped")
+
+    # delete contact: deal.contact_id -> NULL (SET NULL), activity deleted (cascade);
+    # todos are never deleted — they stay unlinked, and the open one is dropped (#299)
     assert service.delete_contact(1) is True
     assert service.get_contact(1) is None
     surviving = service.get_deal(d["id"])
     assert surviving is not None and surviving["contact_id"] is None
-    assert service.get_todo(1) is None
+    kept = {i: service.get_todo(i) for i in (t["id"], done["id"], dropped["id"])}
+    assert all(row is not None and row["contact_id"] is None for row in kept.values())
+    assert kept[t["id"]]["status"] == "dropped" and kept[t["id"]]["completed"] == 0
+    assert kept[done["id"]]["status"] == "done" and kept[done["id"]]["completed"] == 1
+    assert kept[dropped["id"]]["status"] == "dropped"
     assert service.get_activity_log() == []
 
 
@@ -1869,3 +1884,37 @@ def test_report_rollup_caps_activities_per_record_not_globally(pg_db, monkeypatc
     assert by_title["Busy"]["activities_truncated"] is True
     assert len(by_title["Quiet"]["activities"]) == 1
     assert by_title["Quiet"]["activities_truncated"] is False
+
+
+def test_archive_route_writes_the_same_audit_as_the_assistant_tool(pg_db):
+    """#301: the panel's Archive button and Baker's `crm_archive_deal` go through the same
+    service call, so on real SQL they leave the same row (who + why) and the same
+    "Archived — <reason>" note crediting the actor. A blank reason writes nothing."""
+    from core.postgres import pg_fetchall
+    from crm import service
+    from crm.tools import crm_archive_deal
+
+    uid = FAKE_ADMIN["id"]
+    by_route = service.create_deal("Route", stage="lead")["id"]
+    by_tool = service.create_deal("Tool", stage="lead")["id"]
+    client = _client()
+
+    assert client.post(f"/api/crm/deals/{by_route}/archive", json={"reason": "  "}).status_code == 400
+    assert service.get_deal(by_route)["archived_at"] is None
+
+    res = client.post(f"/api/crm/deals/{by_route}/archive", json={"reason": "test record"})
+    assert res.status_code == 200
+    assert crm_archive_deal(by_tool, reason="test record", actor_id=uid)["ok"] is True
+
+    def audit(deal_id):
+        row = service.get_deal(deal_id)
+        notes = pg_fetchall(
+            "SELECT message, author_id FROM crm_chatter WHERE entity_type = 'deal' "
+            "AND entity_id = %s ORDER BY id", (deal_id,))
+        return (row["archived_at"] is not None, row["archived_by"], row["archived_reason"],
+                [(n["message"], n["author_id"]) for n in notes])
+
+    assert audit(by_route) == audit(by_tool) == (
+        True, uid, "test record", [("Archived — test record", uid)])
+    assert res.json()["archived_reason"] == "test record"
+    assert client.post("/api/crm/deals/999999/archive", json={"reason": "x"}).status_code == 404

@@ -32,6 +32,8 @@ const ADMIN_ONLY_CARDS: SettingsCardId[] = [
   'branding', 'team', 'custom_fields', 'telegram', 'gmail',
   // #102 made the todo-mode + todo-surface routes require_admin.
   'todo_mode',
+  // #302: the whole database as CSV.
+  'export',
 ];
 
 function visibleCardIds(isAdmin: boolean): SettingsCardId[] {
@@ -43,10 +45,10 @@ describe('settingsSections — the member/admin partition', () => {
     expect(visibleCardIds(false).sort()).toEqual([...MEMBER_CARDS].sort());
   });
 
-  it('shows an admin all twelve cards, each exactly once', () => {
+  it('shows an admin all thirteen cards, each exactly once', () => {
     const ids = visibleCardIds(true);
-    expect(ids).toHaveLength(12);
-    expect(new Set(ids).size).toBe(12);
+    expect(ids).toHaveLength(13);
+    expect(new Set(ids).size).toBe(13);
     expect(ids.sort()).toEqual([...MEMBER_CARDS, ...ADMIN_ONLY_CARDS].sort());
   });
 
@@ -147,7 +149,7 @@ describe('settingsSections — every card has a home', () => {
   it('declares each card id exactly once across all sections', () => {
     const ids = SETTINGS_SECTIONS.flatMap(s => s.cards).map(c => c.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(12);
+    expect(ids).toHaveLength(13);
   });
 
   it('gives every section a non-empty label', () => {
@@ -176,6 +178,7 @@ describe('SettingsCard is the only owner of card chrome', () => {
     'BrandingCard.tsx': 'branding',
     'ChangePasswordCard.tsx': 'change_password',
     'CustomFieldSettings.tsx': 'custom_fields',
+    'ExportCard.tsx': 'export',
     'GmailCard.tsx': 'gmail',
     'MemoryCard.tsx': 'memory',
     'NotificationSettings.tsx': 'notifications',

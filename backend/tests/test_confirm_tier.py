@@ -48,7 +48,8 @@ ROUTINE_CRM_TOOLS = frozenset({
 })
 # #186. The other seven todo tools stay unclassified: `todo_bulk_update` and #284's
 # `todo_bulk_create` (rule 4, bulk),
-# `todo_delete` / `todo_delete_project` (rule 3, a hard DELETE), and the three reads.
+# `todo_delete_project` (rule 3, a hard DELETE), and the four reads. #299 removed
+# `todo_delete`: a todo is never deleted, only dropped.
 ROUTINE_TODO_TOOLS = frozenset({
     "todo_create", "todo_update", "todo_create_project", "todo_update_project",
 })
@@ -228,7 +229,7 @@ def test_no_read_is_routine(todo_mode):
 
 
 @pytest.mark.parametrize("name", [
-    "crm_delete_contact", "crm_delete_todo", "crm_archive_deal", "crm_merge_deals",
+    "crm_delete_contact", "crm_archive_deal", "crm_merge_deals",
     "crm_bulk_move_deals", "crm_recompute_lead_scores", "crm_add_note",
     "memory_add_fact", "memory_invalidate_fact",
     "write_context_file", "delete_context_file", "append_daily_note",
@@ -271,11 +272,11 @@ def test_only_the_four_classified_todo_tools_are_routine(todo_mode):
     todo_mode("gtd")
     reg = ToolRegistry()
     todos = [n for n in reg.writes_map if n.startswith("todo_")]
-    assert len(todos) == 12, todos  # vacuity guard
+    assert len(todos) == 11, todos  # vacuity guard
     for name in todos:
         expected = name in ROUTINE_TODO_TOOLS
         assert reg.is_routine_write(name) is expected, name
-    for name in ("todo_bulk_update", "todo_bulk_create", "todo_delete", "todo_delete_project"):
+    for name in ("todo_bulk_update", "todo_bulk_create", "todo_delete_project"):
         assert reg.is_write(name) is True, name  # vacuity: they really are writes
         assert reg.is_routine_write(name) is False, name
     for name in ("todo_list", "todo_get", "todo_list_projects", "todo_weekly_review"):
@@ -371,7 +372,7 @@ def test_the_constant_is_accepted(monkeypatch):
     ("crm_update_contact", {"status": 7}, True),
     ("crm_update_todo", None, True),
     # #186. `status` IS advertised on both todo update tools, and dropping is the
-    # product's delete gesture — `todo_delete`'s own description sends the model here.
+    # product's only delete gesture (#299: there is no todo delete tool).
     ("todo_update", {"status": "dropped"}, True),
     ("todo_update", {"status": " DROPPED "}, True),
     ("todo_update_project", {"status": "dropped"}, True),
@@ -390,7 +391,7 @@ def test_the_constant_is_accepted(monkeypatch):
     ("todo_create", {"status": "dropped"}, False),
     ("todo_create_project", {"status": "dropped"}, False),
     # The unclassified todo writes never reach the carve-out; they confirm by name.
-    ("todo_delete", {"todo_id": 1}, False),
+    ("todo_delete_project", {"project_id": 1}, False),
     ("todo_bulk_update", {"ids": [1], "fields": {"status": "dropped"}}, False),
     # Fails closed on malformed argument shapes, exactly as the crm_* keys do.
     ("todo_update", None, True),

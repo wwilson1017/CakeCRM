@@ -385,15 +385,27 @@ async def health_live():
 # Assets served directly; every other non-API path falls back to index.html so
 # client-side routes (/login, /contacts/42) survive a hard refresh.
 
-_frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
-if _frontend_dist.exists():
-    app.mount("/assets", StaticFiles(directory=str(_frontend_dist / "assets")), name="assets")
+# index.html, the logo and the favicon are not content-hashed, so they go out with
+# Cache-Control: no-cache (revalidate every load) and a changed logo shows on the next
+# load. Hashed files under /assets/ keep StaticFiles' defaults.
+# simplification: no-cache re-sends the small shell each load (FileResponse has no 304);
+# upgrade path is StaticFiles.file_response for conditional requests.
+_NO_CACHE = {"Cache-Control": "no-cache"}
 
+
+def _mount_spa(app: FastAPI, dist: Path) -> None:
     from fastapi.responses import FileResponse
+
+    app.mount("/assets", StaticFiles(directory=str(dist / "assets")), name="assets")
 
     @app.get("/{path:path}", include_in_schema=False)
     async def spa_fallback(path: str):
-        candidate = (_frontend_dist / path).resolve()
-        if path and candidate.is_relative_to(_frontend_dist) and candidate.is_file():
-            return FileResponse(str(candidate))
-        return FileResponse(str(_frontend_dist / "index.html"))
+        candidate = (dist / path).resolve()
+        if path and candidate.is_relative_to(dist) and candidate.is_file():
+            return FileResponse(str(candidate), headers=_NO_CACHE)
+        return FileResponse(str(dist / "index.html"), headers=_NO_CACHE)
+
+
+_frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _frontend_dist.exists():
+    _mount_spa(app, _frontend_dist)
