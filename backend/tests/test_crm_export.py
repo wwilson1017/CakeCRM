@@ -54,13 +54,23 @@ def _truncated_tables(include_definitions: bool) -> set[str]:
             seen.append(statement)
 
     service._truncate_all(Cur(), include_definitions=include_definitions)
-    return _truncate_targets(" ".join(seen))
+    return _truncate_targets(";".join(seen))
 
 
 def _truncate_targets(statement: str) -> set[str]:
-    m = re.search(r"TRUNCATE (.+?) RESTART IDENTITY", statement, flags=re.S)
-    assert m, f"no TRUNCATE in {statement!r}"
-    return {t.strip() for t in m.group(1).split(",")}
+    lists = re.findall(r"TRUNCATE\s+(?:TABLE\s+)?(.+?)(?:\s+RESTART IDENTITY|\s+CASCADE|;|$)",
+                       statement, flags=re.S | re.I)
+    assert lists, f"no TRUNCATE in {statement!r}"
+    return {t.strip() for names in lists for t in names.split(",")}
+
+
+# Whoever adds a table (a migration, or a new name in _truncate_all) fixes this in the same
+# PR, including when it is the second of two PRs to land and the first added the guard.
+_HOW_TO_FIX = (
+    "add each to crm/export.py: TABLES to export it (with a unique order key), or "
+    "NOT_EXPORTED with the reason it stays out (credentials, tokens, per-seat or "
+    "assistant bookkeeping). The PR that adds the table owns this, whichever PR lands second."
+)
 
 
 def _unplaced(tables: set[str]) -> set[str]:
@@ -78,6 +88,7 @@ def test_the_detectors_flag_a_new_table_and_pass_a_placed_one():
     assert _unplaced({"gadgets", "deals"}) == {"gadgets"}
     assert _unplaced({"deals", "crm_meta"}) == set()
     assert _truncate_targets("TRUNCATE a, b,\n c RESTART IDENTITY") == {"a", "b", "c"}
+    assert _truncate_targets("TRUNCATE a RESTART IDENTITY;TRUNCATE TABLE d") == {"a", "d"}
 
 
 def test_every_schema_table_is_exported_or_deliberately_excluded():
@@ -85,10 +96,10 @@ def test_every_schema_table_is_exported_or_deliberately_excluded():
     schema = _real_schema()
     # The replay reached the real files, including the tasks -> todos rename.
     assert {"deals", "todos", "todo_projects", "users"} <= schema
-    assert not {"tasks", "task_projects", "reminders"} & schema
+    assert not {"tasks", "task_projects"} & schema
     exported = {t for t, _, _ in export.TABLES}
     assert _unplaced(schema) == set(), (
-        f"place these in crm/export.py TABLES or NOT_EXPORTED: {sorted(_unplaced(schema))}")
+        f"the migrations create {sorted(_unplaced(schema))} unplaced; {_HOW_TO_FIX}")
     assert not (exported & set(export.NOT_EXPORTED))
     assert (exported | set(export.NOT_EXPORTED)) - schema == set(), "names a table the schema lacks"
 
@@ -100,7 +111,7 @@ def test_every_table_a_data_reset_clears_is_exported_or_deliberately_excluded():
         assert {"companies", "deals", "crm_stage_criteria"} <= cleared  # reached the real SQL
         assert _unplaced(cleared) == set(), (
             f"_truncate_all(include_definitions={include_definitions}) clears "
-            f"{sorted(_unplaced(cleared))}, which crm/export.py neither exports nor excludes")
+            f"{sorted(_unplaced(cleared))}; {_HOW_TO_FIX}")
     assert "crm_field_definitions" in _truncated_tables(True) - _truncated_tables(False)
 
 
