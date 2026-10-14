@@ -210,6 +210,7 @@ tool nobody has classified confirms, so a capability added later is never silent
 exempt. Deletes, archives, merges, bulk moves, lead-score recomputation, Gmail drafts,
 notifications, memory facts, and any write to `soul.md` or `MEMORY.md` all
 keep their Approve card. Bulk todo updates and both todo deletes are in that group too.
+So are setting, changing and voiding a reminder: a reminder notifies people later.
 Five of the twenty can take a record out of your lists by setting its `status` —
 archiving a contact or a company, or dropping a todo or a project; that
 particular call keeps its card even though the tool is routine. Giving a todo a

@@ -40,7 +40,9 @@
   on nearly every install, because `_TODO_TOOL_NAMES` hides three of the sixteen in GTD
   mode. The other todo tools stay unclassified on the rule: `todo_bulk_update` and
   #284's `todo_bulk_create` (an import of up to 500 todos) are bulk, the two deletes remove
-  a record, and the reads cannot carry a tier at all.
+  a record, and the reads cannot carry a tier at all. #283's three reminder writes
+  (`reminder_create`/`_update`/`_void`) are never routine either (rule 2: they notify
+  someone later), pinned by `test_reminder_tools_are_never_routine`; see `reminders.md`.
   No single registry holds all twenty — normal mode loads the sixteen, GTD mode
   thirteen plus four — so `test_confirm_tier.py` pins the SOURCE set and each registry
   separately. The classification rule and the never-routine list live in

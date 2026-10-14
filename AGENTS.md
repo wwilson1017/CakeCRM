@@ -38,6 +38,7 @@ not `@` imports (imports load eagerly).
 | Reports | `reports.md` |
 | Dashboard Today panel | `today-panel.md` |
 | Todos / GTD, no-login todo surfaces | `todos-gtd.md` |
+| Reminders (engine, tick, page, Baker tools) | `reminders.md` |
 | Routes, lazy loading, error boundaries | `frontend-boot-split.md` |
 | Tests, guard tests, CI, secret scanning | `testing.md` |
 | Logo and brand assets | `brand-mark.md` |

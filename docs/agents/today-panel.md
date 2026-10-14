@@ -16,7 +16,9 @@
   filled it, which is what let that land as an insertion rather than a renumbering of
   every rank below it. **#188** then removed reminders, which had held rung 4, and
   renumbered due-today into it — the numbers are a wire contract, so the client's
-  `CrmTodayTodoItem.rank` union moved with them.
+  `CrmTodayTodoItem.rank` union moved with them. **#283** brought reminders back as an
+  unranked-tail source (`kind: 'reminder'`, `why: 'reminder'`), after brought-back todos
+  and before the hot-deal tail; no rung is renumbered. See `reminders.md`.
   **#261 adds brought-back todos to the unranked tail** (`why: 'bring_back'`, `rank: null`),
   ahead of the hot-deal tail: a todo whose bring-back date has arrived and that is not
   starred, overdue or due today. Membership mirrors `today_view` — admitted on
