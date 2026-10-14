@@ -136,10 +136,10 @@ def test_the_route_is_authenticated_not_on_the_shared_crud_factory():
 
 
 def test_the_public_web_mount_has_no_rename_route():
-    """The real app: the authed mount has the route, neither no-login mount does."""
+    """The real app: the authed mount has the route, the no-login mount does not."""
     from main import app
 
     paths = {getattr(r, "path", "") for r in app.routes}
     assert URL in paths
-    assert "/api/todo-web/todos" in paths and "/api/todo-web/{token}/todos" in paths
+    assert "/api/todo-web/todos" in paths
     assert not [p for p in paths if p.startswith("/api/todo-web") and "contexts" in p]

@@ -33,9 +33,10 @@ PUBLIC_ROUTES = {
     ("/{path:path}", "GET"),
     # The no-login todo surfaces (#70). These are the FEATURE: quick-capture and the
     # todo web app are meant to be openable on a phone with no login. Each handler
-    # 404s the surface unless the install has explicitly configured it and matches
-    # the URL token, and rate-limits by IP — tests/test_todo_public.py pins all of
-    # that. Nothing here reads or writes a CRM record other than a todo.
+    # 404s the surface unless the install has explicitly configured it, and rate-limits
+    # by IP; capture matches the URL token, the todo app a browser session (#293) —
+    # tests/test_todo_public.py pins all of that. Nothing here reads or writes a CRM
+    # record other than a todo.
     ("/capture", "GET"),                                # write-only capture page
     ("/capture/{token}", "GET"),
     ("/capture/manifest.webmanifest", "GET"),           # PWA manifests, static
@@ -45,18 +46,27 @@ PUBLIC_ROUTES = {
     ("/todo", "GET"),                                   # the todo app's HTML shell
     ("/todo/{rest:path}", "GET"),
     ("/todo/manifest.webmanifest", "GET"),
-    ("/todo/{token}/manifest.webmanifest", "GET"),
+    # #293: the sign-in page (redeems nothing) and its redemption (same-origin, single
+    # use, strict guess limiter) are how a browser GETS a session, so they cannot need one.
+    ("/todo/signin/{token}", "GET"),
+    ("/api/todo-web/signin/{token}", "POST"),
+    # The retired tokened API: a JSON 404 for every method, so an old client's GET does
+    # not fall through to the SPA shell.
+    ("/api/todo-web/{token}/{rest:path}", "GET"),
+    ("/api/todo-web/{token}/{rest:path}", "POST"),
+    ("/api/todo-web/{token}/{rest:path}", "PUT"),
+    ("/api/todo-web/{token}/{rest:path}", "DELETE"),
 }
 
-# The todo web app's JSON API (#70) is mounted TWICE from one route set — bare and
-# token-prefixed — by gtd_router.build_router, so listing paths here would mean two
-# entries per endpoint that silently rot as the route set grows. Recognize its two
-# guards by name instead: both are router-level dependencies that 404 unless the
-# surface is enabled, match the token, and rate-limit. The property this audit
+# The todo web app's JSON API (#70) is gtd_router.build_router's route set, so listing
+# paths here would mean entries that silently rot as the route set grows. Recognize its
+# guard by name instead: a router-level dependency (also on /session and /signout) that
+# 404s unless the surface is enabled, rate-limits, and 401s without a live browser
+# session (#293). The property this audit
 # protects — no route reaches a handler with NO guard at all — is preserved, and
 # build_router's own docstring carries the warning that everything added there is
 # public.
-PUBLIC_SURFACE_GUARDS = {"_public_api_guard", "_token_api_guard"}
+PUBLIC_SURFACE_GUARDS = {"_session_api_guard"}
 
 # Install configuration + destructive/global operations. Members may do everything
 # else, including all record CRUD — ownership is not access control.
@@ -104,9 +114,9 @@ ADMIN_ONLY = {
     ("/api/crm/scores/backfill", "POST"),
     # Todo mode is install-wide (it lives on the crm_meta singleton, so one member
     # flipping it changes everyone's todo experience) — same rule as assistant identity.
-    # The no-login surfaces are stronger still: GET returns the tokens themselves, and
-    # POST can mint an unauthenticated read+write link to the whole todo store whose
-    # lifetime is NOT tied to the account that created it. Both admin-only since #102.
+    # The no-login surfaces are install-wide too: GET returns the capture token itself,
+    # and POST switches the todo app on for every seat. Both admin-only since #102.
+    # (Signing a device in, #293, is per seat: /api/crm/gtd/web-* are member routes.)
     ("/api/crm/todo-mode", "POST"),
     ("/api/crm/todo-surfaces", "GET"),
     ("/api/crm/todo-surfaces", "POST"),
