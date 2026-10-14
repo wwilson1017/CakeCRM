@@ -11,7 +11,6 @@ const { updateTodoMock } = vi.hoisted(() => ({ updateTodoMock: vi.fn() }));
 vi.mock('../api', () => ({
   createTodo: vi.fn(),
   updateTodo: updateTodoMock,
-  deleteTodo: vi.fn(),
 }));
 
 import { TodoEditSheet } from './TodoEditSheet';

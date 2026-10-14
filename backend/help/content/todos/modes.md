@@ -15,6 +15,11 @@ parallel follow-up mechanism to keep in step with it.
 is linked to, priority, and the due date, with an Open / Done / All filter that starts on
 Open.
 
+A todo's description box is two lines, and a GTD todo's Notes box is a few more. Click
+**Open larger** beside it, or click into a box that already holds more than it shows, to edit
+the text in a window-sized editor; Save puts it back, Cancel or Esc leaves the field as it
+was, and Cmd/Ctrl+Enter saves.
+
 **GTD mode** is the full Getting Things Done workflow: an inbox to triage, next actions,
 waiting-for and delegated items, someday-maybe, projects, contexts, tags, stars, repeats and
 a weekly review. The Todos page becomes nine tabs. See `todos/gtd`.
@@ -36,8 +41,7 @@ normal mode leaves at their defaults.
 ## What else the switch changes
 
 The tools Baker is offered swap with the mode. In normal mode it gets the simple todo tools
-— `crm_create_todo`, `crm_list_todos`, `crm_complete_todo`, `crm_update_todo` and
-`crm_delete_todo`. In GTD mode those are withdrawn and the `todo_` tools take their place. It
+— `crm_create_todo`, `crm_list_todos`, `crm_complete_todo` and `crm_update_todo`. In GTD mode those are withdrawn and the `todo_` tools take their place. It
 is never handed both vocabularies for one store, and its working instructions change with the
 mode so it never coaches you toward a tool it cannot see.
 

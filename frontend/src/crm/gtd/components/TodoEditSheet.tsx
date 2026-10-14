@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { createTodo, deleteTodo, updateTodo } from '../api';
+import { createTodo, updateTodo } from '../api';
 import { REPEAT_OPTIONS, STATUS_META, TODO_STATUS_ORDER } from '../constants';
 import { dropUndo, hasPendingFiling, queueUndo } from '../undoQueue';
 import { isTodoPublicMode } from '../publicMode';
@@ -9,6 +9,8 @@ import { useListTz } from '../useTodoMeta';
 import { formatDay, parseTags } from '../util';
 import { nextActionCopyText, todoCopyText } from '../copyText';
 import { CopyButton } from './CopyButton';
+import { BigTextEditor } from '../../../shared/BigTextEditor';
+import { overflows } from '../../../shared/overflows';
 
 const NEW_PROJECT = '__new__';
 // The context picker's option values are INDICES into `contextOptions`, never the context
@@ -39,6 +41,7 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
   const tz = useListTz();
   const [title, setTitle] = useState(todo?.title ?? '');
   const [notes, setNotes] = useState(todo?.notes ?? '');
+  const [notesExpanded, setNotesExpanded] = useState(false); // #305
   const [status, setStatus] = useState<TodoStatus>(todo?.status ?? defaults?.status ?? 'inbox');
   const [projectSel, setProjectSel] = useState<string>(
     String(todo?.project_id ?? defaults?.project_id ?? ''),
@@ -174,23 +177,6 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
     }
   };
 
-  const remove = async () => {
-    if (!todo || !window.confirm('Delete this todo permanently? “Dropped” keeps history instead.')) return;
-    setBusy(true);
-    try {
-      await deleteTodo(todo.id);
-      // A completed todo is still openable from Search inside the 7s window, and a row
-      // whose todo no longer exists offers a PUT that 404s and then claims it is "still
-      // marked done" (#231).
-      dropUndo(todo.id);
-      onSaved();
-      onClose();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Delete failed');
-      setBusy(false);
-    }
-  };
-
   // Copy reads the LIVE form, not `todo` — you can retype the action and copy it
   // before saving, and what lands on the clipboard is what is on screen. Lazy
   // (called on click) so the string is only built when it is wanted.
@@ -253,7 +239,12 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
               )}
             </div>
             <textarea id="gtd-notes" className={`${inputCls} min-h-20`} value={notes}
+                      onClick={e => { if (overflows(e.currentTarget)) setNotesExpanded(true); }}
                       onChange={e => setNotes(e.target.value)} />
+            {/* #305: long notes open in a larger window, by this link or by a click into a
+                box that already holds more than it shows. */}
+            <button type="button" className="mt-1 text-xs text-ck-accent-text hover:underline"
+                    onClick={() => setNotesExpanded(true)}>Open larger ⤢</button>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -388,13 +379,8 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
 
         {error && <p className="mt-3 text-sm text-ck-accent-text">{error}</p>}
 
-        <div className="mt-5 flex items-center justify-between gap-3">
-          {todo ? (
-            <button type="button" onClick={() => void remove()} disabled={busy}
-                    className="text-sm text-ck-accent-text underline disabled:opacity-50">
-              Delete
-            </button>
-          ) : <span />}
+        {/* No Delete (#299): a todo is never deleted — set the status to Dropped. */}
+        <div className="mt-5 flex items-center justify-end gap-3">
           <div className="flex gap-2">
             <button type="button" onClick={onClose}
                     className="rounded-lg border border-line bg-cream px-4 py-2 text-sm font-heading text-charcoal hover:bg-sand">
@@ -407,6 +393,14 @@ export function TodoEditSheet({ todo, defaults, projects, contexts, onClose, onS
           </div>
         </div>
       </div>
+      {notesExpanded && (
+        <BigTextEditor
+          title="Notes"
+          value={notes}
+          onSave={text => { setNotes(text); setNotesExpanded(false); }}
+          onCancel={() => setNotesExpanded(false)}
+        />
+      )}
     </div>
   );
 }
