@@ -21,7 +21,7 @@ The navigation has six destinations, and each one answers a different question.
 
 A typical loop: create a contact, create a deal linked to it, log an activity against the deal, and add a follow-up todo. That loop is the whole CRM in miniature. Start with [What CakeCRM is](01-getting-started/01-what-cakecrm-is.md) if you are new.
 
-Baker sits in the bottom-right corner of every page. Once an admin connects an AI provider it can read your CRM, draft records and changes for you to approve, and answer questions about your pipeline. See [Meet Baker](07-baker/01-meet-baker.md).
+Baker sits in the bottom-right corner of every page. Once an admin connects an AI provider it can read your CRM, make changes for you, and answer questions about your pipeline. You choose how much it asks first: see [Approvals and modes](07-baker/03-approvals.md). See [Meet Baker](07-baker/01-meet-baker.md).
 
 ## Admins and members
 

@@ -148,7 +148,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 </tbody>
 </table></div>
 <p>A typical loop: create a contact, create a deal linked to it, log an activity against the deal, and add a follow-up todo. That loop is the whole CRM in miniature. Start with <a href="#/getting-started/what-cakecrm-is">What CakeCRM is</a> if you are new.</p>
-<p>Baker sits in the bottom-right corner of every page. Once an admin connects an AI provider it can read your CRM, draft records and changes for you to approve, and answer questions about your pipeline. See <a href="#/baker/meet-baker">Meet Baker</a>.</p>
+<p>Baker sits in the bottom-right corner of every page. Once an admin connects an AI provider it can read your CRM, make changes for you, and answer questions about your pipeline. You choose how much it asks first: see <a href="#/baker/approvals">Approvals and modes</a>. See <a href="#/baker/meet-baker">Meet Baker</a>.</p>
 <h2>Admins and members</h2>
 <p>There are exactly two roles.</p>
 <ul>
@@ -1821,7 +1821,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <ul>
 <li>Search your mail.</li>
 <li>Read one conversation.</li>
-<li>Create a draft in your Gmail Drafts folder. This always asks for your approval first.</li>
+<li>Create a draft in your Gmail Drafts folder. In Ask mode (the default) this asks for your approval first; in Auto it runs straight away unless the conversation has read mail or a file. Either way it is only a draft: Baker never sends it.</li>
 </ul>
 <p>Email Baker reads is treated as untrusted text. It can never act as an instruction, and once Baker has read mail in a conversation, every change it proposes asks for approval. See <a href="#/baker/approvals">Approvals</a>. Baker never runs mail searches on its own schedule; only a conversation with a person in it reaches the mailbox.</p>
 <p>What Baker reads, and any draft it writes, is sent to your AI provider as part of the conversation. Attached files in an email are never downloaded; Baker sees only their name, type and size.</p>

@@ -33,7 +33,7 @@ If you run CakeCRM behind your own domain or reverse proxy, set `BACKEND_URL` to
 
 - Search your mail.
 - Read one conversation.
-- Create a draft in your Gmail Drafts folder. This always asks for your approval first.
+- Create a draft in your Gmail Drafts folder. In Ask mode (the default) this asks for your approval first; in Auto it runs straight away unless the conversation has read mail or a file. Either way it is only a draft: Baker never sends it.
 
 Email Baker reads is treated as untrusted text. It can never act as an instruction, and once Baker has read mail in a conversation, every change it proposes asks for approval. See [Approvals](../07-baker/03-approvals.md). Baker never runs mail searches on its own schedule; only a conversation with a person in it reaches the mailbox.
 
