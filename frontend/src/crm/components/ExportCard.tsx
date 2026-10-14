@@ -3,13 +3,15 @@
  * (the card is gated in settingsSections.ts and the route is `require_admin`).
  *
  * Not a plain `<a download>`: the route needs the Bearer token, which a browser-issued
- * link request does not carry. `apiBlob` is the one authed byte fetch; the object URL is
+ * link request does not carry, so the bytes come through `apiResponse` and an object URL.
+ * The file is named from the server's `Content-Disposition`, which stamps the install's
+ * local day; the browser's own clock could be on another calendar day. The object URL is
  * revoked once the click has been handed to the browser.
  */
 
 import { useState } from 'react';
 
-import { apiBlob } from '../../core/api/client';
+import { apiResponse, attachmentName } from '../../core/api/client';
 import { toast } from '../../shared/toast';
 import { btnPrimary } from '../styles';
 import { SettingsCard } from './SettingsCard';
@@ -22,11 +24,12 @@ export function ExportCard({ isMobile }: { isMobile: boolean }) {
   async function download() {
     setBusy(true);
     try {
-      const blob = await apiBlob('/api/crm/export');
+      const res = await apiResponse('/api/crm/export');
+      const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `cakecrm-export-${new Date().toISOString().slice(0, 10)}.zip`;
+      a.download = attachmentName(res.headers.get('Content-Disposition'), 'cakecrm-export.zip');
       document.body.appendChild(a);
       a.click();
       a.remove();
