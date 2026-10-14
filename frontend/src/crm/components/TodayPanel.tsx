@@ -27,6 +27,7 @@ import { dueLabel } from '../gtd/util';
 import { cardStyle, sectionHeading } from '../styles';
 import {
   TODAY_MAX_RETRIES, TODAY_SCOPE_KEY, coerceTodayScope, collapseToday, dealEvidence,
+  reminderEvidence,
   msUntilRefresh, retryDelayMs, whyBadge, type TodayScope,
 } from '../todayPanel';
 import { UNASSIGNED_LABEL, useUsers } from '../useUsers';
@@ -161,6 +162,8 @@ export function TodayPanel({ wrapperStyle, refreshKey, onMutated }: Props) {
     // the browser's half of a shape pinned against `backend/crm/links.py` — a second
     // literal would be a second producer nothing checks.
     if (item.kind === 'deal') { navigate(dealDeepLink(item.id)); return; }
+    // A reminder (#283) has no detail URL either; its page lists today's at the top.
+    if (item.kind === 'reminder') { navigate('/crm/reminders'); return; }
     // Todos have no detail URL: /crm/todos is mode-routed (GTD's Today view by default
     // since #102, the list in normal mode). Both are coherent destinations, and the
     // row's own checkbox is how you act on that specific todo without leaving.
@@ -259,14 +262,16 @@ function TodayRow({ item, today, showUnassigned, onOpen, onComplete }: RowProps)
                          alignItems: 'center', justifyContent: 'center', color: SAGE_TEXT }} />
       ) : (
         // Only todos can be completed, but the badges still have to line up: without
-        // this spacer a deal row starts a checkbox-width to the left of every todo row,
+        // this spacer a deal or reminder row starts a checkbox-width to the left of every todo row,
         // and the panel reads as misaligned rather than as two kinds of row.
         <span aria-hidden="true" style={{ flexShrink: 0, width: 18 }} />
       )}
       <button type="button" onClick={() => onOpen(item)}
               style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, background: 'none',
                        border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left', font: 'inherit' }}>
-        {item.kind === 'deal'
+        {item.kind === 'reminder'
+          ? <span style={{ ...mono(9, INK_MUTE), flexShrink: 0 }}>REMINDER</span>
+          : item.kind === 'deal'
           // #125's control, rendered READ-ONLY: no `onCycle`, so it emits a labelled
           // `role="img"` span rather than a button — the panel is a list of what needs you,
           // not a place to re-triage the pipeline, and a tab stop here would sit inside the
@@ -280,7 +285,8 @@ function TodayRow({ item, today, showUnassigned, onOpen, onComplete }: RowProps)
         </span>
         {unassigned && <span style={{ ...mono(9, INK_DIM), flexShrink: 0 }}>{UNASSIGNED_LABEL}</span>}
         <span style={{ ...mono(9, INK_MUTE), flexShrink: 0 }}>
-          {item.kind === 'deal' ? dealEvidence(item.days_since_touch, item.value) : due?.text}
+          {item.kind === 'deal' ? dealEvidence(item.days_since_touch, item.value)
+            : item.kind === 'reminder' ? reminderEvidence(item) : due?.text}
         </span>
       </button>
     </div>

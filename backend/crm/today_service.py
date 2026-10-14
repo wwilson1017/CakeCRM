@@ -11,8 +11,8 @@ The ladder, as decided on the issue::
     2  hot + stale deals  a deal a human marked hot that has since gone quiet (#131)
     3  overdue todos      most overdue first
     4  todos due today
-    –  todos brought back today (#261), then every other hot deal — no rank at all,
-       reachable only through the expander
+    –  todos brought back today (#261), then reminders due today (#283), then every
+       other hot deal — no rank at all, reachable only through the expander
 
 Rank 2 arrived exactly as #130 promised — an insertion, renumbering nothing. What it did
 NOT need was a rank 6. Issue #131 rules that a hot deal which was touched recently must
@@ -213,8 +213,22 @@ def _rank_hot_deals(deals) -> tuple[list[dict], list[dict]]:
     return promoted, tail
 
 
+def _fetch_today_reminders(today: str, owner_id: int | None) -> list[dict]:
+    """Reminders due today (#283), upcoming or already sent — a voided one is history and
+    never shows. Scoped to the seat that owns or receives it: a reminder always has people,
+    so there is no unassigned case to widen to, unlike the todo predicate."""
+    sql = ("SELECT id, note, owner_id, to_char(due_time, 'HH24:MI') AS due_time, status "
+           "FROM reminders WHERE due_date = %s AND status IN ('upcoming', 'fired')")
+    params: list = [today]
+    if owner_id is not None:
+        sql += " AND (owner_id = %s OR %s = ANY(people))"
+        params += [owner_id, owner_id]
+    return pg_fetchall(sql + " ORDER BY due_at ASC, id ASC", params)
+
+
 def build_today_items(
     todos: list[dict], today: str, deals: list[dict] | tuple = (),
+    reminders: list[dict] | tuple = (),
 ) -> list[dict]:
     """The ladder. PURE — no I/O, no clock: ``today`` arrives as a parameter.
 
@@ -229,6 +243,7 @@ def build_today_items(
     terms. The default is safe only because something asserts the real caller passes them
     — ``test_get_today_feeds_the_fetched_deals_into_the_ladder`` — since a defaulted
     parameter is otherwise exactly how a source silently drops out of a merged list.
+    ``reminders`` (#283) defaults the same way, held by its twin test.
     """
     starred: list[dict] = []
     overdue: list[dict] = []
@@ -269,9 +284,20 @@ def build_today_items(
     due_today.sort(key=lambda i: i["id"])
     brought_back.sort(key=lambda i: i["id"])
 
+    # Reminders due today (#283): unranked, timed ones first by time, date-only after.
+    reminder_tail = sorted(
+        ({"kind": "reminder", "id": r["id"], "title": r.get("note") or "",
+          "due_time": r.get("due_time"), "status": r.get("status"),
+          "owner_id": r.get("owner_id"), "rank": None, "why": "reminder"}
+         for r in reminders),
+        key=lambda i: (i["due_time"] is None, i["due_time"] or "", i["id"]),
+    )
+
     hot_stale, hot_tail = _rank_hot_deals(deals)
-    # The user's own returning todos lead the unranked tail, ahead of other people's deals.
-    return starred + hot_stale + overdue + due_today + brought_back + hot_tail
+    # The user's own returning todos and reminders lead the unranked tail, ahead of other
+    # people's deals.
+    return (starred + hot_stale + overdue + due_today + brought_back + reminder_tail
+            + hot_tail)
 
 
 def get_today(owner_id: int | None = None) -> dict:
@@ -290,9 +316,10 @@ def get_today(owner_id: int | None = None) -> dict:
     _, end = local_day_bounds(date.fromisoformat(today))
     todos = _fetch_today_todos(today, owner_id)
     deals = _fetch_hot_deals(owner_id)
+    reminders = _fetch_today_reminders(today, owner_id)
     return {
         "date": today,
         "next_refresh_at": end.isoformat(),
         "scope": {"owner_id": owner_id},
-        "items": build_today_items(todos, today, deals=deals),
+        "items": build_today_items(todos, today, deals=deals, reminders=reminders),
     }

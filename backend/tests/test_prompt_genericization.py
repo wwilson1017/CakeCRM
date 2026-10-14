@@ -330,6 +330,7 @@ def _all_tool_defs() -> list[dict]:
     from help.tools import HELP_TOOL_DEFS
     from memory.tools import get_memory_tools
     from notifications.tools import get_notification_tools
+    from reminders.tools import REMINDER_TOOL_DEFS
 
     # GTD_TOOL_DEFS is read directly, not through get_gtd_tools(): that returns ([], {})
     # unless GTD mode is active, so calling it here would silently scan nothing (#70).
@@ -337,6 +338,7 @@ def _all_tool_defs() -> list[dict]:
     defs += list(get_memory_tools()[0])
     defs += list(get_context_file_tools()[0])
     defs += list(HELP_TOOL_DEFS)
+    defs += list(REMINDER_TOOL_DEFS)
     defs += list(get_notification_tools(ToolRegistry())[0])
     return defs
 

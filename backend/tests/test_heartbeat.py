@@ -233,3 +233,22 @@ def test_observer_tick_returns_the_pass_summary(monkeypatch):
 
     monkeypatch.setattr(observer, "run_observer_if_due", lambda: {"conversations": 2})
     assert service.observer_tick() == {"conversations": 2}
+
+
+# ── #283 reminders seam ─────────────────────────────────────────────────────────
+
+def test_reminders_tick_survives_a_raising_callee(monkeypatch):
+    """A broken pass must be a logged no-op, never a dead scheduler job."""
+    from reminders import service as reminders_service
+
+    monkeypatch.setattr(reminders_service, "fire_due",
+                        lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert service.reminders_tick() is None
+
+
+def test_reminders_tick_returns_the_fire_summary(monkeypatch):
+    from reminders import service as reminders_service
+
+    monkeypatch.setattr(reminders_service, "fire_due",
+                        lambda: {"fired": 1, "spawned": 0, "attempted": 2})
+    assert service.reminders_tick() == {"fired": 1, "spawned": 0, "attempted": 2}

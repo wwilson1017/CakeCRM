@@ -33,6 +33,7 @@ from crm import gtd_service, gtd_tools, provenance_service, service as crm, tool
 from gmail.tools import GMAIL_TOOL_DEFS
 from memory.tools import MEMORY_TOOL_DEFS
 from notifications.tools import NOTIFY_USER_DEF
+from reminders import tools as reminder_tools
 
 #: Write tools that deliberately carry no `target`, each with the reason.
 WAIVED = {
@@ -57,7 +58,7 @@ def _scanned_writes() -> set[str]:
     """Every write def in every module the assistant registry composes."""
     return (
         _write_names(tools.CRM_TOOL_DEFS) | _write_names(gtd_tools.GTD_TOOL_DEFS)
-        | _write_names(MEMORY_TOOL_DEFS) | _write_names(CONTEXT_FILE_TOOL_DEFS)
+        | _write_names(reminder_tools.REMINDER_TOOL_DEFS) | _write_names(MEMORY_TOOL_DEFS) | _write_names(CONTEXT_FILE_TOOL_DEFS)
         | _write_names(GMAIL_TOOL_DEFS) | _write_names([NOTIFY_USER_DEF])
     )
 
@@ -65,7 +66,9 @@ def _scanned_writes() -> set[str]:
 def _executor_function(name: str):
     if name in tools.TOOL_EXECUTORS:
         return tools.TOOL_EXECUTORS[name]
-    # GTD executors are `_wrap` closures; the tool's body is the module function.
+    # GTD and reminder executors are `_wrap` closures; the body is the module function.
+    if hasattr(reminder_tools, f"_{name}"):
+        return getattr(reminder_tools, f"_{name}")
     return getattr(gtd_tools, f"_{name}")
 
 
@@ -102,7 +105,8 @@ def _reaches_helper(fn, module=tools) -> bool:
 
 
 def test_every_crm_and_todo_write_attaches_a_target_or_is_waived():
-    covered = _write_names(tools.CRM_TOOL_DEFS) | _write_names(gtd_tools.GTD_TOOL_DEFS)
+    covered = (_write_names(tools.CRM_TOOL_DEFS) | _write_names(gtd_tools.GTD_TOOL_DEFS)
+               | _write_names(reminder_tools.REMINDER_TOOL_DEFS))
     assert len(covered) >= 25, "vacuity guard — the write set shrank unexpectedly"
     missing = sorted(
         n for n in covered - WAIVED.keys() if not _reaches_helper(_executor_function(n))
@@ -114,7 +118,8 @@ def test_the_waiver_list_matches_the_real_write_set_in_both_directions():
     scanned = _scanned_writes()
     attaching = {
         n for n in scanned
-        if (n in tools.TOOL_EXECUTORS or hasattr(gtd_tools, f"_{n}"))
+        if (n in tools.TOOL_EXECUTORS or hasattr(gtd_tools, f"_{n}")
+            or hasattr(reminder_tools, f"_{n}"))
         and _reaches_helper(_executor_function(n))
     }
     assert scanned - attaching == WAIVED.keys(), (
@@ -325,3 +330,19 @@ def test_gtd_writes_name_their_target_and_projects_have_no_owner_column(monkeypa
     monkeypatch.setattr(gtd_service, "update_todo", lambda tid, fields: {"id": 8, "title": "Call Ana", "owner_id": 2})
     todo = gtd_tools.GTD_TOOL_EXECUTORS["todo_update"](todo_id=8, star=True)
     assert todo["target"]["title"] == "Call Ana"
+
+
+def test_reminder_writes_name_their_target(monkeypatch):
+    """#283: each reminder write's result names the reminder it wrote, titled by its note."""
+    from reminders import service as reminder_service
+
+    row = {"id": 9, "note": "Call Acme", "owner_id": 2}
+    monkeypatch.setattr(reminder_service, "create_reminder", lambda **kw: row)
+    monkeypatch.setattr(reminder_service, "update_reminder", lambda rid, fields: row)
+    monkeypatch.setattr(reminder_service, "void_reminder", lambda rid, reason: row)
+    ex = reminder_tools.REMINDER_TOOL_EXECUTORS
+    for result in (ex["reminder_create"](note="Call Acme", due_date="2030-01-01"),
+                   ex["reminder_update"](reminder_id=9, note="Call Acme"),
+                   ex["reminder_void"](reminder_id=9, reason="done")):
+        assert result["target"] == {"entity_type": "reminder", "id": 9, "title": "Call Acme",
+                                    "owner_id": 2}

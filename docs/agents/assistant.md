@@ -42,6 +42,9 @@
   #284's `todo_bulk_create` (an import of up to 500 todos) are bulk, `todo_delete_project`
   removes a record (#299 removed `todo_delete` and `crm_delete_todo`: a todo is never deleted;
   neither was routine, so the counts below are unchanged), and the reads cannot carry a tier at all.
+  #283's three reminder writes (`reminder_create`/`_update`/`_void`) are never routine
+  either (rule 2: they notify someone later), pinned by
+  `test_reminder_tools_are_never_routine`; see `reminders.md`.
   No single registry holds all twenty — normal mode loads the sixteen, GTD mode
   thirteen plus four — so `test_confirm_tier.py` pins the SOURCE set and each registry
   separately. The classification rule and the never-routine list live in

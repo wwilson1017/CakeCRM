@@ -4112,20 +4112,23 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # single-statement upserts/deletes touching only that table, so the last position can't
     # invert against anything. It stays OUT of is_crm_empty: it is configuration, and counting
     # it would let a customised checklist suppress the first-run sample-data prompt.
+    # reminders (#283) trail both variants: user-authored data like todos. Its only FKs are
+    # to users (not truncated) and to itself, and its writers lock only reminders rows, so
+    # the last position can't invert. It stays out of is_crm_empty, like todo_projects.
     if include_definitions:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
             "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_definitions, "
             "crm_field_values, "
             "crm_field_provenance, deal_stage_events, proactive_nudges, "
-            "deal_ai_touch_evidence, crm_stage_criteria RESTART IDENTITY"
+            "deal_ai_touch_evidence, crm_stage_criteria, reminders RESTART IDENTITY"
         )
     else:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
             "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_values, "
             "crm_field_provenance, deal_stage_events, proactive_nudges, deal_ai_touch_evidence, "
-            "crm_stage_criteria RESTART IDENTITY"
+            "crm_stage_criteria, reminders RESTART IDENTITY"
         )
 
 

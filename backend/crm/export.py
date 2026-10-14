@@ -38,6 +38,7 @@ TABLES: tuple[tuple[str, str, str], ...] = (
     ("activity_log", "*", "id"),
     ("todos", "*", "id"),
     ("todo_projects", "*", "id"),
+    ("reminders", "*", "id"),
     ("crm_chatter", "*", "id"),
     ("crm_chatter_mentions", "*", "id"),
     ("crm_field_definitions", "*", "id"),

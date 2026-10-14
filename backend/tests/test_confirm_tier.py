@@ -463,3 +463,14 @@ def test_only_routine_tools_need_the_carve_out(todo_mode):
     routine |= ToolRegistry().routine_writes
     for name in confirm_tier._HIDING_STATUS:
         assert name in routine, name
+
+
+def test_reminder_tools_are_never_routine(todo_mode):
+    """#283: a reminder notifies someone later (rule 2), so no reminder write may skip the
+    Approve card, and the read stays a read."""
+    todo_mode("normal")
+    reg = ToolRegistry()
+    for name in ("reminder_create", "reminder_update", "reminder_void"):
+        assert reg.is_write(name) is True, name
+        assert reg.is_routine_write(name) is False, name
+    assert reg.is_write("reminder_list") is False

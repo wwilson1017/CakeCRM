@@ -27,6 +27,7 @@ const NAV_ITEMS = [
   { to: '/crm/contacts', label: 'Contacts' },
   { to: '/crm/companies', label: 'Companies' },
   { to: '/crm/todos', label: 'Todos' },
+  { to: '/crm/reminders', label: 'Reminders' },
   { to: '/crm/reports', label: 'Reports' },
 ];
 

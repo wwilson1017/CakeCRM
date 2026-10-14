@@ -42,6 +42,9 @@ const MemoryPage = lazy(() => import('./crm/MemoryPage').then((m) => ({ default:
 const ReportsPage = lazy(() =>
   import('./crm/ReportsPage').then((m) => ({ default: m.ReportsPage })),
 );
+const RemindersPage = lazy(() =>
+  import('./crm/RemindersPage').then((m) => ({ default: m.RemindersPage })),
+);
 const DonePage = lazy(() => import('./crm/gtd/pages').then((m) => ({ default: m.DonePage })));
 const InboxPage = lazy(() => import('./crm/gtd/pages').then((m) => ({ default: m.InboxPage })));
 const NextActionsPage = lazy(() => import('./crm/gtd/pages').then((m) => ({ default: m.NextActionsPage })));
@@ -136,6 +139,7 @@ export default function App() {
                   params, query and hash intact. The `*` catch-all below would otherwise
                   swallow an old bookmark onto the dashboard with no explanation. */}
               <Route path="tasks/*" element={<LegacyTodoRedirect />} />
+              <Route path="reminders" element={<RemindersPage />} />
               <Route path="reports" element={<ReportsPage />} />
                 <Route path="memory" element={<MemoryPage />} />
               <Route path="settings" element={<SettingsPage />} />

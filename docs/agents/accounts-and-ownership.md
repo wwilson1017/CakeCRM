@@ -158,7 +158,8 @@
   **Still install-wide after Phase B, deliberately:** memory facts, context files, the
   Gmail CONNECTION, alerts and the AI provider keys. That list is what is left, not a
   to-do: conversations (#191), notifications (#192) and Telegram links (#193) are
-  per-seat, and reminders — which used to sit here — no longer exist (#188). Memory
+  per-seat, and reminders (#283) carry an owner plus a `people` list (any member may read,
+  edit or void one — ownership is not access control). Memory
   facts and context files stay shared **permanently** (Phase B Decision 1 — they are
   team knowledge, and per-seat facts would make the assistant amnesiac for every new
   seat), which carries an honest cost that is documented rather than engineered around:

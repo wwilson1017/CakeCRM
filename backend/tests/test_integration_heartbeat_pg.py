@@ -67,10 +67,12 @@ def test_migration_created_tables_and_singletons(pg_db):
         "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")}
     assert {"notifications", "push_subscriptions", "alerts",
             "vapid_keys", "heartbeat_state"} <= names
-    # #188 dropped reminders. This is the one automated proof the drop migration ran:
-    # pg_db builds a fresh database and applies EVERY migration, so the original #6
-    # migration creates the table and the drop migration must have removed it again.
-    assert "reminders" not in names
+    # #188 dropped the #6 reminders table; #283 created a fresh one. Its `people` column,
+    # which the #6 shape never had, proves the drop AND the new create both ran, in order.
+    assert "reminders" in names
+    cols = {r["column_name"] for r in pg_fetchall(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'reminders'")}
+    assert "people" in cols
     assert pg_fetchone("SELECT id FROM heartbeat_state WHERE id = 1") is not None
 
 

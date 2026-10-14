@@ -1333,6 +1333,7 @@ _TARGET_TABLES = {
     "company": ("companies", "name"),
     "todo": ("todos", "title"),
     "project": ("todo_projects", "name"),
+    "reminder": ("reminders", "note"),
 }
 _UNOWNED_TARGETS = frozenset({"project"})
 

@@ -372,3 +372,14 @@ def test_setup_status_is_allowed_unattended_and_that_is_a_decision():
 
     reg = ToolRegistry(background=True)
     assert "crm_get_setup_status" in background.background_allowlist(reg)
+
+
+def test_the_reminder_read_is_background_callable_and_its_writes_are_not(todo_mode):
+    """#283: an unattended turn may read reminders (its payload restates that the text is
+    data), but setting, changing or voiding one notifies people, so never unattended."""
+    from assistant.registry import ToolRegistry
+
+    todo_mode("normal")
+    allowed = background.background_allowlist(ToolRegistry(background=True))
+    assert "reminder_list" in allowed
+    assert not {"reminder_create", "reminder_update", "reminder_void"} & allowed
