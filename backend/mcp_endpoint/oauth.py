@@ -12,7 +12,9 @@ the provider behind them plus the rules the stage-0 spike found (docs/agents/mcp
   4. CIMD is fetched here, only from a public https host, connecting to the address we
      validated (TLS still checks the real hostname), streamed under a hard size cap;
   5. a loopback redirect may change its port (RFC 8252 §7.3);
-  6. codes and refresh tokens are consumed atomically in `store`.
+  6. codes and refresh tokens are consumed atomically in `store`;
+  7. there is no /revoke: the SDK's revocation request requires a client secret, which a
+     public client never has. People revoke in CakeCRM Settings.
 
 The consent step is ours: `authorize()` parks the request and sends the browser to the
 SPA route `/oauth/consent`, which signs the person in in that window and calls
@@ -32,7 +34,6 @@ from urllib.parse import urlsplit, urlunsplit
 
 from mcp.server.auth.handlers.metadata import MetadataHandler
 from mcp.server.auth.provider import (
-    AccessToken,
     AuthorizationCode,
     AuthorizeError,
     RefreshToken,
@@ -72,7 +73,7 @@ CONSENT_PATH = "/oauth/consent"
 OAUTH_PATHS = frozenset({
     "/.well-known/oauth-authorization-server",
     "/.well-known/oauth-protected-resource/mcp",
-    "/authorize", "/token", "/register", "/revoke",
+    "/authorize", "/token", "/register",
 })
 
 CIMD_CACHE_TTL = timedelta(hours=24)
@@ -322,16 +323,13 @@ class Provider:
             raise TokenError("invalid_grant", "refresh token already used or revoked")
         return self._token(out)
 
-    async def load_access_token(self, token: str):
-        row = await asyncio.to_thread(store.load_access, hash_token(token))
-        if row is None:
-            return None
-        return AccessToken(token=token, client_id=row["client_id"] or "", scopes=[],
-                           expires_at=int(row["expires_at"].timestamp()),
-                           subject=str(row["user_id"]))
+    # The SDK calls these two only from /revoke and its bearer middleware, neither of
+    # which is mounted (/mcp does its own one lookup, store.resolve_bearer).
+    async def load_access_token(self, token: str) -> None:
+        return None
 
     async def revoke_token(self, token) -> None:
-        await asyncio.to_thread(store.revoke_by_credential, hash_token(token.token))
+        return None
 
 
 provider = Provider()
@@ -360,14 +358,16 @@ def build_routes(oauth_base: str | None) -> list[Route]:
                                 validate_token_resource=False)
         registration = ClientRegistrationOptions(enabled=True, valid_scopes=SCOPES,
                                                  default_scopes=SCOPES)
-        revocation = RevocationOptions(enabled=True)
+        # No /revoke: the SDK's revocation request model REQUIRES a client_secret field,
+        # so a public client (the only kind we register) cannot call it. A person revokes
+        # in CakeCRM Settings, which is also where they can see the connection.
+        revocation = RevocationOptions(enabled=False)
         routes = create_auth_routes(provider, settings.issuer_url,
                                     client_registration_options=registration,
                                     revocation_options=revocation)
         metadata = build_metadata(settings.issuer_url, None, registration, revocation).model_copy(
             update={
                 "token_endpoint_auth_methods_supported": ["none"],
-                "revocation_endpoint_auth_methods_supported": ["none"],
                 "client_id_metadata_document_supported": True,
                 "authorization_response_iss_parameter_supported": True,
             },

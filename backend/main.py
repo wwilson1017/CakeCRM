@@ -45,6 +45,7 @@ from crm.todo_web import (
 from gmail.router import router as gmail_router
 from heartbeat.router import router as heartbeat_router
 from mcp_endpoint.oauth import build_routes as build_mcp_routes, oauth_base_url
+from mcp_endpoint.router import router as mcp_router
 from memory.router import router as memory_router
 from notifications.router import router as notifications_router
 from providers.router import router as providers_router, setup_router as ai_setup_router
@@ -362,6 +363,7 @@ app.include_router(context_files_router, prefix="/api/context-files", tags=["con
 app.include_router(memory_router, prefix="/api/memory", tags=["memory"])
 app.include_router(gtd_router, prefix="/api/crm/gtd", tags=["todo-gtd"])
 app.include_router(reminders_router, prefix="/api/crm/reminders", tags=["reminders"])
+app.include_router(mcp_router, prefix="/api/mcp", tags=["mcp"])
 
 # ── No-login todo surfaces (#70) ──────────────────────────────────────────────
 # All three mounts MUST come before the SPA catch-all at the bottom of this file, or
@@ -379,7 +381,7 @@ app.include_router(todo_web_router, tags=["todo-web"])
 
 # ── Connect your own AI (#322) ────────────────────────────────────────────────
 # `/mcp` and, when this install has a configured https address, its OAuth 2.1
-# authorization server (discovery, /authorize, /token, /register, /revoke). These are
+# authorization server (discovery, /authorize, /token, /register). These are
 # Starlette routes from the official MCP SDK, not FastAPI routes, so test_route_authz
 # pins them separately. Like the todo mounts, they must come before the SPA catch-all.
 app.router.routes.extend(build_mcp_routes(oauth_base_url()))

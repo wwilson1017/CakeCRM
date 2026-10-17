@@ -59,7 +59,7 @@ __all__ = [
     "create_personal_token", "resolve_bearer", "touch", "list_connections", "revoke",
     "record_call", "list_calls", "get_client", "put_client", "save_request",
     "delete_client", "load_request", "approve_request", "load_code", "exchange_code", "load_refresh",
-    "rotate_refresh", "load_access", "revoke_by_credential", "sweep",
+    "rotate_refresh", "sweep",
 ]
 
 
@@ -548,32 +548,6 @@ def rotate_refresh(token_hash: str, scopes: list[str], *, now: datetime | None =
             return _token_pair_cur(cur, spent[0], " ".join(scopes), now)
     except _Dead:
         return None
-
-
-def load_access(token_hash: str, *, now: datetime | None = None) -> dict | None:
-    """An unexpired access token's connection id and client, for the revoke endpoint."""
-    now = now or _utcnow()
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """SELECT c.id, c.client_id, c.user_id, k.expires_at
-                 FROM mcp_credentials k JOIN mcp_connections c ON c.id = k.connection_id
-                WHERE k.token_hash = %s AND k.kind = 'access' AND k.expires_at > %s""",
-            (token_hash, now),
-        )
-        return _row(cur)
-
-
-def revoke_by_credential(token_hash: str) -> bool:
-    """Any token of a grant revokes the whole grant (RFC 7009 lets us)."""
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """DELETE FROM mcp_connections WHERE id =
-                   (SELECT connection_id FROM mcp_credentials WHERE token_hash = %s)""",
-            (token_hash,),
-        )
-        return cur.rowcount == 1
 
 
 # ── Maintenance ──────────────────────────────────────────────────────────────

@@ -59,6 +59,10 @@ const WaitingPage = lazy(() => import('./crm/gtd/pages').then((m) => ({ default:
 // Weekly Touches per-rep drill-down (#146), reached from the dashboard's Weekly Touches
 // card. Lazy like every other page here, per the rule above: a static page import would
 // re-bundle this page into the shell chunk every CRM visitor downloads.
+// The OAuth consent page (#322), opened by ChatGPT or Claude in its own window. Lazy, and
+// outside ProtectedRoute: it runs its own sign-in that never touches this tab's session.
+const ConsentPage = lazy(() => import('./oauth/ConsentPage').then((m) => ({ default: m.ConsentPage })));
+
 const WeeklyTouchesDetailPage = lazy(() =>
   import('./crm/WeeklyTouchesDetailPage').then((m) => ({ default: m.WeeklyTouchesDetailPage })),
 );
@@ -93,6 +97,7 @@ export default function App() {
         <Suspense fallback={<BootFallback />}>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/oauth/consent" element={<ConsentPage />} />
             <Route
               path="/setup"
               element={

@@ -131,6 +131,13 @@ ADMIN_ONLY = {
     # for every seat, so it is install configuration. Reading it stays member-visible.
     ("/api/crm/stage-criteria/{stage}", "PUT"),
     ("/api/crm/stage-criteria/{stage}", "DELETE"),
+    # Connected AI tools (#322): the members switch is an install-wide egress control, and
+    # an admin sees and revokes every seat's connections. Members manage their own under
+    # /api/mcp/connections, deliberately NOT in this set.
+    ("/api/mcp/admin/connections", "GET"),
+    ("/api/mcp/admin/settings", "PUT"),
+    ("/api/mcp/admin/connections/{connection_id}", "DELETE"),
+    ("/api/mcp/admin/connections/{connection_id}/calls", "GET"),
 }
 
 
@@ -224,11 +231,13 @@ def test_credential_handlers_are_sync_defs():
     import inspect
 
     from core import auth
+    from mcp_endpoint import router as mcp_router
     from users import router as users_router
 
     for fn in (auth.login, auth.get_me, auth.change_password,
                users_router.list_users, users_router.create_user,
-               users_router.update_user, users_router.reset_password):
+               users_router.update_user, users_router.reset_password,
+               mcp_router.create_token, mcp_router.get_consent, mcp_router.answer_consent):
         assert not inspect.iscoroutinefunction(fn), (
             f"{fn.__name__} is async but does blocking work with no await"
         )
