@@ -37,6 +37,7 @@ from mcp.server.auth.provider import (
     AuthorizationCode,
     AuthorizeError,
     RefreshToken,
+    RegistrationError,
     TokenError,
 )
 from mcp.server.auth.routes import (
@@ -81,6 +82,20 @@ CIMD_MAX_BYTES = 64 * 1024
 CIMD_TIMEOUT_SECONDS = 5.0
 _FETCH_SLOTS = threading.BoundedSemaphore(4)
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "[::1]", "::1"})
+_SCRIPTABLE_SCHEMES = frozenset({"javascript", "data", "vbscript", "file", "blob", "about", "filesystem"})
+
+
+def _redirect_allowed(uri) -> bool:
+    """Anonymous clients pick their own redirect URIs and the consent page navigates to
+    them, so refuse schemes that run code in our origin. Plain http only for loopback;
+    desktop clients' own schemes (cursor://, vscode://) are fine."""
+    parts = urlsplit(str(uri))
+    scheme = parts.scheme.lower()
+    if scheme in _SCRIPTABLE_SCHEMES:
+        return False
+    if scheme == "http":
+        return parts.hostname in _LOOPBACK_HOSTS or f"[{parts.hostname}]" in _LOOPBACK_HOSTS
+    return True
 
 # Anonymous surfaces that write rows or trigger a fetch get a per-IP budget.
 register_limiter = IPRateLimiter(window=3600, max_hits=20)
@@ -112,6 +127,8 @@ class _Client(OAuthClientInformationFull):
     """A registered or CIMD client, always public, with loopback ports ignored."""
 
     def validate_redirect_uri(self, redirect_uri: AnyUrl | None) -> AnyUrl:
+        if redirect_uri is not None and not _redirect_allowed(redirect_uri):
+            raise InvalidRedirectUriError(f"Redirect URI '{redirect_uri}' is not allowed")
         if redirect_uri is not None and redirect_uri.host in _LOOPBACK_HOSTS:
             for registered in self.redirect_uris or []:
                 if (registered.scheme, registered.host, registered.path or "/") == (
@@ -203,6 +220,8 @@ def _validate_cimd(url: str, doc: dict) -> dict:
         raise ValueError("only public clients may use a client ID document")
     if not doc.get("redirect_uris"):
         raise ValueError("the document names no redirect URIs")
+    if not all(_redirect_allowed(u) for u in doc["redirect_uris"]):
+        raise ValueError("the document names a redirect URI that is not allowed")
     try:
         return _as_client(doc).model_dump(mode="json", exclude_none=True)
     except ValidationError as e:
@@ -255,6 +274,8 @@ class Provider:
         # Public clients only: the SDK minted a secret for a client that asked for
         # client_secret_post (or nothing); we never store or honour one. The handler
         # echoes `client_info` after this returns, so the client learns it is public.
+        if not all(_redirect_allowed(u) for u in client_info.redirect_uris or []):
+            raise RegistrationError("invalid_redirect_uri", "redirect URI scheme is not allowed")
         client_info.token_endpoint_auth_method = "none"
         client_info.client_secret = None
         client_info.client_secret_expires_at = None

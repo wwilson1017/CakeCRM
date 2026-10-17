@@ -13,6 +13,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import httpx2
 import pytest
 from conftest import fake_admin, fake_member
@@ -530,3 +531,75 @@ def test_cimd_is_cached_and_only_a_transient_failure_keeps_the_stale_copy(fake, 
     monkeypatch.setattr(oauth, "_fetch_json", lambda url: {**CIMD_DOC, "client_id": "https://x.example/y"})
     assert oauth.cimd_client(CIMD_URL, now=later) is None
     assert CIMD_URL not in fake.clients
+
+
+async def _register(app, uri):
+    async with _http(app) as c:
+        return await c.post("/register", json={"client_name": "X", "redirect_uris": [uri],
+                                               "token_endpoint_auth_method": "none"})
+
+
+@pytest.mark.parametrize("uri", ["javascript:alert(1)//", "http://evil.example/cb"])
+async def test_registering_an_unsafe_redirect_is_refused(app, uri):
+    r = await _register(app, uri)
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_redirect_uri"
+
+
+async def test_registering_a_desktop_app_scheme_is_allowed(app):
+    r = await _register(app, "cursor://anysphere.cursor-retrieval/oauth/callback")
+    assert r.status_code == 201
+
+
+def test_a_cimd_document_with_a_data_redirect_is_refused():
+    with pytest.raises(ValueError):
+        oauth._validate_cimd(CIMD_URL, {**CIMD_DOC, "redirect_uris": ["data:text/html,x"]})
+
+
+# ── _fetch_json after the address check ──────────────────────────────────────
+
+@pytest.fixture
+def public_fetch(monkeypatch):
+    """Resolve to a public IP and route httpx.Client through a MockTransport."""
+    import socket
+    monkeypatch.setattr(socket, "getaddrinfo",
+                        lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))])
+    seen = []
+
+    def install(handler):
+        real = httpx.Client
+
+        def client(*a, **k):
+            return real(*a, transport=httpx.MockTransport(
+                lambda req: seen.append(req) or handler(req)), **k)
+
+        monkeypatch.setattr(httpx, "Client", client)
+        return seen
+
+    return install
+
+
+def test_fetch_json_does_not_follow_redirects(public_fetch):
+    public_fetch(lambda req: httpx.Response(302, headers={"location": "https://x.example/"}))
+    with pytest.raises(ValueError):
+        oauth._fetch_json(CIMD_URL)
+
+
+def test_fetch_json_5xx_is_transient(public_fetch):
+    public_fetch(lambda req: httpx.Response(503))
+    with pytest.raises(oauth._Transient):
+        oauth._fetch_json(CIMD_URL)
+
+
+@pytest.mark.parametrize("body", [b"x" * (oauth.CIMD_MAX_BYTES + 1), b"not json", b"[1, 2]"])
+def test_fetch_json_refuses_bad_bodies(public_fetch, body):
+    public_fetch(lambda req: httpx.Response(200, content=body))
+    with pytest.raises(ValueError):
+        oauth._fetch_json(CIMD_URL)
+
+
+def test_fetch_json_connects_to_the_checked_ip_with_the_host_header(public_fetch):
+    seen = public_fetch(lambda req: httpx.Response(200, json={"a": 1}))
+    assert oauth._fetch_json(CIMD_URL) == {"a": 1}
+    assert seen[0].url.host == "93.184.216.34"
+    assert seen[0].headers["host"] == urlsplit(CIMD_URL).hostname
