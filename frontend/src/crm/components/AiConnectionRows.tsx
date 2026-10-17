@@ -58,16 +58,16 @@ export function AiConnectionRows({ connections, showSeat, basePath, onRevoked }:
   onRevoked: (id: number) => void;
 }) {
   const [open, setOpen] = useState<number | null>(null);
-  const [calls, setCalls] = useState<AiCall[] | null>(null);
+  // Keyed by connection, so a slow response for one row never shows under another.
+  const [loaded, setLoaded] = useState<{ id: number; calls: AiCall[] } | null>(null);
 
   async function toggleCalls(id: number) {
     if (open === id) { setOpen(null); return; }
     setOpen(id);
-    setCalls(null);
     try {
-      setCalls((await api<{ calls: AiCall[] }>(`${basePath}/${id}/calls`)).calls);
+      setLoaded({ id, calls: (await api<{ calls: AiCall[] }>(`${basePath}/${id}/calls`)).calls });
     } catch {
-      setCalls([]);
+      setLoaded({ id, calls: [] });
       toast.error('Could not load the call log.');
     }
   }
@@ -82,6 +82,9 @@ export function AiConnectionRows({ connections, showSeat, basePath, onRevoked }:
       toast.error('Could not disconnect it.');
     }
   }
+
+  // Only one row is open at a time; its log shows only once ITS response has arrived.
+  const calls = loaded?.id === open ? loaded.calls : null;
 
   if (connections.length === 0) return <p style={text}>No AI tools are connected.</p>;
 
