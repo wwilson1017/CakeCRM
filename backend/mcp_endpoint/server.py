@@ -161,12 +161,13 @@ class McpEndpoint:
         token = _bearer(request)
         if token is None:
             return await challenge(presented=False)(scope, receive, send)
-        if bad_token_limiter.exhausted(ip):
-            response = JSONResponse({"error": "rate_limited"}, status_code=429, headers=_NO_STORE)
-            return await response(scope, receive, send)
+        # Resolve first: a valid token is served even from an IP that has spent its
+        # wrong-token budget (a misconfigured client must not lock out its neighbours).
         conn = await asyncio.to_thread(store.resolve_bearer, token)
         if conn is None:
-            bad_token_limiter.allow(ip)
+            if not bad_token_limiter.allow(ip):
+                response = JSONResponse({"error": "rate_limited"}, status_code=429, headers=_NO_STORE)
+                return await response(scope, receive, send)
             return await challenge(presented=True)(scope, receive, send)
         if not call_limiter.allow(f"c{conn['id']}"):
             response = JSONResponse({"error": "rate_limited"}, status_code=429, headers=_NO_STORE)

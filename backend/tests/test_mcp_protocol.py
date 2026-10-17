@@ -156,6 +156,9 @@ async def test_wrong_tokens_charge_the_ip_limiter_and_a_good_one_never_does(fake
     for _ in range(server.bad_token_limiter.max_hits):
         assert (await _post(headers={"Authorization": "Bearer nope"})).status_code == 401
     assert (await _post(headers={"Authorization": "Bearer nope"})).status_code == 429
+    # The bucket is spent, yet a valid token from the same IP is still served.
+    async with _client("good") as client:
+        assert (await client.list_tools()).tools
     server.bad_token_limiter.clear()
     for _ in range(3):
         async with _client("good") as client:
