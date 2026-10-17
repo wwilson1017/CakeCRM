@@ -117,7 +117,7 @@ hints in both todo modes (66 in GTD, 59 in normal); regenerate with
 `source='mcp'` with the name in `source_detail`, custom-field values `via <name>`, todos
 `source='mcp'` (bound at registry build, which is why the var is set before it).
 
-**OAuth** mounts only when `_configured_base_url()` is https, or http on localhost. Consent is
+**OAuth** mounts only when the public address (`BACKEND_URL`, else `_configured_base_url()`: `FRONTEND_URL` or the Railway domain) is https, or http on localhost. Consent is
 the SPA route `/oauth/consent?request=<id>`: it signs in with raw `fetch` (never the shared
 session or its BroadcastChannel), and `router.answer_consent` requires a JWT minted in the
 last ten minutes (derived from `exp - JWT_EXPIRE_MINUTES`, so `core/auth` is untouched), the

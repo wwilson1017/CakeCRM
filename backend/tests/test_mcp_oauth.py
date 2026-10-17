@@ -471,6 +471,24 @@ async def test_there_is_no_revocation_endpoint(app):
     assert r.status_code in (404, 405)
 
 
+@pytest.mark.parametrize(("env", "expected"), [
+    ({"BACKEND_URL": "https://crm.example.org/", "FRONTEND_URL": "https://other.example"},
+     "https://crm.example.org"),
+    ({"FRONTEND_URL": "https://crm.example"}, "https://crm.example"),
+    ({"BACKEND_URL": "http://crm.lan:8000"}, None),  # not https: OAuth stays hidden
+    ({}, None),
+])
+def test_the_issuer_comes_from_the_documented_public_address(monkeypatch, env, expected):
+    """The self-hosting guide names BACKEND_URL as an install's public address."""
+    from core import config
+    for name in ("BACKEND_URL", "FRONTEND_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(config, "RAILWAY_PUBLIC_URL", "")
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    assert oauth.oauth_base_url() == expected
+
+
 def test_oauth_routes_are_absent_without_a_public_address():
     assert {r.path for r in oauth.build_routes(None)} == {"/mcp"}
 

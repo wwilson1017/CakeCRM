@@ -26,6 +26,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+import os
 import secrets
 import socket
 import threading
@@ -108,8 +109,12 @@ def _utcnow() -> datetime:
 
 def oauth_base_url() -> str | None:
     """The issuer, or None when OAuth must stay hidden (no configured address, or one
-    the SDK would refuse: not https and not localhost)."""
-    base = config._configured_base_url().strip().rstrip("/")
+    the SDK would refuse: not https and not localhost).
+
+    `BACKEND_URL` first: it is the public address the self-hosting guide tells an
+    operator behind their own domain or proxy to set, and this server's routes live
+    there. Then `FRONTEND_URL` or the Railway domain, as for every other link."""
+    base = (os.getenv("BACKEND_URL", "") or config._configured_base_url()).strip().rstrip("/")
     if not base:
         return None
     try:
