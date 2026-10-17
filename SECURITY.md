@@ -296,6 +296,78 @@ was a secret link). There is nothing to copy, keep or re-send:
   capture token if the log has been shared. The same holds for any reverse proxy, load
   balancer or CDN you put in front of a self-hosted install.
 
+## Connecting your own AI tools (the `/mcp` endpoint)
+
+A person can connect an AI tool they already use (ChatGPT, Claude, Claude Code, Codex, Gemini
+CLI, Cursor, VS Code) to CakeCRM over the Model Context Protocol at `https://<install>/mcp`
+(#322). The trust posture in one sentence: **what leaves the install is exactly what the
+connected tool asks for, under that person's seat and permissions, and every call is logged.**
+CakeCRM needs no AI key for this; the connected tool brings its own model.
+
+| | Personal token | OAuth sign-in |
+|---|---|---|
+| Used by | Coding tools and automation (pasted into their config) | ChatGPT and Claude (web, desktop, mobile) |
+| Stored as | A SHA-256 hash only, shown once at creation. Opaque random, not a JWT | SHA-256 hashes of a one-hour access token and a refresh token that rotates on every use |
+| Lifetime | 30, 90 (default) or 365 days, or never, chosen at creation | Ends after 90 days unused |
+| Ends on | Revoke, expiry, a password change or deactivation of the seat, the members switch | The same, plus the idle cutoff |
+| Manage | Settings → Personal → Connect an AI tool (own); Settings → Workspace → AI tool connections (admin, every seat) | Same |
+
+- **Every request is re-checked.** One lookup resolves the bearer to its connection and seat,
+  then requires the seat to be active, the connection's recorded `token_epoch` to equal the
+  seat's (a password change, an admin reset and deactivation all bump it), the token and
+  connection to be unexpired, an OAuth connection to have been used in the last 90 days, and,
+  for a member, the admin switch to be on. Nothing is cached, so a revoke bites on the next
+  call. Every refusal is the same 401.
+- **The admin switch.** "Members may connect their own AI tools" is off by default; admins can
+  always connect. While it is off, every member's connection is refused without being deleted,
+  and members are offered no control to create one.
+- **What crosses.** The tools are the seat's own assistant registry, so ownership stamps and
+  every per-seat gate carry over. A connected tool gets the assistant's reads (CRM, todos and
+  projects, reminders, help, and the assistant's notes files and remembered facts, read only)
+  and its CRM, todo and reminder writes. Writes are stamped as the seat, "via <connection
+  name>", where CakeCRM records authorship.
+- **What never crosses, for any seat:** Gmail (search, threads and drafts), permanently
+  deleting a contact, any write to the assistant's memory or context files (including `soul.md`
+  and `MEMORY.md`), notifications, any conversation, any credential, and any REST passthrough.
+  The exclusion is structural (by tool kind, plus the one delete by name) and the exact
+  advertised list is pinned by a golden file, so a new tool reaching people's AI apps is a
+  reviewed diff. `test_gmail_guard.py` and `test_mcp_surface.py` fail CI on a breach.
+- **Approval is the connected tool's.** CakeCRM does not show its own Approve card here. Tools
+  that archive, merge, drop, bulk-change, post notes that notify people, set reminders or
+  recompute scores carry `destructiveHint: true`, which makes ChatGPT and Claude ask the person
+  first; reads carry `readOnlyHint: true`; nothing is marked as reaching outside the install.
+- **Read-only connections** are chosen per connection (on the token form and on the consent
+  screen, where an app that asks only to read can only be granted reads). A read-only
+  connection is never shown a write and cannot run one.
+- **Untrusted text stays fenced.** Results pass through the same nonce fences the assistant
+  uses, so text a stranger typed into the public capture page is marked as data for the
+  outside model, and the server instructions tell it never to follow instructions inside them.
+- **The call log.** Every call, reads included, writes one row: connection, seat, tool, the
+  record it named or a row count, whether it worked, and how long it took. Never arguments,
+  never results. Rows are kept 90 days and shown to the seat and to admins. If writing the log
+  row itself fails, that is logged as an error and the call's answer is still returned, because
+  a write that already committed cannot be undone.
+- **Abuse controls.** 600 calls a minute per connection; 30 wrong tokens per five minutes per
+  IP address before further attempts from it get 429 (a valid token is never slowed by them);
+  a 1 MB request ceiling on `/mcp`; any request carrying a browser `Origin` header is refused;
+  registration and authorization have their own per-IP budgets; at most 25 connections per
+  person.
+- **The OAuth server** (`/.well-known/oauth-authorization-server`,
+  `/.well-known/oauth-protected-resource/mcp`, `/authorize`, `/token`, `/register`) exists only
+  when the install has a configured https address; without one, only personal tokens work and
+  the 401 carries no sign-in pointer. Clients are public only (PKCE S256, no client secret is
+  ever minted or stored), and both dynamic registration and client-ID metadata documents are
+  supported. A metadata document is fetched only from a public https host, connecting to the
+  address that was checked, with a short timeout and a 64 KiB cap. Tokens are issued only for
+  this install's `/mcp`. There is no revocation endpoint; people disconnect in Settings.
+- **Consent needs a fresh sign-in.** The consent page signs the person in inside that window
+  (password, then the two-factor code if they use one) without touching any other tab's
+  session, shows which app is asking and the host it will return to, and the server refuses an
+  approval whose sign-in is more than ten minutes old.
+- **Where secrets travel.** Tokens travel in the `Authorization` header and POST bodies, never
+  in a request path. The one-time authorization code reaches the app on its own redirect URL;
+  it works once and expires after five minutes.
+
 ## The assistant's self-written identity (`soul.md`)
 
 The assistant keeps its own knowledge in markdown files you can read and edit at

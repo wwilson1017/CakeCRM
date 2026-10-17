@@ -367,6 +367,7 @@ def model_facing(monkeypatch):
     from assistant import compaction, identity
     from crm import touch_count_service
     from heartbeat import service as heartbeat_service
+    from mcp_endpoint import surface as mcp_surface
     from memory import observer
 
     monkeypatch.setattr(
@@ -422,6 +423,10 @@ def model_facing(monkeypatch):
         ("assistant system prompt (static, GTD mode)", gtd_static),
         ("heartbeat prompt (GTD mode)", gtd_hb_static),
         ("assistant system prompt (volatile, with a seat)", seat_volatile),
+        # A connected AI tool over /mcp (#322) reads the server instructions and every
+        # tool title, so both are model-facing text too.
+        ("mcp server instructions", mcp_surface.INSTRUCTIONS),
+        ("mcp tool titles", "\n".join(mcp_surface.title_for(d["name"]) for d in _all_tool_defs())),
     ]
     # Tool defs go to the provider verbatim — name, description AND the JSON schema
     # (property descriptions, enums and defaults are all example-text hiding places).

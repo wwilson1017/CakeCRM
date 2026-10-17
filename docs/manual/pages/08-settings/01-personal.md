@@ -1,6 +1,6 @@
 ---
 title: Personal settings
-summary: Notifications, your password, how the pipeline board opens, and linking your own Telegram.
+summary: Notifications, your password, how the pipeline board opens, linking your own Telegram, and connecting your own AI tool.
 shots: [settings-personal]
 ---
 
@@ -39,6 +39,17 @@ Chat with Baker from your own phone. Once an admin has connected a Telegram bot:
 4. **Unlink my Telegram** ends your link. It affects nobody else.
 
 If no bot is connected yet, the card says so. See [Telegram](../09-integrations/02-telegram.md).
+
+## Connect an AI tool
+
+Connect an AI tool you already use, such as ChatGPT, Claude, Claude Code or Codex, so it can work in CakeCRM as you. It sees what you can see, and what it adds or changes is recorded as you, made through that tool. CakeCRM needs no AI keys for this. Members can connect once an admin has switched it on under [Workspace settings](03-workspace.md); admins always can.
+
+- **ChatGPT or Claude**: copy the address on the card and add it as a connector in the app. A CakeCRM window opens. Sign in, check which app is asking, choose **Read and write** or **Read only**, and press **Allow**. This needs your CakeCRM to have a public https address; the card says so if it has none.
+- **Coding tools**: create a personal token with a name, Read and write or Read only, and an expiry of 30 days, 90 days, a year or never. It is shown once, so copy it. Pick your tool on the card to get the exact command or settings block with the token filled in.
+
+Tools that archive, merge, drop, change many records at once or set reminders ask you before they run. A connected tool never sees Gmail, never deletes a contact, and never changes Baker's notes or memory.
+
+Each connection shows when it was connected and last used. **Calls** lists what it did over the last 90 days, without what it asked or got back. **Revoke** disconnects it at once. A password change disconnects all of your tools.
 
 ## Light and dark
 

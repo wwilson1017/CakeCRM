@@ -1,6 +1,6 @@
 ---
 title: Workspace settings
-summary: Admin-only settings for your company name and logo, your team, custom fields, and exporting your data.
+summary: Admin-only settings for your company name and logo, your team, custom fields, exporting your data, and AI tool connections.
 shots: [settings-workspace]
 ---
 
@@ -46,3 +46,9 @@ Pick **Contacts**, **Companies** or **Deals**, then **+ Add custom field**. Give
 **Download CSV export** on the Export data card downloads everything in the CRM as one ZIP, with a CSV file per table: companies, contacts, deals and their stage history, activity, todos and projects, notes, custom fields, saved views, Baker's memory, and a users file for looking up owner names. Archived deals are included. Passwords, two-factor secrets, API keys, connection tokens, note attachments and Baker conversations are never exported.
 
 It is a snapshot, not a sync: download again for fresh numbers. Take one before a big change, such as clearing data or a large import.
+
+## AI tool connections
+
+**Members may connect their own AI tools** is off until you turn it on. Admins can always connect. Turning it off stops every member's connection straight away without deleting it, and turning it back on restores them.
+
+The card lists every person's connected AI tools: what each one is, whether it signed in or uses a personal token, whether it is read-only, and when it was connected and last used. **Calls** shows a connection's log for the last 90 days, and **Revoke** ends it. See [Personal settings](01-personal.md) for how people connect.

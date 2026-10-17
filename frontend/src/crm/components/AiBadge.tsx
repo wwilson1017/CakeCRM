@@ -16,7 +16,8 @@ interface AiBadgeProps {
 }
 
 export function AiBadge({ source, sourceDetail, confidence, onConfirm, confirming }: AiBadgeProps) {
-  const who = source === 'assistant' ? 'the assistant' : source || 'AI';
+  const who = source === 'assistant' ? 'the assistant'
+    : source === 'mcp' ? 'a connected AI tool' : source || 'AI';
   const pct = confidence != null ? ` (confidence ${Math.round(confidence * 100)}%)` : '';
   const detail = sourceDetail ? ` Source: ${sourceDetail}.` : '';
   const tip = `AI-populated by ${who} — unverified${pct}.${detail}`;

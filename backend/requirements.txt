@@ -56,3 +56,8 @@ google-auth-httplib2==0.4.0
 # Imported LAZILY inside core/thumbnails.py functions, so the CI import check (which runs
 # with no DATABASE_URL) and a minimal install never pay for PIL.
 pillow==12.3.0
+
+# Connect your own AI (#322): the official MCP SDK v2 serves /mcp (stateless JSON over
+# Streamable HTTP) and the OAuth 2.1 authorization-server handlers. Not FastMCP.
+# docs/agents/mcp.md records the spike that chose it.
+mcp==2.3.0

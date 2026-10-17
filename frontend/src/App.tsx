@@ -63,6 +63,10 @@ const WeeklyTouchesDetailPage = lazy(() =>
   import('./crm/WeeklyTouchesDetailPage').then((m) => ({ default: m.WeeklyTouchesDetailPage })),
 );
 
+// The OAuth consent page (#322), opened by ChatGPT or Claude in its own window. Lazy, and
+// outside ProtectedRoute: it runs its own sign-in that never touches this tab's session.
+const ConsentPage = lazy(() => import('./oauth/ConsentPage').then((m) => ({ default: m.ConsentPage })));
+
 export default function App() {
   // The no-login todo surface used to be dispatched from here, by an early return above
   // this router. It now lives in `Root.tsx`, which decides BEFORE this module is fetched —
@@ -93,6 +97,7 @@ export default function App() {
         <Suspense fallback={<BootFallback />}>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/oauth/consent" element={<ConsentPage />} />
             <Route
               path="/setup"
               element={

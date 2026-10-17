@@ -1290,13 +1290,14 @@ _apply_deal_url_guidance()
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ── Field provenance (issue #16) ──────────────────────────────────────────────
-# These executors are reached ONLY through the assistant (assistant.registry →
-# get_crm_tools()); human edits go through crm/router.py, which never calls them. So a
-# successful write here IS an "AI wrote this field" event — record provenance so the UI
+# These executors are reached ONLY through the assistant's registry (assistant.registry →
+# get_crm_tools()), driven by Baker or by a person's connected AI tool over /mcp (#322);
+# human edits go through crm/router.py, which never calls them. So a successful write
+# here IS an "AI wrote this field" event — record provenance so the UI
 # can badge it until a human confirms or overwrites it.
 
 def _record_provenance(entity_type: str, entity_id: int, provided: dict, result: dict) -> None:
-    """Best-effort: record 'assistant' provenance for the fields this tool call set.
+    """Best-effort: record AI provenance for the fields this tool call set.
 
     Snapshots come from the POST-write entity dict (``result``) so normalization can't mint
     an instantly-stale badge; record_fields skips empty values (no badge on a field the UI
@@ -2051,8 +2052,8 @@ def crm_get_chatter(
 
 # ── Custom fields ─────────────────────────────────────────────────────────────
 # Get tools discover the field schema (and optionally a record's values); set tools
-# write by field_key. Attribution is hardcoded "assistant" — the set tools expose no
-# user_email param, so the model can't spoof who edited a value.
+# write by field_key. Attribution is "assistant" (or "via <tool>" for a connected AI tool,
+# #322) — the set tools expose no user_email param, so the model can't spoof who edited a value.
 
 def _normalize_field(r: dict) -> dict:
     """One field's schema in the shape shown to the model. Used for BOTH get-tool
@@ -2129,7 +2130,9 @@ def _set_entity_fields(entity_type: str, entity_id: int, fields: dict) -> dict:
         return {"error": "No valid fields to set" + (f" ({'; '.join(detail)})" if detail else "")}
 
     try:
-        result = field_service.set_field_values(entity_type, entity_id, values_by_id, "assistant")
+        result = field_service.set_field_values(
+            entity_type, entity_id, values_by_id, provenance_service.actor_label()
+        )
     except ValueError as e:
         return {"error": str(e)}
     if unknown:
@@ -2430,7 +2433,9 @@ def _identity_executors(user: dict | None) -> dict[str, Callable[..., dict]]:
         "crm_create_deal": bind_server_args(crm_create_deal, owner_id=user_id),
         # + Baker made it, so it says so in either todo mode (#260); the binding also
         # drops a model-supplied `source`, which used to reach the INSERT verbatim.
-        "crm_create_todo": bind_server_args(crm_create_todo, owner_id=user_id, source="agent"),
+        "crm_create_todo": bind_server_args(
+            crm_create_todo, owner_id=user_id, source=provenance_service.todo_source()
+        ),
         # Which seat is ASKING. A read, and the only per-person fact in its payload is
         # whether this seat has a linked Telegram chat (#193) — bound rather than taken
         # as an argument so the model cannot ask about another person's device.
