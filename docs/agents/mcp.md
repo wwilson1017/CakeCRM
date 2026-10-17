@@ -66,7 +66,76 @@ What stays ours, and the gotchas the spike hit (each one is a rule for the build
    lifespan, so tests need no lifespan.
 9. **Async seam.** Provider methods and handlers are async; our psycopg2 and bcrypt work
    runs through `asyncio.to_thread` inside them.
+10. **No `/revoke`** (found while building). The SDK's `RevocationRequest` declares
+    `client_secret: str | None` with no default, so a public client that sends none gets a
+    400. Every client we register is public, so the endpoint is off
+    (`RevocationOptions(enabled=False)`) and not advertised; people revoke in Settings.
 
 The bearer middleware (`RequireAuthMiddleware`) is not used: one lookup serves both personal
 tokens and OAuth access tokens, and it must re-check seat, epoch, switch, expiry and the
 read-only flag on every request.
+
+## Landed #322
+
+Package `backend/mcp_endpoint/` (not `mcp/`: `backend/` is on `sys.path` and would shadow the
+SDK). `store.py` is the only SQL, `surface.py` the tool list, `server.py` the `/mcp` ASGI
+endpoint and its two handlers, `oauth.py` the provider and route builder, `router.py` the
+signed-in `/api/mcp/*` routes. `main.py` appends `oauth.build_routes(oauth_base_url())` to
+`app.router.routes` before the SPA catch-all.
+
+**Data model** (one migration): `mcp_connections` is what a person sees and revokes (seat,
+kind `token`/`oauth`, name, read-only, the seat's `token_epoch` at creation, timestamps);
+`mcp_credentials` holds every bearer as a SHA-256 hash (`personal`, `access` one hour,
+`refresh` rotating); `mcp_oauth_clients` (DCR rows and cached CIMD documents, never a
+secret); `mcp_oauth_requests` and `mcp_oauth_codes` (single use, ten and five minutes, the
+code carries the seat's epoch); `mcp_audit` (one row per call, never arguments or results).
+`crm_meta.mcp_members_enabled` is the admin switch. Credential tables are in
+`export.NOT_EXPORTED` and outside `_truncate_all`; `mcp_audit` is in `NOT_EXPORTED` and in
+both `_truncate_all` branches. The maintenance tick runs `store.sweep()`.
+
+**The one lookup.** `store.resolve_bearer` joins credential, connection, seat and `crm_meta`
+in one query; `store._judge` is the single refusal predicate (inactive, epoch moved, token or
+connection expired, OAuth idle 90 days, member while the switch is off). Every refusal is
+the same 401. The hermetic fakes call `_judge` too, so they exercise the real rules. Refresh
+rotation re-judges inside its own transaction and rolls back (the refresh token survives)
+when the connection is dead; codes and consent requests are consumed with
+`DELETE ... RETURNING`; per-seat creates take `pg_advisory_xact_lock(3220, user_id)` and
+count only live connections against the cap of 25.
+
+**Surface.** `ToolRegistry(user=<seat>)` per request, minus `surface.is_excluded`: kinds
+`gmail` and `notification`, writes of kinds `memory` and `context`, and `crm_delete_contact`.
+Hints: reads `readOnlyHint`; routine writes not in `confirm_tier.HIDE_CAPABLE_TOOLS`
+`destructiveHint: false`; every other write `destructiveHint: true`; `openWorldHint: false`
+everywhere. A read-only connection is offered reads only, and `tools/call` refuses anything
+`tools/list` would not show. Results go through `delimiters.fence_tool_result`; the server
+`instructions` explain the fences. `tests/golden/mcp_surface.json` pins names, titles and
+hints in both todo modes (66 in GTD, 59 in normal); regenerate with
+`MCP_SURFACE_REGENERATE=1 python -m pytest -q tests/test_mcp_surface.py` and review the diff.
+
+**Provenance.** `crm.provenance_service.WRITE_SOURCE` is a context var the handlers set to
+`("mcp", <connection name>)` around registry build and execution: field provenance gets
+`source='mcp'` with the name in `source_detail`, custom-field values `via <name>`, todos
+`source='mcp'` (bound at registry build, which is why the var is set before it).
+
+**OAuth** mounts only when `_configured_base_url()` is https, or http on localhost. Consent is
+the SPA route `/oauth/consent?request=<id>`: it signs in with raw `fetch` (never the shared
+session or its BroadcastChannel), and `router.answer_consent` requires a JWT minted in the
+last ten minutes (derived from `exp - JWT_EXPIRE_MINUTES`, so `core/auth` is untouched), the
+same-origin check, and the members switch. Read-only is derived from the granted scopes:
+`crm:write` only when the client asked for it and the person chose Read and write. CIMD
+fetches resolve the host, refuse unless every address is global, then connect to that
+address with `sni_hostname` set so TLS still checks the real name; streamed under 64 KiB;
+only transient failures fall back to a stale cached document.
+
+**Tests.** Hermetic (CI): `test_mcp_surface.py`, `test_mcp_protocol.py` (the SDK's
+`mcp.Client` over `httpx2.ASGITransport`, legacy and modern protocol), `test_mcp_oauth.py`
+(the SDK's `OAuthClientProvider` through the full code flow for DCR and CIMD),
+`test_mcp_router.py`, plus extensions to `test_gmail_guard.py`, `test_route_authz.py`
+(Starlette routes have no `.dependant`, so `test_non_fastapi_routes_are_exactly_pinned`
+pins them), `test_request_size_limit.py` and `test_prompt_genericization.py`. Real Postgres
+(`-m integration`, local only): `test_mcp_integration.py`, including the cap, code and
+refresh races.
+
+**Known limits.** Browser-hosted MCP clients (an Inspector page) are refused by the
+`Origin` check and would also hit the app-level CORS preflight; not a v1 target. Rate-limit
+buckets are in process, which the single worker allows.
