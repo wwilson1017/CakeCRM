@@ -337,3 +337,17 @@ def test_a_todo_may_carry_the_mcp_source(seats):
         cur.execute("INSERT INTO todos (title, source, created_at, updated_at) "
                     "VALUES ('x', 'mcp', now(), now()) RETURNING source")
         assert cur.fetchone()[0] == "mcp"
+
+
+def test_revoking_an_oauth_connection_in_settings_kills_its_refresh_token(seats):
+    """Revoke lives in Settings (there is no /revoke): deleting the connection must end
+    its refresh token too, not just the access token, or the app could mint a new pair."""
+    member, _ = seats
+    pair = _oauth(member)
+    refresh = store.hash_token(pair["refresh_token"])
+    assert store.load_refresh(refresh, now=NOW)
+    assert store.revoke(pair["connection_id"], user_id=member) is True
+    assert store.resolve_bearer(pair["access_token"], now=NOW) is None
+    assert store.load_refresh(refresh, now=NOW) is None
+    assert store.rotate_refresh(refresh, ["crm:read"], now=NOW) is None
+    assert _one("SELECT count(*) FROM mcp_credentials WHERE token_hash = %s", (refresh,))[0] == 0
