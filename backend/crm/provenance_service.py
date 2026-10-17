@@ -21,6 +21,7 @@ crm/tools.py); human edits go through crm/router.py, which never records provena
 "AI-written vs human-written" falls out of which code path wrote the field.
 """
 
+from contextvars import ContextVar
 from datetime import datetime, timezone
 
 from core.postgres import (
@@ -48,7 +49,32 @@ PROVENANCE_FIELDS = {
     "deal": {"stage", "value", "notes", "probability", "expected_close_date", "lost_reason",
              "closed_on"},
 }
-VALID_SOURCES = {"assistant"}
+VALID_SOURCES = {"assistant", "mcp"}
+
+# Who is driving the assistant's tool executors right now (#322). Baker by default; the
+# /mcp endpoint sets ("mcp", <connection name>) around one tool call, so a write made by a
+# person's connected ChatGPT or Claude is stamped "via <that tool>" instead of as Baker's.
+# A ContextVar, because the executors are shared and asyncio.to_thread copies the context
+# into the worker thread that runs them.
+WRITE_SOURCE: ContextVar[tuple[str, str | None]] = ContextVar(
+    "crm_write_source", default=("assistant", None)
+)
+
+
+def current_source() -> tuple[str, str | None]:
+    """``(source, source_detail)`` for a provenance row written now."""
+    return WRITE_SOURCE.get()
+
+
+def actor_label() -> str:
+    """The attribution stored on a custom-field value the assistant's tools write."""
+    source, detail = WRITE_SOURCE.get()
+    return f"via {detail}" if source == "mcp" else "assistant"
+
+
+def todo_source() -> str:
+    """The ``todos.source`` a todo created through the assistant's tools carries."""
+    return "mcp" if WRITE_SOURCE.get()[0] == "mcp" else "agent"
 
 
 def _now() -> str:
@@ -116,7 +142,8 @@ def record(
 
 
 def record_fields(entity_type: str, entity_id: int, values: dict) -> None:
-    """Producer API: record 'assistant' provenance for a batch of fields, atomically.
+    """Producer API: record provenance for a batch of fields, atomically. The source is
+    ``current_source()``: 'assistant', or 'mcp' plus the connection name (#322).
 
     Opens ONE transaction, locks the entity row FOR UPDATE, and:
       - if the entity vanished between the value write and here → records nothing (no
@@ -144,7 +171,9 @@ def record_fields(entity_type: str, entity_id: int, values: dict) -> None:
         for field_name, snapshot in fields.items():
             if _norm(current.get(field_name)) != _norm(snapshot):
                 continue  # value changed since the AI wrote it — the human owns it now
-            record(entity_type, entity_id, field_name, _norm(snapshot), "assistant", cur=cur)
+            source, detail = current_source()
+            record(entity_type, entity_id, field_name, _norm(snapshot), source,
+                   source_detail=detail, cur=cur)
 
 
 def get_one(entity_type: str, entity_id: int, field_name: str) -> dict | None:

@@ -44,6 +44,7 @@ from crm.todo_web import (
 )
 from gmail.router import router as gmail_router
 from heartbeat.router import router as heartbeat_router
+from mcp_endpoint.oauth import build_routes as build_mcp_routes, oauth_base_url
 from memory.router import router as memory_router
 from notifications.router import router as notifications_router
 from providers.router import router as providers_router, setup_router as ai_setup_router
@@ -245,6 +246,9 @@ MAX_REQUEST_BYTES = 64 * 1024 * 1024
 # tight is 413ing a correct upload, and the cost of being loose is 64 KB.
 MULTIPART_ENVELOPE_BYTES = 64 * 1024
 
+# The /mcp ceiling (#322): far above any JSON-RPC tool call, far below the backstop.
+MCP_REQUEST_BYTES = 1_000_000
+
 # Every upload route's admission ceiling, because for a multipart body the ceiling here is
 # the ONLY thing standing between a caller and a full spool-to-disk plus parse (see above:
 # the route's own bounded read runs too late). Sized per route at its real feature limit
@@ -272,6 +276,11 @@ _ROUTE_REQUEST_LIMIT_SPECS: tuple[tuple[str, int], ...] = (
     ("/api/crm/import", crm_upload_max_bytes + MULTIPART_ENVELOPE_BYTES),
     ("/api/crm/smart-import/parse", crm_upload_max_bytes + MULTIPART_ENVELOPE_BYTES),
     ("/api/branding/logo", MAX_LOGO_BYTES + MULTIPART_ENVELOPE_BYTES),
+    # Connect your own AI (#322). Not an upload, but reachable without a session, so the
+    # 64 MB backstop is the wrong ceiling for a JSON-RPC body. The OAuth endpoints need no
+    # row: the MCP SDK wraps each in its own 4 MiB body limit, and they are only mounted
+    # when OAuth is configured.
+    ("/mcp", MCP_REQUEST_BYTES),
 )
 
 # First match wins, falling back to MAX_REQUEST_BYTES.
@@ -367,6 +376,13 @@ app.include_router(reminders_router, prefix="/api/crm/reminders", tags=["reminde
 app.include_router(todo_capture_router, tags=["todo-capture"])
 app.include_router(todo_web_session_api, prefix="/api/todo-web", tags=["todo-web"])
 app.include_router(todo_web_router, tags=["todo-web"])
+
+# ── Connect your own AI (#322) ────────────────────────────────────────────────
+# `/mcp` and, when this install has a configured https address, its OAuth 2.1
+# authorization server (discovery, /authorize, /token, /register, /revoke). These are
+# Starlette routes from the official MCP SDK, not FastAPI routes, so test_route_authz
+# pins them separately. Like the todo mounts, they must come before the SPA catch-all.
+app.router.routes.extend(build_mcp_routes(oauth_base_url()))
 
 
 # ── Health endpoints ──────────────────────────────────────────────────────────

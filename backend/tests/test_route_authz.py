@@ -146,6 +146,29 @@ def _app_routes():
             yield route.path, method, names
 
 
+# Starlette routes carry no `.dependant`, so `_app_routes` above cannot see them: a route
+# mounted this way would escape every check in this file. #322 mounts the MCP SDK's routes
+# like this, so the exact set is pinned here. Each one authenticates itself: /mcp takes a
+# bearer token (mcp_endpoint.server), the OAuth endpoints are the public half of the
+# authorization server, and FastAPI's own docs routes need no auth.
+_FASTAPI_DOC_ROUTES = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
+
+
+def test_non_fastapi_routes_are_exactly_pinned():
+    from starlette.routing import Route
+
+    from mcp_endpoint.oauth import OAUTH_PATHS, build_routes, oauth_base_url
+
+    bare = {r.path for r in app.routes
+            if isinstance(r, Route) and getattr(r, "dependant", None) is None}
+    expected = _FASTAPI_DOC_ROUTES | {"/mcp"} | (OAUTH_PATHS if oauth_base_url() else set())
+    assert bare == expected
+    # The configured shape, pinned too: CI has no public address, so the line above
+    # only ever sees /mcp.
+    assert {r.path for r in build_routes("https://crm.example")} == {"/mcp"} | OAUTH_PATHS
+    assert {r.path for r in build_routes(None)} == {"/mcp"}
+
+
 def test_every_route_authenticates():
     unguarded = [
         (path, method)
