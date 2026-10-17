@@ -27,6 +27,8 @@ const MEMBER_CARDS: SettingsCardId[] = [
   // #193. Linking YOUR phone is personal; the bot token stays admin-only below.
   'telegram_link',
   'todo_devices',
+  // #322. Connecting YOUR own AI tool is personal; the members switch stays admin-only.
+  'connect_ai_tool',
 ];
 const ADMIN_ONLY_CARDS: SettingsCardId[] = [
   'branding', 'team', 'custom_fields', 'telegram', 'gmail',
@@ -34,6 +36,8 @@ const ADMIN_ONLY_CARDS: SettingsCardId[] = [
   'todo_mode',
   // #302: the whole database as CSV.
   'export',
+  // #322: the members switch and every seat's AI tool connections.
+  'ai_tool_connections',
 ];
 
 function visibleCardIds(isAdmin: boolean): SettingsCardId[] {
@@ -45,10 +49,10 @@ describe('settingsSections — the member/admin partition', () => {
     expect(visibleCardIds(false).sort()).toEqual([...MEMBER_CARDS].sort());
   });
 
-  it('shows an admin all thirteen cards, each exactly once', () => {
+  it('shows an admin all fifteen cards, each exactly once', () => {
     const ids = visibleCardIds(true);
-    expect(ids).toHaveLength(13);
-    expect(new Set(ids).size).toBe(13);
+    expect(ids).toHaveLength(15);
+    expect(new Set(ids).size).toBe(15);
     expect(ids.sort()).toEqual([...MEMBER_CARDS, ...ADMIN_ONLY_CARDS].sort());
   });
 
@@ -149,7 +153,7 @@ describe('settingsSections — every card has a home', () => {
   it('declares each card id exactly once across all sections', () => {
     const ids = SETTINGS_SECTIONS.flatMap(s => s.cards).map(c => c.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(13);
+    expect(ids).toHaveLength(15);
   });
 
   it('gives every section a non-empty label', () => {
@@ -175,8 +179,10 @@ describe('SettingsCard is the only owner of card chrome', () => {
   // map to a filename, so this is hand-maintained — the count check below is what stops
   // it drifting from the registry.
   const CARD_FILE_IDS: Record<string, SettingsCardId> = {
+    'AiToolConnectionsCard.tsx': 'ai_tool_connections',
     'BrandingCard.tsx': 'branding',
     'ChangePasswordCard.tsx': 'change_password',
+    'ConnectAiToolCard.tsx': 'connect_ai_tool',
     'CustomFieldSettings.tsx': 'custom_fields',
     'ExportCard.tsx': 'export',
     'GmailCard.tsx': 'gmail',

@@ -33,8 +33,10 @@ import {
   CALLBACK_PARAMS, resolveSection, visibleCards, visibleSections, wantedSection,
   type SettingsCardId, type SettingsSection, type SettingsSectionId,
 } from './settingsSections';
+import { AiToolConnectionsCard } from './components/AiToolConnectionsCard';
 import { BrandingCard } from './components/BrandingCard';
 import { ChangePasswordCard } from './components/ChangePasswordCard';
+import { ConnectAiToolCard } from './components/ConnectAiToolCard';
 import { CustomFieldSettings } from './components/CustomFieldSettings';
 import { ExportCard } from './components/ExportCard';
 import { GmailCard } from './components/GmailCard';
@@ -55,12 +57,14 @@ const CARD_COMPONENTS: Record<SettingsCardId, ComponentType<{ isMobile: boolean 
   pipeline_board: PipelineBoardCard,
   telegram_link: TelegramLinkCard,
   todo_devices: TodoDevicesCard,
+  connect_ai_tool: ConnectAiToolCard,
   memory: MemoryCard,
   todo_mode: TodoModeCard,
   branding: BrandingCard,
   team: TeamSettings,
   custom_fields: CustomFieldSettings,
   export: ExportCard,
+  ai_tool_connections: AiToolConnectionsCard,
   telegram: TelegramSettings,
   gmail: GmailCard,
 };
