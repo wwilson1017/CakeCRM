@@ -353,7 +353,8 @@ jobs:
           # so content[0] can be a thinking block and `.content[0].text` is null — a valid
           # response that used to be reported as an API error with no review.
           printf '%s' "$BODY" | jq -r '[.content[]? | select(.type == "text") | .text] | join("\n")' > /tmp/review.txt
-          STOP_REASON=$(printf '%s' "$BODY" | jq -r '.stop_reason // ""')
+          # `tr -cd` keeps stop_reason a bare token: later steps interpolate it into shell.
+          STOP_REASON=$(printf '%s' "$BODY" | jq -r '.stop_reason // ""' | tr -cd 'a-z_')
           echo "stop_reason=$STOP_REASON" >> "$GITHUB_OUTPUT"
 
           # Validate BEFORE declaring success, so a text-less response can't post an
