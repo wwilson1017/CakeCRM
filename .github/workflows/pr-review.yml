@@ -487,7 +487,7 @@ jobs:
       - name: Review outcome guard
         if: always() && steps.gate.outputs.has_key == 'true'
         run: |
-          if [ "${{ steps.review.outputs.api_error }}" = "true" ] || [ "${{ steps.review.outputs.empty_review }}" = "true" ]; then
+          if [ "${{ steps.review.outcome }}" = "failure" ] || [ "${{ steps.review.outputs.api_error }}" = "true" ] || [ "${{ steps.review.outputs.empty_review }}" = "true" ]; then
             echo "::error::AI review did not run (api_error=${{ steps.review.outputs.api_error }}, empty_review=${{ steps.review.outputs.empty_review }}, stop_reason=${{ steps.review.outputs.stop_reason }}); failing the check so the PR is not shown as reviewed."
             exit 1
           elif [ "${{ steps.post_comment.outcome }}" = "success" ] || [ "${{ steps.post_notice.outcome }}" = "success" ]; then
