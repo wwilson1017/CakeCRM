@@ -165,7 +165,21 @@ def test_the_configured_token_works(client, surfaces, captured):
     assert client.get("/capture/s3cret").status_code == 200
     r = client.post("/api/capture/s3cret", json={"text": "buy vanilla"})
     assert r.status_code == 200
-    # The owner's own text (#326), not the public source the #204 fence keys on.
+    # A short caller-chosen token can be guessed, so its captures stay public (#326).
+    assert captured == [("buy vanilla", "capture_web")]
+
+
+def test_a_minted_token_captures_the_owners_own_text(client, surfaces, captured):
+    """#326: behind a token of minted strength the poster holds the owner's secret, so
+    the row is stamped `capture_token` — the source the #204 fence does NOT key on."""
+    from crm import todo_tokens
+    token = todo_tokens.mint_token()
+    assert todo_tokens.is_minted_strength(token)
+    assert not todo_tokens.is_minted_strength("s3cret")
+    assert not todo_tokens.is_minted_strength("x" * 43 + ".")  # the clamp would strip it
+    surfaces(todo_capture_token=token)
+    r = client.post(f"/api/capture/{token}", json={"text": "buy vanilla"})
+    assert r.status_code == 200
     assert captured == [("buy vanilla", "capture_token")]
 
 

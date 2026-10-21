@@ -1,4 +1,5 @@
--- #326: a capture through the TOKENED link gets its own source, `capture_token`, so the
+-- #326: a capture through the TOKENED link (a token of minted strength) gets its own
+-- source, `capture_token`, so the
 -- #204 fence (which keys on `capture_web` alone) treats it as the owner's own text: the
 -- person holding a secret capture URL is the owner, the same trust the todo web app's
 -- token already carries. The bare `/capture` (no token configured) keeps `capture_web`.

@@ -25,7 +25,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 
 from core.ratelimit import IPRateLimiter
-from crm import gtd_service, service
+from crm import gtd_service, service, todo_tokens
 from crm.gtd_common import ValidationError
 from crm.todo_pwa import manifest_response
 
@@ -257,8 +257,9 @@ async def _read_capture_text(request: Request) -> str:
 
 def _do_capture(text: str, source: str) -> dict:
     """``source`` is the route's own literal: ``capture_web`` from the bare page, where
-    anyone can post, and ``capture_token`` from behind a configured token, where the
-    poster holds the owner's secret (#326). The #204 fence keys on the former alone."""
+    anyone can post, and ``capture_token`` from behind a configured token of minted
+    strength, where the poster holds the owner's secret (#326). The #204 fence keys on
+    the former alone."""
     try:
         todo = gtd_service.capture(text, source=source)
     except ValidationError as e:
@@ -336,6 +337,9 @@ def capture_manifest_token(token: str, request: Request):
 @router.post("/api/capture/{token}")
 async def capture_post_token(token: str, request: Request):
     _rate_or_429(request)
-    await asyncio.to_thread(_require_token, token)
+    configured = await asyncio.to_thread(_require_token, token)
     text = await _read_capture_text(request)
-    return await asyncio.to_thread(_do_capture, text, "capture_token")
+    # Only a token of minted strength is a secret worth trusting (#326): a short,
+    # caller-chosen one can be guessed, and a guessed capture must stay in the fenced path.
+    source = "capture_token" if todo_tokens.is_minted_strength(configured) else "capture_web"
+    return await asyncio.to_thread(_do_capture, text, source)
