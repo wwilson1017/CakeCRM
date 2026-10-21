@@ -71,7 +71,9 @@ so a secret is never typed or transmitted by a browser before it exists.
 The address is `/capture` with the secret appended as an extra path segment — no query
 string, no header, nothing to configure on the device. The token is long and random.
 
-**Treat the capture link like a password.** Anyone holding it can add to your inbox. Regenerate
+**Treat the capture link like a password.** Anyone holding it can add to your inbox, and
+Baker reads what arrives through it as your own text — with no token configured it treats
+each capture as a stranger's instead (see `assistant/confirmations`). Regenerate
 the token to revoke it. Never paste a live link into a chat, a ticket or a transcript — read
 it off the Settings card on the device that needs it.
 

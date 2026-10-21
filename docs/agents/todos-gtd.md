@@ -315,7 +315,8 @@
 
 - **Every row says who added it unless a person did** (#260). `todos.source` already
   recorded provenance; `crm/gtd/sourceLabel.ts` maps it to a visible word (`agent` →
-  Baker, `observer` → Observer, `capture_web` → Capture link, `telegram` → Telegram) and
+  Baker, `observer` → Observer, `capture_web`/`capture_token` → Capture link (#326),
+  `telegram` → Telegram) and
   returns null for `ui` and for any value it does not know, so a row never claims a
   provenance the server did not record. `components/SourceLabel.tsx` renders it on
   `TodoRow`'s meta line (so Today, To Do, Search, project pages, Someday and Done), the

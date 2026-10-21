@@ -123,6 +123,15 @@
   truncated oversized row otherwise handed the model an open fence, the one thing that
   function exists to prevent. The tokenless capture DEFAULT is unchanged: shrinking the
   on-ramp is a product question, not a fix to the read path.
+  **A capture from behind a configured token of minted strength is the owner's own text**
+  (#326): the token route stamps `source='capture_token'` when
+  `todo_tokens.is_minted_strength(configured)` (43+ chars, clamp-clean — `clamp_token`
+  itself has no minimum, and an admin may POST any string), which is in `TODO_SOURCES` but NOT in
+  `PUBLIC_CAPTURE_SOURCES`, so it is neither fenced nor tainting — the poster holds a secret
+  the todo web app already treats as the owner's. Only the bare `/capture` keeps
+  `capture_web`. Decided per ROW at write time, so rows written before the token existed
+  keep the stricter treatment; no backfill, because an old row cannot say whether a token
+  was configured when it arrived.
   **The assistant is named Baker and that name is a brand, not a setting** (#71):
   `identity.NAME` is the only source (the old `DEFAULT_NAME` spelling is gone — a
   "default" implies something may override it), `get_identity()` does not select the
