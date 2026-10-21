@@ -32,6 +32,7 @@ describe('todoSourceLabel', () => {
     expect(todoSourceLabel('agent')?.text).toBe('Baker');
     expect(todoSourceLabel('observer')?.text).toBe('Observer');
     expect(todoSourceLabel('capture_web')?.text).toBe('Capture link');
+    expect(todoSourceLabel('capture_token')?.text).toBe('Capture link');
     expect(todoSourceLabel('telegram')?.text).toBe('Telegram');
     expect(todoSourceLabel('ui')).toBeNull();
     // An unknown value claims nothing, and an inherited key is not a source.
@@ -67,6 +68,7 @@ describe('TodoRow added-by label', () => {
     ['agent', 'Added by Baker'],
     ['observer', 'Added by Observer'],
     ['capture_web', 'Added by Capture link'],
+    ['capture_token', 'Added by Capture link'],
     ['telegram', 'Added by Telegram'],
   ])('labels a %s todo in the row button\'s accessible name', (source, expected) => {
     // textContent joins the title <p> and the meta <p> with no space; a screen reader

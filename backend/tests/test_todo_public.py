@@ -165,7 +165,8 @@ def test_the_configured_token_works(client, surfaces, captured):
     assert client.get("/capture/s3cret").status_code == 200
     r = client.post("/api/capture/s3cret", json={"text": "buy vanilla"})
     assert r.status_code == 200
-    assert captured == [("buy vanilla", "capture_web")]
+    # The owner's own text (#326), not the public source the #204 fence keys on.
+    assert captured == [("buy vanilla", "capture_token")]
 
 
 def test_a_wrong_token_is_404_not_403(client, surfaces):
