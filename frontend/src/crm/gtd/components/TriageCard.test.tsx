@@ -1069,6 +1069,38 @@ describe('step 2 — tags without leaving triage', () => {
     expect(updateTodoMock).toHaveBeenCalledTimes(2);
   });
 
+  it('toasts a rejected tags save even when filing follows at once', async () => {
+    // Filing clears the card's inline error and swaps the card, so the toast is the one
+    // place the failure is still said.
+    const err = vi.spyOn(toast, 'error').mockImplementation(() => {});
+    updateTodoMock.mockRejectedValueOnce(new Error('Too many tags'));
+    render();
+    setValue(tagsInput(), 'errand');
+    setValue(contextPicker(), '0'); // '@calls'
+    await settle();
+
+    expect(err).toHaveBeenCalledWith('Too many tags');
+    expect(updateTodoMock).toHaveBeenNthCalledWith(2, 7, { context: '@calls', status: 'next_action' });
+    expect(onProcessed).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the Edit sheet only once a tags save in flight has landed', async () => {
+    let land: () => void = () => {};
+    updateTodoMock.mockImplementationOnce((_id, fields) => new Promise(r => {
+      land = () => r({ ...TODO, ...fields, updated_at: nextStamp() });
+    }));
+    render();
+    setValue(tagsInput(), 'house');
+    unfocus(tagsInput());
+    click(button('Edit'));
+    await settle();
+    expect(onEdit).not.toHaveBeenCalled();
+
+    land();
+    await settle();
+    expect(onEdit).toHaveBeenCalledWith(expect.objectContaining({ tags: ['house'] }));
+  });
+
   it('hands the Edit sheet the tags on screen', async () => {
     render();
     setValue(tagsInput(), 'house');
