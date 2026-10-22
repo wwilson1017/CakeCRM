@@ -30,9 +30,9 @@ If the whole thing takes under two minutes, just do it and press **Took 2 minute
 - **Bring back on** — hides the todo until that day, then shows it on Today.
 - **Notes** — links, numbers, anything you will want when you do it.
 - **Tags** — comma-separated, like `errand, quick`. Tags you already use show below the box; tap one to add it.
+- **Edit** opens the full editor, once any note, date or tags you just changed have saved. **Drop** removes the item: it moves to Done → Dropped, where you can reopen it. A todo is never deleted.
 
 Each field is labelled on the card, and each saves as you leave it. None of them takes the item out of the inbox.
-- **Edit** opens the full editor, once any note or date you just changed has saved. **Drop** removes the item: it moves to Done → Dropped, where you can reopen it. A todo is never deleted.
 
 ## 03 Last step — set context
 
