@@ -4,6 +4,7 @@ import { toast } from '../../../shared/toast';
 import { createProject, updateTodo } from '../api';
 import type { Todo, TodoProject, TodoStatus } from '../types';
 import { todoSourceLabel } from '../sourceLabel';
+import { parseTags } from '../util';
 import { dropUndo, queueUndo } from '../undoQueue';
 import { InlineTitle } from './InlineTitle';
 import { SourceLabel } from './SourceLabel';
@@ -14,6 +15,8 @@ interface Props {
   projects: TodoProject[];
   /** Contexts already in use — the options for the final "set context" step. */
   contexts: string[];
+  /** Tags already in use — offered as one-tap suggestions under step 2's Tags field. */
+  tags?: string[];
   /** After a write that takes the item OUT of the inbox (filed/done/dropped). */
   onProcessed: () => void;
   /** After an in-place change that leaves it in the inbox (title, project, …). */
@@ -44,6 +47,10 @@ const badgeCls = 'inline-flex h-5 w-5 shrink-0 items-center justify-center round
 const destCls = 'rounded-lg border px-3 py-2 text-sm font-heading transition-colors disabled:opacity-50';
 const inputCls = 'rounded-lg border border-line bg-cream px-2 py-1.5 text-sm text-charcoal focus:border-brand focus:outline-none disabled:opacity-50';
 const linkCls = 'text-sm underline disabled:opacity-50';
+// The visible name over each step-2 field, so nothing there is a guess.
+const fieldCls = 'mb-1 block text-xs font-semibold text-charcoal';
+// Tag suggestions shown at once under the Tags field.
+const MAX_TAGS_OFFERED = 8;
 
 /**
  * One step heading: the number as a solid accent badge, the text beside it, and — on the
@@ -156,6 +163,9 @@ interface CardState {
    * that moves it is adopting a newer row, and a newer row is by definition what the server
    * holds. */
   notesDraft: string;
+  /** The Tags field's comma-separated text. Dirty is its PARSED tags differing from
+   * `row.tags`, with the same row-is-the-baseline rule as `notesDraft`. */
+  tagsDraft: string;
   /** Optimistic values, shadowing the row until it catches up. null = not overriding. */
   pendingDue: string | null;
   /** The bring-back date (#261), same rules as `pendingDue`; '' means "clear it". */
@@ -167,6 +177,7 @@ type CardAction =
   /** A newer view of the row, from the parent's prop or a write's own response. */
   | { type: 'adopt'; row: Todo }
   | { type: 'notes-draft'; value: string }
+  | { type: 'tags-draft'; value: string }
   | { type: 'due'; value: string | null }
   | { type: 'back'; value: string | null }
   | { type: 'title'; value: string | null };
@@ -186,12 +197,16 @@ type CardAction =
  * back to the value the override exists to hide, and hands the Edit sheet the old value,
  * whose full-row save then reverts the change.
  */
+const tagsText = (tags: string[]): string => tags.join(', ');
+const tagsClean = (draft: string, row: Todo): boolean => tagsText(parseTags(draft)) === tagsText(row.tags);
+
 function adopt(s: CardState, r: Todo): CardState {
   if (!isNewer(r.updated_at, s.row.updated_at)) return s;
   return {
     ...s,
     row: r,
     notesDraft: s.notesDraft === s.row.notes ? r.notes : s.notesDraft,
+    tagsDraft: tagsClean(s.tagsDraft, s.row) ? tagsText(r.tags) : s.tagsDraft,
   };
 }
 
@@ -201,6 +216,8 @@ function reduce(s: CardState, a: CardAction): CardState {
       return adopt(s, a.row);
     case 'notes-draft':
       return s.notesDraft === a.value ? s : { ...s, notesDraft: a.value };
+    case 'tags-draft':
+      return s.tagsDraft === a.value ? s : { ...s, tagsDraft: a.value };
     case 'due':
       return s.pendingDue === a.value ? s : { ...s, pendingDue: a.value };
     case 'back':
@@ -213,6 +230,7 @@ function reduce(s: CardState, a: CardAction): CardState {
 const initState = (todo: Todo): CardState => ({
   row: todo,
   notesDraft: todo.notes,
+  tagsDraft: tagsText(todo.tags),
   pendingDue: null,
   pendingBack: null,
   pendingTitle: null,
@@ -223,7 +241,7 @@ const initState = (todo: Todo): CardState => ({
  * of action it is, optional detail, then the context that files it. Setting a context
  * is the ONLY way out of the inbox.
  */
-export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, onEdit }: Props) {
+export function TriageCard({ todo, projects, contexts, tags: knownTags = [], onProcessed, onChanged, onEdit }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [destination, setDestination] = useState<TodoStatus>('next_action');
@@ -265,7 +283,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
   // elsewhere (the Edit sheet, most often) gets in.
   useLayoutEffect(() => { apply({ type: 'adopt', row: todo }); }, [todo, apply]);
 
-  const { row, notesDraft, pendingDue, pendingBack, pendingTitle } = state;
+  const { row, notesDraft, tagsDraft, pendingDue, pendingBack, pendingTitle } = state;
   const dest = DESTINATIONS.find(d => d.status === destination) ?? DESTINATIONS[0];
   // Looked up in the shared list so a purpose edited on the project page shows here on the
   // next meta refresh; a project missing from the list (just created) simply shows nothing.
@@ -284,6 +302,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       ...live.row,
       title: live.pendingTitle ?? live.row.title,
       notes: live.notesDraft,
+      tags: parseTags(live.tagsDraft),
       due_date: live.pendingDue ?? live.row.due_date,
       bring_back_on: live.pendingBack === null ? live.row.bring_back_on : (live.pendingBack || null),
     };
@@ -340,6 +359,37 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       return false;
     }
   });
+
+  /** Commit the Tags field if it holds something new — on blur or on a picked suggestion,
+   * non-resolving, and serialized, for the reasons `flushNotes` gives. */
+  const flushTags = useSerialCommit(async (): Promise<void> => {
+    const { tagsDraft: draft, row: live } = stateRef.current;
+    if (tagsClean(draft, live)) return;
+    setError('');
+    try {
+      apply({ type: 'adopt', row: await updateTodo(live.id, { tags: parseTags(draft) }) });
+      onChanged();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Update failed';
+      setError(msg);
+      toast.error(msg); // same unmount reasoning as the notes save
+    }
+  });
+
+  // Known tags not already on the item; what follows the last comma narrows them, unless it
+  // is already a whole known tag (so "home" does not hide "homework").
+  const tagParts = tagsDraft.split(',');
+  const tagLast = tagParts[tagParts.length - 1].trim();
+  const tagTyping = knownTags.includes(tagLast) ? '' : tagLast.toLowerCase();
+  const tagsOffered = knownTags
+    .filter(t => !parseTags(tagsDraft).includes(t) && t.toLowerCase().includes(tagTyping))
+    .slice(0, MAX_TAGS_OFFERED);
+  /** A picked tag replaces the fragment being typed, or joins the finished entries. */
+  const pickTag = (tag: string) => {
+    const kept = tagTyping ? tagParts.slice(0, -1) : tagParts;
+    apply({ type: 'tags-draft', value: tagsText([...parseTags(kept.join(',')), tag]) });
+    void flushTags();
+  };
 
   /**
    * Commit the due-date field if it holds something new.
@@ -440,6 +490,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       // for the same reason the note is not: filing is this card's one exit.
       if (resolves) await commitDue();
       if (resolves) await commitBack();
+      if (resolves) await flushTags();
       if (notesOk) setError('');
       // Adopt the response for the same reason the notes save does. Star and project are
       // written straight through here and never rendered optimistically, so this is the ONLY
@@ -637,8 +688,10 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
       {/* Step 2 — optional enrichment. Nothing here leaves the inbox. */}
       <div className="mt-5">
         <StepHeading step={2}>Add detail (optional)</StepHeading>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-end gap-2">
           {newProject === null ? (
+            <div>
+            <span className={fieldCls}>Project</span>
             <select
               value={row.project_id ?? ''}
               disabled={locked}
@@ -654,6 +707,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               <option value={NEW_PROJECT}>+ New project…</option>
             </select>
+            </div>
           ) : (
             <form
               onSubmit={e => { e.preventDefault(); void createAndAssign(newProject); }}
@@ -697,7 +751,9 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               control in every engine (WebKit renders a narrow box showing today's date
               greyed rather than mm/dd/yyyy, so a partial overlay leaves digits peeking
               out), and the width floor keeps the cue on one line. */}
-          <span className="relative inline-flex">
+          <div>
+          <span className={fieldCls}>Due date</span>
+          <span className="relative flex">
             <input
               type="date"
               value={dueValue}
@@ -722,9 +778,12 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               </span>
             )}
           </span>
+          </div>
           {/* Bring back on (#261): the due-date control's twin — same blur commit, same
               opaque cue over a native date input that ignores `placeholder`. */}
-          <span className="relative inline-flex">
+          <div>
+          <span className={fieldCls}>Bring back on</span>
+          <span className="relative flex">
             <input
               type="date"
               value={backValue}
@@ -745,6 +804,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               </span>
             )}
           </span>
+          </div>
           <button
             type="button"
             disabled={locked}
@@ -761,7 +821,7 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
               // change them meanwhile: the card is locked.
               const { pendingDue: due, pendingBack: back } = stateRef.current;
               setEditPending(true);
-              void Promise.all([flushNotes(), commitDue(), commitBack()]).then(() => {
+              void Promise.all([flushNotes(), commitDue(), commitBack(), flushTags()]).then(() => {
                 if (!mounted.current) return;
                 setEditPending(false);
                 const sheet = payload();
@@ -815,15 +875,46 @@ export function TriageCard({ todo, projects, contexts, onProcessed, onChanged, o
             phone number without leaving triage. Saved on blur, non-resolving, so the item
             stays in the inbox. This replaces the read-only preview that used to sit under
             the title. */}
+        <span className={`${fieldCls} mt-3`}>Notes</span>
         <textarea
           value={notesDraft}
           disabled={locked}
           onChange={e => apply({ type: 'notes-draft', value: e.target.value })}
           onBlur={() => void flushNotes()}
-          placeholder="Notes — links, numbers, anything you'll want when you do it"
-          className={`${inputCls} mt-2 block min-h-16 w-full`}
+          placeholder="Links, numbers, anything you'll want when you do it"
+          className={`${inputCls} block min-h-16 w-full`}
           aria-label="Notes"
         />
+        {/* Tags while clarifying, comma-separated as in the Edit sheet, with the tags already
+            in use one tap away. Saved on blur or on a pick, non-resolving. */}
+        <span className={`${fieldCls} mt-3`}>Tags</span>
+        <input
+          value={tagsDraft}
+          disabled={locked}
+          onChange={e => apply({ type: 'tags-draft', value: e.target.value })}
+          onBlur={() => void flushTags()}
+          placeholder="errand, quick, house"
+          className={`${inputCls} block w-full`}
+          aria-label="Tags"
+        />
+        {tagsOffered.length > 0 && (
+          <span className="mt-1 flex flex-wrap gap-1" data-tag-suggestions>
+            {tagsOffered.map(tag => (
+              <button
+                key={tag}
+                type="button"
+                disabled={locked}
+                // Keep focus in the input: a blur here would commit the half-typed fragment
+                // this click is about to replace.
+                onMouseDown={e => e.preventDefault()}
+                onClick={() => pickTag(tag)}
+                className="rounded-full border border-line px-2 py-0.5 text-xs text-muted hover:bg-sand hover:text-charcoal disabled:opacity-50"
+              >
+                + {tag}
+              </button>
+            ))}
+          </span>
+        )}
       </div>
 
       {/* Step 3 — the last step. Picking a context files it and clears the inbox. */}
