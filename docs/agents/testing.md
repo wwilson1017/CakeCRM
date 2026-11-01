@@ -132,5 +132,7 @@
   when an `ANTHROPIC_API_KEY` Actions secret is set (model overridable via the
   `AI_REVIEW_MODEL` repo variable), and is a **green no-op** otherwise (forks, keyless
   repos). It must **not** be configured as a required check. It uses only the GitHub API
-  (no checkout) and `on: pull_request` (never `pull_request_target`).
+  (no checkout) and `on: pull_request` (never `pull_request_target`). It fails only when a
+  review should have happened and did not (an API error, or a reply with no text blocks —
+  the model thinks first, so the review is not always `content[0]`); skips stay green.
 
