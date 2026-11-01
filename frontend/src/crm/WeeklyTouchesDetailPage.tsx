@@ -232,9 +232,11 @@ function DetailView({ apiPath, isMobile }: { apiPath: string; isMobile: boolean 
         ) : (
           <>
             <p style={{ fontSize: 12, color: INK_MUTE, margin: '14px 0', maxWidth: 560 }}>
-              Deals edited, noted, or logged against in this window while open — through
-              the move to Won, and never after. However many times, each deal counts once.
-              The number beside each deal is its AI-estimated<em> lifetime</em> touch count,
+              Deals whose latest customer contact — a note, or a logged call, email or meeting —
+              falls in this window while open, up to the move to Won and never after. Edits,
+              stage moves and creating a deal don't count. However many times, each deal counts once.
+              The number beside each deal is its AI-estimated<em> lifetime</em>{' '}
+              touch count,
               not this window's, and is blank until one has been computed.
             </p>
             <div style={{ ...cardStyle, padding: '2px 20px 6px' }}>

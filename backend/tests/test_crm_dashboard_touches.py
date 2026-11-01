@@ -266,20 +266,21 @@ def test_the_row_set_is_live_and_open_or_won_in_the_window(rec):
     assert "(d.stage = \'won\' AND w.in_window)" in totals_sql
 
 
-def test_a_won_deal_is_dated_by_its_win_and_never_by_LEAST(rec):
-    """A won deal's instant is its newest journaled win, expressed as a CASE.
+def test_a_won_deal_is_dated_by_contact_before_its_win_and_never_by_LEAST(rec):
+    """A won deal's contact is capped at its newest journaled win, using a CASE.
 
     Deliberately NOT the issue's LEAST(last_touch, won_at): Postgres LEAST ignores NULL
     operands, so a deal sitting in 'won' with no journaled win — created straight into
     'won', the demo seed, or won before the journal existed — would fall back to its
-    updated_at and be credited. That is the one deal that must count for nothing.
+    last contact and be credited. That is the one deal that must count for nothing.
     """
     service.get_weekly_touches()
 
     for sql in (rec.sql_containing("FILTER"), rec.sql_containing("LEFT JOIN companies")):
         assert "CASE WHEN d.stage = \'won\'" in sql
         assert "MAX(e.changed_at)" in sql and "e.new_stage = \'won\'" in sql
-        assert "GREATEST" in sql          # an open deal still reads LAST_TOUCH_SQL
+        assert "GREATEST" in sql          # newest qualifying contact from either lane
+        assert "created_at <= win.won_at" in sql
         assert "LEAST" not in sql
 
 
@@ -300,8 +301,8 @@ def test_the_window_predicate_is_written_once_for_the_roster_and_the_count(rec):
     ]
 
 
-def test_window_membership_uses_last_touch_not_the_ai_watermark(rec):
-    """Window membership must come from LAST_TOUCH_SQL (keyless, event-grained), NOT
+def test_window_membership_uses_customer_contact_not_the_ai_watermark(rec):
+    """Window membership must come from customer contact (keyless, event-grained), NOT
     from deals.ai_touch_count_at. That column is #16's stale-write-guard watermark: it
     only advances when a provider answered, and it falls back to the deal's created_at
     — so keying the window off it made every provider timeout silently drop a deal from
@@ -310,7 +311,8 @@ def test_window_membership_uses_last_touch_not_the_ai_watermark(rec):
 
     for sql in (rec.sql_containing("FILTER"), rec.sql_containing("LEFT JOIN companies")):
         assert "ai_touch_count_at" not in sql
-        assert "GREATEST" in sql  # the LAST_TOUCH_SQL expression
+        assert "GREATEST" in sql  # the shared contact expression
+        assert "d.updated_at" not in sql
 
     # The per-deal NUMBER is still #16's count — that is the "#16 data" the issue
     # asked to key off, and it is what drives the zero-keys gate.
@@ -318,13 +320,13 @@ def test_window_membership_uses_last_touch_not_the_ai_watermark(rec):
     assert "ai_touch_count AS touch_count" in rows_sql
 
 
-def test_creating_a_deal_is_not_a_touch(rec):
-    """create_deal leaves updated_at == created_at, so without this guard a bulk
-    import or a sample-data load reports every brand-new deal as worked."""
+def test_neither_creating_nor_editing_a_deal_is_a_touch(rec):
+    """Only contact events count, including a real contact at the creation instant."""
     service.get_weekly_touches()
 
     for sql in (rec.sql_containing("FILTER"), rec.sql_containing("LEFT JOIN companies")):
-        assert "<> " in sql and "created_at" in sql
+        assert "<> d.created_at" not in sql
+        assert "d.updated_at" not in sql
 
 
 def test_computed_deals_is_not_scoped_to_the_window(rec):

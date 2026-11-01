@@ -134,7 +134,7 @@ function asServed(d: CrmDeal): CrmDeal {
  *  difference is the entire subject of the MERGE test. */
 function detailProjection(d: CrmDeal): CrmDeal {
   const row: CrmDeal = { ...d, archived_at: null };
-  delete row.last_activity_at;
+  delete row.last_contact_at;
   return row;
 }
 
@@ -278,7 +278,7 @@ async function pickArchivedFacet(option: 'Include archived' | 'Archived only') {
 
 
 /** Open the Deal-activity facet and pick one of its buckets. */
-async function pickActivityFacet(option: 'No activity logged') {
+async function pickActivityFacet(option: 'Never') {
   await pickFacetOption(option);
 }
 
@@ -914,12 +914,12 @@ describe('PipelinePage — deal deep links', () => {
     // Membership is asked of the whole payload, never of the filtered view: a session facet
     // says nothing about whether a deal exists, and the sheet opens over the board however
     // few cards the columns are showing.
-    // `last_activity_at` is what makes the facet BITE: the 'No activity logged' preset
+    // `last_contact_at` is what makes the facet BITE: the 'Never' preset
     // keeps deals with none, so a deal without it (the shared factory's default) is never
     // excluded and this test would pass against a regressed lookup too.
     const HIDDEN = deal({
       id: 9, title: 'Globex expansion', stage: 'won',
-      last_activity_at: '2026-08-30T00:00:00+00:00',
+      last_contact_at: '2026-08-30T00:00:00+00:00',
     });
     // #124 hides `won` by default, and this test's subject is the FACET. Showing the stage
     // keeps the card's absence attributable to the facet alone — otherwise the precondition
@@ -928,7 +928,7 @@ describe('PipelinePage — deal deep links', () => {
     sessionStorage.setItem('crm_pipeline_hidden_stages', '[]');
     routeApi({ live: [LIVE, HIDDEN] });
     await render('/crm/pipeline');
-    await pickActivityFacet('No activity logged');
+    await pickActivityFacet('Never');
     // The facet really is hiding it — without this line the rest asserts nothing.
     expect(card('Globex expansion')).toBeFalsy();
 

@@ -22,7 +22,7 @@ export interface CrmContact {
   updated_at: string;
   lead_score?: number | null;           // computed lead score 0-100 (issue #18); null = never scored
   lead_score_at?: string | null;
-  // Derived last touch (issue #77): newest of the contact's activity_log rows and its
+  // Derived last contact (#77, #333): newest logged call/email/meeting/note and its
   // un-archived, non-housekeeping chatter — the same two signals
   // analytics_service.get_contact_staleness reads. Present on the list, search and detail
   // responses; null = never contacted, a real state and the most urgent one.
@@ -64,9 +64,9 @@ export interface CrmDeal {
   // null on an archived deal (archived before #239, by an unattended turn, or a deleted user).
   archived_by?: number | null;
   archived_reason?: string | null;
-  // Pipeline board only (issue #21): MAX of the deal's activity_log rows + un-archived
-  // deal chatter notes; null = no logged activity. Not present on detail-path responses.
-  last_activity_at?: string | null;
+  // Pipeline board only (#21, redefined #333): newest customer contact — a live note
+  // or a logged call/email/meeting/note — null = never. Not on detail-path responses.
+  last_contact_at?: string | null;
   lead_score?: number | null;           // computed lead score 0-100 (issue #18); null = never scored
   lead_score_at?: string | null;
   // The rep's own read on the deal (issue #125): 'hot' | 'warm' | 'cold', or null when

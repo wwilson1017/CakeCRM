@@ -368,7 +368,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 </table></div>
 <p>A bar under the tiles splits won from lost. With nothing closed yet it reads "No closed deals yet."</p>
 <h2>Weekly touches</h2>
-<p>Once an AI provider is connected, a <strong>Weekly touches</strong> card shows how many open deals each person touched in the week. A touch is an edit, a logged activity or a note. With no provider the card is not shown.</p>
+<p>Once an AI touch estimate has been computed, the <strong>Weekly touches</strong> card shows each person's deals whose latest customer contact — a note, or a logged call, email or meeting — falls in this window while open, up to the move to Won and never after. Edits, stage moves and creating a deal do not count. Each deal counts once; a won deal uses its last contact at or before its latest recorded win. With no provider the card is not shown.</p>
 <h2>Closed sales</h2>
 <p><strong>Closed sales · last 7 days</strong> lists Won deals by their Closed on date, newest first, with title, value and owner. Click a row to open the deal in place. The window matches the Pipeline's <strong>Closed on → Last 7 days</strong> filter, including the day exactly seven days ago. The card works without an AI provider.</p>
 <p>The header shows the sales count and a separate total for each currency. If the 1000-row cap may omit sales, the count shows <strong>1000+</strong> and totals say <strong>at least</strong>. With no matching wins, it reads "No sales closed in the last 7 days."</p>
@@ -441,9 +441,9 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <p>Press <strong>List</strong> to see your deals as a table.</p>
 <figure class="shot"><img data-shot="pipeline-list" width="1400" height="954" alt="List, filters and saved views screenshot"></figure>
 
-<p>The columns are Deal, Company, Stage, Value, % Closed, Score, Touches, Forecasted close, Closed on, Last activity and Owner. Click a row to open the deal. The Touches column needs an AI provider and is empty without one.</p>
+<p>The columns are Deal, Company, Stage, Value, % Closed, Score, Touches, Forecasted close, Closed on, Last contact and Owner. Click a row to open the deal. The Touches column needs an AI provider and is empty without one.</p>
 <h2>Sorting</h2>
-<p><strong>Sort</strong> orders the deals by Board order, Deal, Company, Value, % Closed, Lead score, Touches, Forecasted close date, Closed on, Last activity or Owner. The arrow beside it flips between ascending and descending.</p>
+<p><strong>Sort</strong> orders the deals by Board order, Deal, Company, Value, % Closed, Lead score, Touches, Forecasted close date, Closed on, Last contact or Owner. The arrow beside it flips between ascending and descending.</p>
 <h2>Filters</h2>
 <p>Press <strong>Filters</strong> to open the filter panel. The button shows how many filters are on, for example "Filters (2)", and <strong>Clear filters</strong> turns them all off along with the search.</p>
 <div class="wrap"><table>
@@ -487,11 +487,11 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <td>A from and to date</td>
 </tr>
 <tr>
-<td>Deal activity</td>
-<td>Active (≤ 7 days), Active (≤ 30 days), No activity in 30+ days, No activity logged</td>
+<td>Last contact</td>
+<td>Last 7 days, Last 30 days, Not in 30 days, Never</td>
 </tr>
 <tr>
-<td>Activity range</td>
+<td>Last contact range</td>
 <td>A from and to date</td>
 </tr>
 <tr>
@@ -500,6 +500,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 </tr>
 </tbody>
 </table></div>
+<p>Last contact is the deal's newest note or logged call, email or meeting. Edits and stage moves do not count.</p>
 <p>Filters, search and sort are remembered for this browser tab.</p>
 <h2>Saved views</h2>
 <p>A saved view stores the filters, search text, sort and Board or List choice under a name, so you can come back to it in one click. Saved views are shared: everyone on the team sees and can apply every view.</p>

@@ -54,14 +54,14 @@
   todo, which spawns its next occurrence server-side (#70) — that path re-sweeps, decided
   from the SERVER's copy of `repeat`, never the pre-write one.
   **Last contact** has no column behind it: it is derived per contact from the same two
-  signals `analytics_service.get_contact_staleness` reads (activity_log + un-archived,
+  signals `analytics_service.get_contact_staleness` reads (call/email/meeting/note activity_log rows + un-archived,
   non-housekeeping chatter) under the same alias, via an index-driven `LATERAL` — NOT
   `get_pipeline`'s grouped subquery, which aggregates the whole table once per query and
   can afford to only because it runs once for a whole-corpus read. That rule is now
   written into `get_pipeline` itself: #59 gave it a LATERAL twin
-  (`_PIPELINE_LAST_ACTIVITY_LATERAL`) used by the keyset page, while the unbounded board
+  (`_PIPELINE_LAST_CONTACT_LATERAL`) used by the keyset page, while the unbounded board
   and the tool's window keep the grouped form. Edit one twin, edit the other — an
-  integration test pins that they return the same `last_activity_at`. `NotesThread` gained an
+  integration test pins that they return the same `last_contact_at`. `NotesThread` gained an
   optional `onChanged` so a note added on the detail page reaches the list's column.
   Both surfaces now exclude `provenance_service.confirm`'s housekeeping notes via
   the shared housekeeping predicate (public since #77; since #239 it is
