@@ -14,9 +14,9 @@ over a duplicate.
 **Delivery** is ``notifications.delivery.deliver_notification`` per person — the bell,
 web push and Telegram when that seat linked it. Never email (AGENTS.md hard line).
 
-**Access**: ``owner_id`` is not access control (AGENTS.md) — any member may read, edit
-or void any reminder, as with todos. Only an UPCOMING row can change; fired and voided
-rows are history, and nothing is ever deleted.
+**Access**: ``owner_id`` is not access control (AGENTS.md) — any member may read, edit,
+pause, resume or void any reminder, as with todos. Only an upcoming or paused row can
+change; fired and voided rows are history, and nothing is ever deleted.
 """
 
 from __future__ import annotations
@@ -41,7 +41,8 @@ MAX_VOID_REASON_CHARS = 500
 MAX_PEOPLE = 50
 FIRE_BATCH = 50  # simplification: a larger backlog drains over the following ticks
 LINK = "/crm/reminders"
-STATUSES = ("upcoming", "fired", "voided")
+STATUSES = ("upcoming", "paused", "fired", "voided")
+_OPEN = ("upcoming", "paused")
 
 # TIME is projected as text: core.postgres only ISO-formats date/datetime, and a raw
 # datetime.time would break json.dumps in the tool layer.
@@ -166,11 +167,11 @@ def list_reminders(*, mine_user_id: int | None = None, status: str | None = None
     if sort == "id":
         return pg_fetchall(sql + " ORDER BY id ASC LIMIT %s", params)
     return pg_fetchall(
-        sql + " ORDER BY (status <> 'upcoming') ASC, due_at ASC, id ASC LIMIT %s", params)
+        sql + " ORDER BY (status NOT IN ('upcoming','paused')) ASC, due_at ASC, id ASC LIMIT %s", params)
 
 
 def update_reminder(reminder_id: int, fields: dict, *, now: datetime | None = None) -> dict:
-    """Change an upcoming reminder. The schedule is re-validated only when the patch
+    """Change an upcoming or paused reminder. The schedule is re-validated only when the patch
     touches it, so a note or people edit on a row the tick has not reached yet works."""
     unknown = set(fields) - _EDITABLE
     if unknown:
@@ -183,8 +184,8 @@ def update_reminder(reminder_id: int, fields: dict, *, now: datetime | None = No
         if raw is None:
             raise NotFoundError(f"Reminder {reminder_id} not found")
         row = row_to_dict(cur, raw)
-        if row["status"] != "upcoming":
-            raise ValidationError("Only an upcoming reminder can be changed")
+        if row["status"] not in _OPEN:
+            raise ValidationError("Only an upcoming or paused reminder can be changed")
         sets, params = [], []
         if "note" in fields:
             sets.append("note = %s")
@@ -221,7 +222,7 @@ def update_reminder(reminder_id: int, fields: dict, *, now: datetime | None = No
 
 
 def void_reminder(reminder_id: int, reason) -> dict:
-    """Void an upcoming reminder with a reason. Voiding a repeating one ends the series:
+    """Void an upcoming or paused reminder with a reason. Voiding a repeating one ends the series:
     its successor only exists once it fires."""
     reason = str(reason or "").strip()
     if not reason:
@@ -231,14 +232,57 @@ def void_reminder(reminder_id: int, reason) -> dict:
     row = pg_fetchone(
         f"""UPDATE reminders SET status = 'voided', void_reason = %s, voided_at = now(),
                                  updated_at = now()
-            WHERE id = %s AND status = 'upcoming' RETURNING {_COLS}""",
+            WHERE id = %s AND status IN ('upcoming','paused') RETURNING {_COLS}""",
         (reason, reminder_id),
     )
     if row is None:
         if get_reminder(reminder_id) is None:
             raise NotFoundError(f"Reminder {reminder_id} not found")
-        raise ValidationError("Only an upcoming reminder can be voided")
+        raise ValidationError("Only an upcoming or paused reminder can be voided")
     return row
+
+
+def pause_reminder(reminder_id: int) -> dict:
+    """Pause the live row; the tick cannot fire it or spawn a successor."""
+    row = pg_fetchone(
+        f"UPDATE reminders SET status = 'paused', updated_at = now() "
+        f"WHERE id = %s AND status = 'upcoming' RETURNING {_COLS}",
+        (reminder_id,),
+    )
+    if row is None:
+        if get_reminder(reminder_id) is None:
+            raise NotFoundError(f"Reminder {reminder_id} not found")
+        raise ValidationError("Only an upcoming reminder can be paused")
+    return row
+
+
+def resume_reminder(reminder_id: int, *, now: datetime | None = None) -> dict:
+    """Resume a paused row, skipping missed repeats but keeping a one-time due instant."""
+    now = _now(now)
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT {_COLS} FROM reminders WHERE id = %s FOR UPDATE", (reminder_id,))
+        raw = cur.fetchone()
+        if raw is None:
+            raise NotFoundError(f"Reminder {reminder_id} not found")
+        row = row_to_dict(cur, raw)
+        if row["status"] != "paused":
+            raise ValidationError("Only a paused reminder can be resumed")
+        sets, params = ["status = 'upcoming'", "updated_at = now()"], []
+        if row["repeat"] and datetime.fromisoformat(row["due_at"]) <= now:
+            nd, nat = recurrence.next_due(
+                row["repeat"], date.fromisoformat(row["anchor_date"]),
+                recurrence.parse_time(row["due_time"]), after=now, zone=tz())
+            sets += ["due_date = %s", "due_at = %s"]
+            params += [nd, nat]
+        try:
+            cur.execute(
+                f"UPDATE reminders SET {', '.join(sets)} WHERE id = %s RETURNING {_COLS}",
+                (*params, reminder_id),
+            )
+        except psycopg2.errors.UniqueViolation:
+            raise ValidationError("This repeating reminder already has one on that date") from None
+        return row_to_dict(cur, cur.fetchone())
 
 
 def remind_again(reminder_id: int, *, due_date, due_time=None, owner_id: int | None,

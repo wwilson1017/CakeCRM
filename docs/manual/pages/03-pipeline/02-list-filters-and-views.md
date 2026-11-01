@@ -12,11 +12,11 @@ Press **List** to see your deals as a table.
 
 {{shot:pipeline-list}}
 
-The columns are Deal, Company, Stage, Value, % Closed, Score, Touches, Forecasted close, Closed on, Last activity and Owner. Click a row to open the deal. The Touches column needs an AI provider and is empty without one.
+The columns are Deal, Company, Stage, Value, % Closed, Score, Touches, Forecasted close, Closed on, Last contact and Owner. Click a row to open the deal. The Touches column needs an AI provider and is empty without one.
 
 ## Sorting
 
-**Sort** orders the deals by Board order, Deal, Company, Value, % Closed, Lead score, Touches, Forecasted close date, Closed on, Last activity or Owner. The arrow beside it flips between ascending and descending.
+**Sort** orders the deals by Board order, Deal, Company, Value, % Closed, Lead score, Touches, Forecasted close date, Closed on, Last contact or Owner. The arrow beside it flips between ascending and descending.
 
 ## Filters
 
@@ -32,9 +32,11 @@ Press **Filters** to open the filter panel. The button shows how many filters ar
 | Closed on | Last 7 days, This month, Last month, Won, no closed-on date |
 | Created | Last 7 days, Last 30 days, This month, This quarter, Last quarter |
 | Created range | A from and to date |
-| Deal activity | Active (≤ 7 days), Active (≤ 30 days), No activity in 30+ days, No activity logged |
-| Activity range | A from and to date |
+| Last contact | Last 7 days, Last 30 days, Not in 30 days, Never |
+| Last contact range | A from and to date |
 | Archived | Include archived, Archived only |
+
+Last contact is the deal's newest note or logged call, email or meeting. Edits and stage moves do not count.
 
 Filters, search and sort are remembered for this browser tab.
 

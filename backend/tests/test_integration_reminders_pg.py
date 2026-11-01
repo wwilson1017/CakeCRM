@@ -327,3 +327,53 @@ def test_a_time_only_edit_keeps_the_series_anchor(sent):
     assert out["anchor_date"] == "2026-01-31"
     service.fire_due(now=_utc(2026, 2, 28, 18))
     assert _rows()[-1]["due_date"] == "2026-03-31"
+
+
+def test_paused_repeat_skips_ticks_and_resumes_at_the_next_future_time(sent):
+    from reminders import service
+
+    a = _user('Ada')
+    r = service.create_reminder(note='Daily review', due_date='2026-10-09', repeat='daily',
+                                owner_id=a, created_by=a, now=_utc(2026, 10, 1))
+    assert service.pause_reminder(r['id'])['status'] == 'paused'  # migration CHECK accepts it
+    now = _utc(2026, 10, 14, 16)
+    assert service.fire_due(now=now) == {'fired': 0, 'spawned': 0, 'attempted': 0}
+    assert len(_rows()) == 1 and sent == []
+    resumed = service.resume_reminder(r['id'], now=now)
+    assert resumed['status'] == 'upcoming' and resumed['due_date'] == '2026-10-15'
+    assert resumed['anchor_date'] == r['anchor_date'] and resumed['series_id'] == r['series_id']
+    assert service.fire_due(now=now)['fired'] == 0
+    assert service.fire_due(now=datetime.fromisoformat(resumed['due_at'])) == {
+        'fired': 1, 'spawned': 1, 'attempted': 1}
+    assert len(sent) == 1 and _rows()[-1]['due_date'] == '2026-10-16'
+
+
+def test_overdue_paused_one_time_reminder_resumes_and_fires_once(sent):
+    from reminders import service
+
+    a = _user('Ada')
+    r = service.create_reminder(note='Call back', due_date='2026-10-09', owner_id=a,
+                                created_by=a, now=_utc(2026, 10, 1))
+    service.pause_reminder(r['id'])
+    now = _utc(2026, 10, 14, 16)
+    resumed = service.resume_reminder(r['id'], now=now)
+    assert resumed['due_at'] == r['due_at'] and resumed['due_date'] == r['due_date']
+    assert service.fire_due(now=now) == {'fired': 1, 'spawned': 0, 'attempted': 1}
+    assert service.fire_due(now=now)['fired'] == 0
+    assert len(sent) == 1 and len(_rows()) == 1
+
+
+def test_editing_a_paused_reminder_keeps_it_paused_and_void_ends_it(sent):
+    from reminders import service
+
+    a = _user('Ada')
+    r = service.create_reminder(note='Review', due_date='2026-10-20', repeat='weekly',
+                                owner_id=a, created_by=a, now=_utc(2026, 10, 1))
+    service.pause_reminder(r['id'])
+    edited = service.update_reminder(r['id'], {'note': 'New review', 'due_date': '2026-10-21'},
+                                     now=_utc(2026, 10, 1))
+    assert edited['status'] == 'paused' and edited['note'] == 'New review'
+    assert edited['due_date'] == '2026-10-21'
+    assert service.void_reminder(r['id'], 'Finished')['status'] == 'voided'
+    assert service.fire_due(now=_utc(2026, 10, 30))['fired'] == 0
+    assert len(_rows()) == 1 and sent == []

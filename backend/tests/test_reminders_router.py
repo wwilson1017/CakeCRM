@@ -28,7 +28,8 @@ def calls(monkeypatch):
             return {"id": 1}
         return _f
 
-    for name in ("create_reminder", "update_reminder", "void_reminder", "remind_again"):
+    for name in ("create_reminder", "update_reminder", "void_reminder", "remind_again",
+                 "pause_reminder", "resume_reminder"):
         monkeypatch.setattr(reminders_router.service, name, fake(name))
     monkeypatch.setattr(reminders_router.service, "list_reminders",
                         lambda **kw: seen.append(("list", (), kw)) or [])
@@ -76,3 +77,20 @@ def test_validation_error_is_400_and_not_found_is_404(client, monkeypatch):
     assert client.post("/api/crm/reminders/7/void", json={"reason": "x"}).status_code == 404
     monkeypatch.setattr(reminders_router.service, "get_reminder", lambda rid: None)
     assert client.get("/api/crm/reminders/7").status_code == 404
+
+
+@pytest.mark.parametrize("action", ["pause", "resume"])
+def test_pause_resume_reach_the_service_as_a_member(client, calls, action):
+    res = client.post(f"/api/crm/reminders/7/{action}")
+    assert res.status_code == 200 and res.json() == {"id": 1}
+    assert calls == [(f"{action}_reminder", (7,), {})]
+
+
+@pytest.mark.parametrize("action", ["pause", "resume"])
+@pytest.mark.parametrize("error, status", [(ValidationError("Wrong status"), 400),
+                                          (NotFoundError("missing"), 404)])
+def test_pause_resume_map_errors(client, monkeypatch, action, error, status):
+    def fail(rid):
+        raise error
+    monkeypatch.setattr(reminders_router.service, f"{action}_reminder", fail)
+    assert client.post(f"/api/crm/reminders/7/{action}").status_code == status

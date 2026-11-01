@@ -40,14 +40,14 @@ const STATIC_SORT_FIELDS = [
   { value: 'closeDate', label: 'Forecasted close date', get: (d: CrmDeal) => d.expected_close_date || null },
   // #279: date-only 'YYYY-MM-DD', so string order is day order.
   { value: 'closedOn', label: 'Closed on', get: (d: CrmDeal) => d.closed_on || null },
-  // `last_activity_at` does NOT get that treatment, and this reason is engine-independent: a
+  // `last_contact_at` does NOT get that treatment, and this reason is engine-independent: a
   // TIMESTAMPTZ is not lexicographically ordered, because the zone may be spelled `Z` or
   // `+00:00` and `Z` sorts after `+` — so the same instant written two ways compares unequal and
   // two rows can order by how their suffix happens to be punctuated. Sorting on the parsed
   // instant removes the question. Invalid input yields null rather than NaN, so it sinks to the
   // bottom in both directions under the null convention above instead of poisoning every
   // comparison it takes part in.
-  { value: 'lastActivity', label: 'Last activity', get: (d: CrmDeal) => instant(d.last_activity_at) },
+  { value: 'lastActivity', label: 'Last contact', get: (d: CrmDeal) => instant(d.last_contact_at) },
 ] as const satisfies readonly SortFieldDef<CrmDeal>[];
 
 /**

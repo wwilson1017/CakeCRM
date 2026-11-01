@@ -39,6 +39,7 @@ import type { CollectionConfig, FacetDef } from '../shared/collection';
 import type { FacetOption } from '../shared/search';
 import type { ListColumn } from '../shared/listview';
 import type { CrmDeal } from '../core/types';
+import { LAST_CONTACT_OPTIONS } from './collectionConfig';
 import { DEAL_DETAIL_CONFIG } from './dealDetailConfig';
 import type { CrmUser } from './useUsers';
 import { UNASSIGNED_LABEL } from './useUsers';
@@ -82,13 +83,6 @@ export const CREATED_OPTIONS: FacetOption[] = [
   { value: 'thisMonth', label: 'This month' },
   { value: 'thisQuarter', label: 'This quarter' },
   { value: 'lastQuarter', label: 'Last quarter' },
-];
-
-export const ACTIVITY_OPTIONS: FacetOption[] = [
-  { value: 'le7', label: 'Active (≤ 7 days)' },
-  { value: 'le30', label: 'Active (≤ 30 days)' },
-  { value: 'stale30', label: 'No activity in 30+ days' },
-  { value: 'none', label: 'No activity logged' },
 ];
 
 /** Archived visibility (issue #83), carried over verbatim from the retired filter bar. Unlike
@@ -198,15 +192,15 @@ export function makePipelineCollectionConfig(deps: PipelineConfigDeps): Collecti
     {
       kind: 'single',
       key: 'lastActivity',
-      label: 'Deal activity',
-      options: ACTIVITY_OPTIONS,
+      label: 'Last contact',
+      options: LAST_CONTACT_OPTIONS,
       predicate: (d, v) =>
         dealMatchesAdvanced(d, { ...EMPTY_ADVANCED, lastActivity: v as ActivityPreset }, new Date()),
     },
     dateRangeFacet<CrmDeal>({
       key: 'lastActivityRange',
-      label: 'Activity range',
-      getDay: d => localDayOf(d.last_activity_at),
+      label: 'Last contact range',
+      getDay: d => localDayOf(d.last_contact_at),
     }),
     {
       kind: 'single',
@@ -232,6 +226,7 @@ export function makePipelineCollectionConfig(deps: PipelineConfigDeps): Collecti
     // facets and defaults any key a persisted envelope lacks, so ADDING a facet is not a shape
     // change. The number pins facet KEYS and their value shapes — and saved views are stamped
     // with it — so renaming or repurposing one of these keys is what must bump it.
+    // #333 relabelled lastActivity/lastActivityRange without renaming them.
     storage: { key: 'crm_pipeline', version: 1 },
     defaultView: 'kanban',
     getItemId: d => d.id,

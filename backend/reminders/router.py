@@ -1,7 +1,7 @@
 """Reminders — REST API (issue #283), mounted at ``/api/crm/reminders``.
 
 Every route needs a signed-in seat (``get_current_user``) and none is admin-only:
-ownership is not access control, so any member may read, edit or void any reminder.
+ownership is not access control, so any member may read, edit, pause, resume or void any reminder.
 The owner and author of a new reminder come from the token, never the body.
 
 Handlers are plain ``def`` so FastAPI runs the blocking psycopg2 work in its threadpool.
@@ -94,6 +94,16 @@ def update_reminder(reminder_id: int, body: ReminderUpdate,
 @router.post("/{reminder_id}/void")
 def void_reminder(reminder_id: int, body: ReminderVoid, user: dict = Depends(get_current_user)):
     return _call(service.void_reminder, reminder_id, body.reason)
+
+
+@router.post("/{reminder_id}/pause")
+def pause_reminder(reminder_id: int, user: dict = Depends(get_current_user)):
+    return _call(service.pause_reminder, reminder_id)
+
+
+@router.post("/{reminder_id}/resume")
+def resume_reminder(reminder_id: int, user: dict = Depends(get_current_user)):
+    return _call(service.resume_reminder, reminder_id)
 
 
 @router.post("/{reminder_id}/remind-again")

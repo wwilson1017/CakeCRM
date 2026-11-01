@@ -51,12 +51,12 @@ const DEALS: CrmDeal[] = [
   // apart from "these pills never render in this harness at all".
   deal({
     id: 1, title: 'Alpha contract', stage: 'lead',
-    lead_score: 80, ai_touch_count: 7, last_activity_at: '2026-08-19T12:00:00Z',
+    lead_score: 80, ai_touch_count: 7, last_contact_at: '2026-08-19T12:00:00Z',
   }),
   // Won, with the same score and count — so only the STAGE can explain the difference.
   deal({
     id: 2, title: 'Gamma expansion', stage: 'won',
-    lead_score: 80, ai_touch_count: 7, last_activity_at: '2026-08-19T12:00:00Z',
+    lead_score: 80, ai_touch_count: 7, last_contact_at: '2026-08-19T12:00:00Z',
   }),
   // Won, and nobody has logged anything against it.
   deal({ id: 3, title: 'Delta upsell', stage: 'won', lead_score: 80, ai_touch_count: 7 }),
@@ -64,8 +64,6 @@ const DEALS: CrmDeal[] = [
 
 let container: HTMLDivElement;
 let root: Root;
-
-const text = () => document.body.textContent ?? '';
 
 /**
  * The rendered card ROOT for one deal, found by its title.
@@ -155,13 +153,16 @@ describe('the Won card trades its staleness nudges for a last-contact line', () 
 
   it('carries the absolute timestamp in a tooltip, since the line itself is only an age', async () => {
     await mount();
-    const titled = card('Gamma expansion').querySelector('[title*="Most recent logged note"]');
+    const titled = card('Gamma expansion').querySelector('[title*="Last customer contact"]');
     expect(titled).not.toBeNull();
   });
 
   it('renders the line on every won card the board shows', async () => {
     await mount();
-    // Both won deals, neither open one.
-    expect(text().match(/Last contact|No contact logged/g)).toHaveLength(2);
+    // Both won deals, neither open one. Restrict this to cards: the sort control
+    // now also says "Last contact" (#333).
+    const cards = [...container.querySelectorAll('[role="button"][aria-label^="Open "]')];
+    const labels = cards.map(c => c.textContent ?? '').join(' ');
+    expect(labels.match(/Last contact|No contact logged/g)).toHaveLength(2);
   });
 });
