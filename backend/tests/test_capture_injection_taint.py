@@ -280,6 +280,14 @@ class Registry:
         self.descriptions = {}
         self.calls = []
 
+    conversation_id = None
+
+    def next_tool_batch(self):
+        pass
+
+    def deal_write_refusal(self, name, args):
+        return None
+
     def is_write(self, name):
         return name in self._writes
 

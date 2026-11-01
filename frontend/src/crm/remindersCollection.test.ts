@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { CrmReminder } from '../core/types';
 import type { CustomFacetDef, SingleFacetDef } from '../shared/collection';
 import {
-  REMINDER_SORT_FIELDS, changedFields, isMine, makeRemindersCollectionConfig, reminderWhen,
+  REMINDER_SORT_FIELDS, REMINDER_STATUS_OPTIONS, changedFields, isMine, makeRemindersCollectionConfig, reminderWhen,
 } from './remindersCollection';
 
 function reminder(over: Partial<CrmReminder> = {}): CrmReminder {
@@ -22,6 +22,10 @@ describe('reminders collection config', () => {
   it('keeps its storage identity and facet keys stable (saved views depend on them)', () => {
     expect(config.storage).toEqual({ key: 'crm_reminders', version: 1 });
     expect(facets.map(f => f.key)).toEqual(['scope', 'status', 'dueRange']);
+  });
+
+  it('offers paused alongside the existing status options', () => {
+    expect(REMINDER_STATUS_OPTIONS.map(o => o.value)).toEqual(['upcoming', 'paused', 'fired', 'voided']);
   });
 
   it('Mine means I set it or I am one of its people', () => {

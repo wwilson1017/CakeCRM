@@ -253,3 +253,101 @@ def test_list_scopes_mine_to_owner_or_person_and_orders_end_on_id(monkeypatch):
     assert "(owner_id = %s OR %s = ANY(people))" in sql1 and p1 == [4, 4, "upcoming", 10, 501]
     assert sql1.endswith("ORDER BY id ASC LIMIT %s")
     assert sql2.endswith("due_at ASC, id ASC LIMIT %s")
+
+
+def test_pause_is_guarded_on_upcoming(writes):
+    writes['returns'] = {'id': 7, 'status': 'paused'}
+    assert service.pause_reminder(7) == writes['returns']
+    assert "SET status = 'paused'" in writes['sql']
+    assert "WHERE id = %s AND status = 'upcoming'" in writes['sql']
+    assert writes['params'] == (7,)
+
+
+@pytest.mark.parametrize('status', ['paused', 'fired', 'voided', None])
+def test_pause_refuses_other_states_and_missing_rows(writes, monkeypatch, status):
+    writes['returns'] = None
+    monkeypatch.setattr(service, 'get_reminder', lambda rid: {'status': status} if status else None)
+    error = ValidationError if status else NotFoundError
+    with pytest.raises(error):
+        service.pause_reminder(7)
+
+
+@pytest.mark.parametrize('status', ['upcoming', 'fired', 'voided', None])
+def test_resume_requires_a_paused_row(tick, status):
+    conn, log = tick([_row(status=status)] if status else [])
+    with pytest.raises(ValidationError if status else NotFoundError):
+        service.resume_reminder(7, now=NOW)
+    assert len(conn.executed) == 1 and log[-1] == 'rollback'
+
+
+def test_resume_a_late_repeat_uses_the_anchor_and_next_future_occurrence(tick):
+    conn, log = tick([_row(status='paused', repeat='monthly')])
+    service.resume_reminder(7, now=NOW)
+    assert 'FOR UPDATE' in conn.executed[0][0]
+    sql, params = conn.executed[1]
+    assert "status = 'upcoming'" in sql and 'due_date = %s, due_at = %s' in sql
+    assert str(params[0]) == '2026-10-31'
+    assert params[1] == datetime(2026, 10, 31, 14, tzinfo=timezone.utc)
+    assert params[2] == 7 and 'anchor_date = ' not in sql and 'series_id = ' not in sql
+    assert log == ['begin', 'commit']
+
+
+@pytest.mark.parametrize('repeat, due_at', [
+    ('daily', '2026-10-15T14:00:00+00:00'),
+    (None, '2026-01-31T15:00:00+00:00'),
+])
+def test_resume_keeps_future_and_one_time_schedules(tick, repeat, due_at):
+    conn, _ = tick([_row(status='paused', repeat=repeat, due_at=due_at)])
+    service.resume_reminder(7, now=NOW)
+    sql, params = conn.executed[1]
+    assert "SET status = 'upcoming', updated_at = now() WHERE" in sql
+    assert params == (7,)
+
+
+def test_update_and_void_accept_paused_rows(tick, writes):
+    conn, _ = tick([_row(status='paused')])
+    assert service.update_reminder(7, {'note': 'New'}, now=NOW)['status'] == 'paused'
+    assert "UPDATE reminders SET note = %s, updated_at = now() WHERE" in conn.executed[1][0]
+    service.void_reminder(7, 'No longer needed')
+    assert "status IN ('upcoming','paused')" in writes['sql']
+
+
+def test_tick_excludes_a_due_paused_row(tick, monkeypatch):
+    conn, log = tick([])
+    paused = _row(status='paused')
+
+    def selected_rows():
+        # Model the status predicate on the actual tick query, including a due paused row.
+        sql = conn.executed[0][0]
+        assert "WHERE status = 'upcoming' AND due_at <= %s" in sql
+        return [r for r in [paused] if r[COLS.index('status')] == 'upcoming']
+
+    monkeypatch.setattr(conn, 'fetchall', selected_rows)
+    assert service.fire_due(now=NOW) == {'fired': 0, 'spawned': 0, 'attempted': 0}
+    assert len(conn.executed) == 1 and log == ['begin', 'commit']
+
+
+def test_list_accepts_paused_and_sorts_open_rows_first(monkeypatch):
+    seen = []
+    monkeypatch.setattr(service, 'pg_fetchall', lambda sql, params: seen.append((sql, params)) or [])
+    service.list_reminders(status='paused')
+    sql, params = seen[0]
+    assert params == ['paused', 200]
+    assert "ORDER BY (status NOT IN ('upcoming','paused')) ASC, due_at ASC, id ASC" in sql
+
+
+def test_resume_schedule_collision_is_a_validation_error_and_rolls_back(tick, monkeypatch):
+    import psycopg2
+
+    conn, log = tick([_row(status='paused', repeat='daily')])
+    execute = conn.execute
+
+    def collide(sql, params=()):
+        if sql.startswith('UPDATE reminders'):
+            raise psycopg2.errors.UniqueViolation('duplicate occurrence')
+        execute(sql, params)
+
+    monkeypatch.setattr(conn, 'execute', collide)
+    with pytest.raises(ValidationError, match='already has one on that date'):
+        service.resume_reminder(7, now=NOW)
+    assert log == ['begin', 'rollback']
