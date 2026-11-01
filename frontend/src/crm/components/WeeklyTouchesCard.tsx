@@ -34,7 +34,7 @@ import { ownerParamOf, touchDetailPath } from '../weeklyTouches';
  * TouchCountPill via crm/constants.ts, so one number never renders in two colours).
  *
  * Two distinct signals, per the server: window MEMBERSHIP is keyless and event-grained
- * (edits, activities, live notes), while the per-deal NUMBER is #16's AI estimate — and a
+ * (customer contacts: live notes and logged call/email/meeting/note activity), while the per-deal NUMBER is #16's AI estimate — and a
  * lifetime-ish one, which the body copy says out loud so a "12" isn't read as twelve
  * touches this week.
  *
@@ -155,10 +155,11 @@ export function WeeklyTouchesCard(
         <span style={mono(10, INK_DIM)}>{data.window.label}</span>
       </div>
       <p style={{ fontSize: 12, color: INK_MUTE, margin: '8px 0 14px', maxWidth: 560 }}>
-        Deals edited, noted, or logged against in this window while open — through the
-        move to Won, and never after. However many times, each deal counts once. Creating
-        a deal doesn't count. The number beside each deal is its AI-estimated<em> lifetime</em>
-        {' '}touch count, not this window's.
+        Deals whose latest customer contact — a note, or a logged call, email or meeting —
+        falls in this window while open, up to the move to Won and never after. Edits,
+        stage moves and creating a deal don't count. However many times, each deal counts once.
+        The number beside each deal is its AI-estimated<em> lifetime</em>{' '}
+        touch count, not this window's.
         {!single && ' Grouped by deal owner.'}
       </p>
 

@@ -233,7 +233,7 @@ export function matchesActivityPreset(
 }
 
 function matchesLastActivity(deal: CrmDeal, preset: ActivityPreset, now: Date): boolean {
-  return matchesActivityPreset(deal.last_activity_at, preset, now);
+  return matchesActivityPreset(deal.last_contact_at, preset, now);
 }
 
 /** True if `deal` passes every active advanced facet (AND across facets). */

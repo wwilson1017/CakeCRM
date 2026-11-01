@@ -53,10 +53,12 @@ serving a prefix.
   have gone quiet, overdue items, and things due today. Plain database work, no AI.
 - Four always-present counts: contacts, companies, pipeline value and overdue todos.
 - A snapshot: win rate, average days to close, average won deal size, open deals.
-- **Weekly touches** per person — how many of their open deals were touched inside a calendar
-  week — with a drill-down page per person. A touch is an edit, a logged activity or a live
-  note. The per-deal number beside it is the AI touch estimate, so that column is empty with
-  no provider configured while the card itself still works.
+- **Weekly touches** per person — deals whose latest customer contact — a note, or a
+  logged call, email or meeting — falls in this window while open, up to the move to Won
+  and never after. Edits, stage moves and creating a deal do not count; each deal counts
+  once. A won deal uses its last contact at or before its latest recorded win. The card
+  has a drill-down per person and is hidden until an AI touch estimate has been computed;
+  the per-deal estimate is separate from window membership.
 - The five largest open deals and the last ten activities.
 
 ## The two analytics tools

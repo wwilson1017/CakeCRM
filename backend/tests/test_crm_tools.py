@@ -680,7 +680,7 @@ def test_pipeline_and_search_tools_project_the_payload(monkeypatch):
         "id": 1, "title": "T", "stage": "lead", "value": 10, "currency": "USD",
         "probability": 20, "expected_close_date": "", "contact_id": None,
         "contact_name": None, "company_id": None, "company_name": None,
-        "last_activity_at": None, "archived_at": None,
+        "last_contact_at": None, "archived_at": None,
         # noise the model never needs:
         "notes": "x" * 5000, "created_at": "t", "updated_at": "t",
         "ai_touch_count": 3, "ai_touch_count_at": "t", "ai_touch_evidence_count": 2,
@@ -874,7 +874,7 @@ def test_lifecycle_tools_surface_a_refusal_instead_of_raising(monkeypatch):
 
 def test_summary_projection_keeps_the_fields_the_prompt_relies_on():
     """SALES_GUIDE calls lost_reason 'the most useful field when reviewing a quarter',
-    and a search row's only recency signal is updated_at (last_activity_at is computed
+    and a search row's only recency signal is updated_at (last_contact_at is computed
     by get_pipeline alone)."""
     assert "lost_reason" in tools._DEAL_SUMMARY_FIELDS
     assert "updated_at" in tools._DEAL_SUMMARY_FIELDS

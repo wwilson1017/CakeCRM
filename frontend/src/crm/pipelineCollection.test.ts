@@ -12,6 +12,7 @@ import type { CrmDeal } from '../core/types';
 import type { FacetDef, MultiFacetDef, SingleFacetDef, BooleanFacetDef, RangeFacetDef, CustomFacetDef, DateRangeValue } from '../shared/collection';
 import type { CrmUser } from './useUsers';
 import { ymd } from './pipelineFilters';
+import { LAST_CONTACT_OPTIONS } from './collectionConfig';
 import { DEAL_DETAIL_CONFIG } from './dealDetailConfig';
 import { archivedSelectionIncludesArchived, makePipelineCollectionConfig } from './pipelineCollection';
 import { isManualSort } from '../shared/search';
@@ -107,8 +108,8 @@ describe('preset facets delegate to the #21 predicate', () => {
 
   it("lastActivity 'none' matches a deal with no activity", () => {
     const activity = facet<SingleFacetDef<CrmDeal>>('lastActivity');
-    expect(activity.predicate(deal({ id: 1, last_activity_at: null }), 'none')).toBe(true);
-    expect(activity.predicate(deal({ id: 2, last_activity_at: new Date().toISOString() }), 'none')).toBe(false);
+    expect(activity.predicate(deal({ id: 1, last_contact_at: null }), 'none')).toBe(true);
+    expect(activity.predicate(deal({ id: 2, last_contact_at: new Date().toISOString() }), 'none')).toBe(false);
   });
 
   it('has no boolean facets — stage visibility rides the toggle channel, not a filter', () => {
@@ -210,6 +211,16 @@ describe('archived facet', () => {
   });
 });
 
+describe('Last contact facets (#333)', () => {
+  it('shares Contacts buckets while preserving persisted keys', () => {
+    const preset = facet<SingleFacetDef<CrmDeal>>('lastActivity');
+    expect(preset.label).toBe('Last contact');
+    expect(preset.options).toBe(LAST_CONTACT_OPTIONS);
+    expect(facet<CustomFacetDef<CrmDeal, DateRangeValue>>('lastActivityRange').label)
+      .toBe('Last contact range');
+  });
+});
+
 describe('date facets (#181)', () => {
   const range = (key: string) => facet<CustomFacetDef<CrmDeal, DateRangeValue>>(key);
   const q1 = { from: '2026-01-01', to: '2026-03-31' };
@@ -274,10 +285,10 @@ describe('date facets (#181)', () => {
     expect(f.predicate(deal({ id: 3, created_at: '2026-04-01T03:30:00Z' }), q1)).toBe(true);
   });
 
-  it('lastActivityRange reads last_activity_at and never matches a deal with none', () => {
+  it('lastActivityRange reads last_contact_at and never matches a deal with none', () => {
     const f = range('lastActivityRange');
-    expect(f.predicate(deal({ id: 1, last_activity_at: '2026-02-02T18:00:00Z' }), q1)).toBe(true);
-    expect(f.predicate(deal({ id: 2, last_activity_at: null }), q1)).toBe(false);
+    expect(f.predicate(deal({ id: 1, last_contact_at: '2026-02-02T18:00:00Z' }), q1)).toBe(true);
+    expect(f.predicate(deal({ id: 2, last_contact_at: null }), q1)).toBe(false);
     expect(f.predicate(deal({ id: 3 }), q1)).toBe(false);
   });
 

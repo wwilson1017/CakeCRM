@@ -734,7 +734,7 @@ export function PipelinePage() {
         pendingWrites.current--; // write settled (reconciled or reverted)
         // Once ALL writes have settled, fire any refresh that was deferred while a write was
         // racing it — so a sheet dismissal (Close OR Mark Won/Lost) still lands the fresh
-        // last_activity_at even though the stage PUT was in flight at dismissal time. Since #83
+        // last_contact_at even though the stage PUT was in flight at dismissal time. Since #83
         // an Archived-facet change can be the deferred load too; it re-fires silently but reads
         // the CURRENT facet from the ref, so it still widens the board.
         if (pendingWrites.current === 0) replayDeferredLoad();
@@ -778,7 +778,7 @@ export function PipelinePage() {
   // nothing was even sent. On rejection the panel stays open with the reason on screen, which is
   // also the honest answer for a server refusal (an archived deal cannot change stage).
   // The refresh on the way out is the close path's, so a note/activity logged in the panel before
-  // this dismissal lands its last_activity_at; it defers until the stage PUT settles.
+  // this dismissal lands its last_contact_at; it defers until the stage PUT settles.
   //
   // `lostReason` is present only for a Mark Lost taken through the reason dialog (#128); it rides
   // through to `writeDeal`, which is where the endpoint is chosen.
@@ -890,7 +890,7 @@ export function PipelinePage() {
       ? {
         ...prev,
         // MERGE, never replace. `POST /restore` returns `get_deal`'s projection, which is
-        // narrower than the board's: `get_pipeline` also derives `last_activity_at`, and a
+        // narrower than the board's: `get_pipeline` also derives `last_contact_at`, and a
         // wholesale swap would drop it and drop the restored deal into the "no activity logged"
         // bucket of the Deal-activity facet.
         deals: prev.deals.map(d => (d.id === restored.id ? { ...d, ...restored } : d)),
@@ -910,8 +910,8 @@ export function PipelinePage() {
     // Then refresh in the background. The patch above is what makes the board CORRECT — it
     // deliberately does not depend on this landing — but a restore closes the sheet the same way
     // `onClose` does, and that path refreshes so an in-sheet note reaches the board's derived
-    // `last_activity_at`. Without it, restoring a deal you just logged a note on leaves it in the
-    // "No activity logged" bucket. It also replaces the in-flight load the bump above discarded.
+    // `last_contact_at`. Without it, restoring a deal you just logged a note on leaves it in the
+    // "Never" bucket. It also replaces the in-flight load the bump above discarded.
     queueMicrotask(() => { void loadRef.current(true); });
   }, []);
 
@@ -1612,7 +1612,7 @@ export function PipelinePage() {
             // same link is still a distinguishable event rather than a no-op.
             setLinkOpenedDeal(null);
             // Silent-refresh on close so a note or activity logged in the panel updates the
-            // deal's last_activity_at (and touch count) without a spinner flash — this is what
+            // deal's last_contact_at (and touch count) without a spinner flash — this is what
             // closes the "filter stale deals → log a touch → it leaves the stale bucket" loop.
             load(true);
           } else {
@@ -2025,10 +2025,10 @@ function DealBoardCard({ deal, columnStage, onOpen, selectable = false, isSelect
   // card at a wider tier. One expression, so the two surfaces cannot drift on the label, the
   // tooltip or the no-activity wording.
   const lastContact = (
-    <span title={deal.last_activity_at
-      ? `Most recent logged note or activity: ${formatDate(deal.last_activity_at)}`
-      : 'No note or activity has been logged on this deal'}>
-      {lastContactLabel(deal.last_activity_at)}
+    <span title={deal.last_contact_at
+      ? `Last customer contact: ${formatDate(deal.last_contact_at)}`
+      : 'No customer contact logged on this deal'}>
+      {lastContactLabel(deal.last_contact_at)}
     </span>
   );
   // Colour from the column the card currently sits in (its bucket) rather than

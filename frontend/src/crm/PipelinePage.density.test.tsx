@@ -58,7 +58,7 @@ const DEALS: CrmDeal[] = [
   deal({
     id: 1, title: 'Alpha contract', stage: 'negotiation', owner_id: OWNER.id,
     expected_close_date: '2026-10-01', lead_score: 80, ai_touch_count: 7,
-    last_activity_at: '2026-08-19T12:00:00Z',
+    last_contact_at: '2026-08-19T12:00:00Z',
   }),
   // Same tier, no close date — the promotion has to render a state, not an empty slot.
   deal({ id: 2, title: 'Beta renewal', stage: 'negotiation', owner_id: null, lead_score: 40 }),
@@ -66,7 +66,7 @@ const DEALS: CrmDeal[] = [
   // that trade is keyed on the won COLUMN, and a lost card keeps its nudges like any other.
   deal({
     id: 3, title: 'Gamma expansion', stage: 'won', lead_score: 80, ai_touch_count: 7,
-    last_activity_at: '2026-08-19T12:00:00Z',
+    last_contact_at: '2026-08-19T12:00:00Z',
   }),
 ];
 

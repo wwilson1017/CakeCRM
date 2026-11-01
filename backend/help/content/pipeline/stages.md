@@ -107,7 +107,10 @@ currencies together.
 
 Facets include **stage**, **owner** (including an Unassigned bucket), **value** range,
 **forecasted close date** (overdue, next 7 days, this month, no date), **closed on** (last 7
-days, this month, last month, or Won deals with no date yet), **deal activity** (active within 7 or 30
-days, silent 30+ days, nothing logged) and **archived**. Filters are remembered per browser
+days, this month, last month, or Won deals with no date yet), **last contact** (last 7 days, last 30 days, not in 30 days, never),
+a last-contact date range, and **archived**. Filters are remembered per browser
 tab. Dragging still works while a filter is on, because a drop only assigns a stage and never
 a position.
+
+A deal's last contact is its newest note (automatic archive and restore notices aside) or logged call, email or
+meeting; edits and stage moves do not count, and the list column and sort read the same date.
