@@ -634,3 +634,29 @@
   `test_assistant_turns.py` (memory twin), `test_assistant_turn_routes.py`,
   `test_assistant_turns_pg.py` (integration), `useAssistantChat.reattach.test.tsx`,
   `WorkingIndicator.test.tsx`.
+
+## Deal writes need a find first (#332, port of cake_os #3307)
+
+`crm/deal_write_guard.py` refuses a write naming a deal unless a CRM read or
+`crm_create_deal` returned that deal earlier in this conversation. It reuses
+`crm.links.deal_records` (canonical URL plus title); write echoes and non-CRM reads
+never establish finds. The engine checks before offering an Approve card or spending
+the write budget, and `ToolRegistry.execute_tool_sync` checks before every handler,
+including approved writes. Both attended and background loops advance a batch counter:
+a search sent alongside a write cannot license that write. Malformed deal ids refuse;
+optional null links carry no target. Lost or archived targets add `closed_deal_warning`
+to successful results, including approved writes.
+
+`assistant_deal_finds` is a set keyed by `(conversation_id, deal_id)`, cascading on
+conversation deletion. It has no deals FK, is excluded from export as owner-only
+bookkeeping, and joins both CRM reset branches because deal ids restart. Registry state
+loads it once; load failures fail closed and save failures leave this run's finds usable.
+A fresh approval registry after a reset must find again. Conversationless runs remember
+finds only for that run. Finds survive compaction and are saved before the transcript;
+a failed transcript save can therefore leave a find whose result is no longer visible.
+Similar names can still lead to the wrong deal: the warning and write target echo help
+the user check intent. This is an assistant guard, not record access control.
+
+Tests: `test_deal_write_guard.py`, the pre-card case in `test_assistant_engine.py`, and
+`test_integration_deal_write_guard_pg.py` (persistence, isolation, cascade and reset).
+Future MCP dispatch (#323) must retain this guard and advance tool batches too.

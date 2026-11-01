@@ -120,6 +120,14 @@ class Registry:
         self.descriptions = descriptions or {}
         self.calls: list[tuple[str, dict]] = []
 
+    conversation_id = None
+
+    def next_tool_batch(self):
+        pass
+
+    def deal_write_refusal(self, name, args):
+        return None
+
     def is_write(self, name):
         return name in self._writes
 
@@ -1323,3 +1331,23 @@ def test_a_confirmation_from_a_user_row_without_an_id_refuses_too(monkeypatch):
     with pytest.raises(KeyError):
         engine.resolve_confirmation(Registry(writes={"t"}), "c1", "t1", "approve",
                                     user={"name": "no id here"})
+
+
+async def test_unfound_deal_write_refused_before_confirmation(store, monkeypatch):
+    from assistant.registry import ToolRegistry
+    from crm import deal_write_guard
+
+    monkeypatch.setattr(deal_write_guard, 'pg_fetchall', lambda *a: [])
+    reg = ToolRegistry()
+    calls = []
+    reg.executors['crm_archive_deal'] = lambda **kw: calls.append(kw)
+    prov = FakeProvider([
+        [_complete([_tc('crm_archive_deal', args={'deal_id': 7})], 'tool_use')],
+        [_complete()],
+    ])
+    events = await _run(prov, reg, [{'role': 'user', 'content': 'Archive the renewal'}],
+                        tool_mode='normal')
+    assert not any(event['type'] == 'confirm' for event in events)
+    assert any('crm_search_deals' in str(event) for event in events)
+    assert reg.conversation_id == 'conv1'
+    assert calls == []

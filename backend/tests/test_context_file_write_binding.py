@@ -44,6 +44,14 @@ class _Registry:
         self.executed = []
         self._result = result if result is not None else {"ok": True}
 
+    conversation_id = None
+
+    def next_tool_batch(self):
+        pass
+
+    def deal_write_refusal(self, name, args):
+        return None
+
     def is_write(self, tool):
         return tool == "write_context_file"
 
