@@ -5,11 +5,8 @@
  * rep copying a photo out of a customer's email and pasting it into a deal note;
  * everything here exists to make that paste land intact.
  *
- * The blueprint's client-side downscale half (`shouldDownscale`/`prepareAttachment`, which
- * re-encode large JPEG/HEIC through a canvas) is deliberately NOT ported: it is a storage
- * optimization rather than a correctness need, the 10 MB cap already bounds the cost, and
- * it would drag a canvas re-encode module into scope. Port it behind `shouldDownscale`
- * unchanged if attachment volume ever justifies it.
+ * Client-side downscaling lives in shared/shrinkImage.ts (#339), applied at upload
+ * time so paste/drop staging stays synchronous. The original must still fit 10 MB.
  */
 
 /** Mirrors attachment_service.MAX_ATTACHMENTS_PER_NOTE — the server enforces it too. */
