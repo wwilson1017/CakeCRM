@@ -42,6 +42,7 @@ const MemoryPage = lazy(() => import('./crm/MemoryPage').then((m) => ({ default:
 const ReportsPage = lazy(() =>
   import('./crm/ReportsPage').then((m) => ({ default: m.ReportsPage })),
 );
+const QuickUpdatePage = lazy(() => import('./crm/QuickUpdatePage').then((m) => ({ default: m.QuickUpdatePage })));
 const RemindersPage = lazy(() =>
   import('./crm/RemindersPage').then((m) => ({ default: m.RemindersPage })),
 );
@@ -140,6 +141,7 @@ export default function App() {
                   swallow an old bookmark onto the dashboard with no explanation. */}
               <Route path="tasks/*" element={<LegacyTodoRedirect />} />
               <Route path="reminders" element={<RemindersPage />} />
+              <Route path="quick-update" element={<QuickUpdatePage />} />
               <Route path="reports" element={<ReportsPage />} />
                 <Route path="memory" element={<MemoryPage />} />
               <Route path="settings" element={<SettingsPage />} />

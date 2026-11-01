@@ -691,3 +691,19 @@ first event is that error, once per entire turn (including confirmation narratio
 on the same model: 2 seconds by default, supplied delays clamped to 0–10 seconds.
 The provider stream closes before the cancellable wait; tests patch _sleep.
 Not ported: fallback-model switching, background runner changes, or Google 429 handling.
+
+## Quick update's Baker preview is not a tool (#337)
+
+`quick_update.preview` is a member
+REST read using `get_ai_provider(agent_model_tier="light")` and `stream_turn` with
+`QUICK_UPDATE_SYSTEM_PROMPT` (covered by `test_prompt_genericization`). It never enters
+tool dispatch or the registry and writes nothing. Confirm posts the ordinary human
+write at `POST /api/crm/quick-update/deals/{id}`; a dispatch-level deal-write guard does
+not cover it and is not meant to. Note and lost reason must be whitespace-normalized,
+case-insensitive spans of the sentence; a missing note yields `needs: ["note"]`.
+Conflicting instructions return MIXED_UP, no changes return NO_CHANGE, provider/parse
+failures return UNAVAILABLE. Plain JSON with optional fence stripping, no structured
+output SDK; 20-second timeout and touch-count-style strict stream completion plus a
+4,000-character cap. Won carries the explicit local day shown in the preview; already
+won/lost flags are dropped with a warning. No provider hides the box, keeping the screen
+fully keyless. A confirmed preview is a member edit with no assistant provenance.

@@ -1514,6 +1514,76 @@ def _classify_deal_update(
     return dict(filtered), (old_stage, new_stage) if new_stage != old_stage else None
 
 
+def _write_deal_update_cur(
+    cur, deal_id: int, filtered: dict, *, closed_on_day, today, actor_id: int | None,
+) -> tuple[bool, int | None, dict] | None:
+    """Apply the locked deal transition on the caller's transaction; no post-commit work."""
+    cur.execute(
+        "SELECT stage, archived_at, contact_id, closed_on FROM deals WHERE id = %s FOR UPDATE",
+        (deal_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    old_stage, archived_at, old_contact_id, old_closed_on = row[0], row[1], row[2], row[3]
+    filtered, stage_event = _classify_deal_update(
+        deal_id, old_stage, archived_at, filtered,
+        old_closed_on=old_closed_on, closed_on_day=closed_on_day, today=today,
+    )
+    # Rule 5. Postgres decides whether anything would actually change, not Python:
+    # the row is already locked, so `IS DISTINCT FROM` over the very columns being SET
+    # is an exact statement of "this write is a no-op", evaluated with each column's
+    # own type semantics (see _DEAL_COLUMN_TYPES for why the cast is mandatory) and
+    # handling NULL — an unlinked contact_id — the way `=` would not. Comparing a
+    # pre-image in Python instead would be subtly wrong on types the tool layer can
+    # reach: the assistant's arguments are not runtime schema-validated, and
+    # `1.0 == True` is True in Python where Postgres REFUSES to assign a boolean to a
+    # DOUBLE PRECISION column, which would turn an invalid write into a silent no-op.
+    # `updated_at` is set but deliberately NOT part of the test: the question is
+    # whether anything ELSE changed. Values bind twice — once to SET, once to compare.
+    #
+    # Checked HERE, not on the way in: _classify_deal_update can ADD columns
+    # (lost_reason, probability), so this is the first point the final written map
+    # exists. Named explicitly rather than left to a bare KeyError on the cast lookup.
+    undeclared = set(filtered) - _DEAL_COLUMN_TYPES.keys()
+    if undeclared:
+        raise ValueError(
+            f"_write_deal_update: no declared type for {sorted(undeclared)} — "
+            "add it to _DEAL_COLUMN_TYPES"
+        )
+    set_clause = ", ".join(f"{k} = %s" for k in filtered)
+    distinct_clause = " OR ".join(
+        f"{k} IS DISTINCT FROM %s::{_DEAL_COLUMN_TYPES[k]}" for k in filtered
+    )
+    values = list(filtered.values())
+    now = _now()
+    cur.execute(
+        f"UPDATE deals SET {set_clause}, updated_at = %s "
+        f"WHERE id = %s AND ({distinct_clause})",
+        values + [now, deal_id] + values,
+    )
+    # 0 means "the row exists (we hold its lock) and no column would change".
+    changed = cur.rowcount > 0
+    # A stage event exists only when _classify_deal_update saw new_stage != old_stage,
+    # so `stage` differs, so the row IS distinct and the UPDATE fired — gating on
+    # `changed` too makes "no write, no history" structural instead of inferred.
+    if stage_event and changed:
+        cur.execute(
+            "INSERT INTO deal_stage_events (deal_id, old_stage, new_stage) "
+            "VALUES (%s, %s, %s)",
+            (deal_id, stage_event[0], stage_event[1]),
+        )
+    # Rule 6: only when the stored day really changed (an edit to the same day writes
+    # nothing; an undated won deal leaving won never had a closed_on to change).
+    if (changed and "closed_on" in filtered
+            and _iso_day(filtered["closed_on"]) != _iso_day(old_closed_on)):
+        _insert_housekeeping_note_cur(
+            cur, "deal", deal_id, _closed_on_note(old_closed_on, filtered["closed_on"]),
+            actor_id, now,
+        )
+    return changed, old_contact_id, filtered
+
+
 def _write_deal_update(
     deal_id: int, filtered: dict, *, closed_on=None, actor_id: int | None = None,
 ) -> bool:
@@ -1579,69 +1649,12 @@ def _write_deal_update(
     closed_on_day = resolve_closed_on(closed_on, today) if explicit_closed_on else None
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute(
-            "SELECT stage, archived_at, contact_id, closed_on FROM deals WHERE id = %s FOR UPDATE",
-            (deal_id,),
+        result = _write_deal_update_cur(
+            cur, deal_id, filtered, closed_on_day=closed_on_day, today=today, actor_id=actor_id,
         )
-        row = cur.fetchone()
-        if row is None:
+        if result is None:
             return False
-        old_stage, archived_at, old_contact_id, old_closed_on = row[0], row[1], row[2], row[3]
-        filtered, stage_event = _classify_deal_update(
-            deal_id, old_stage, archived_at, filtered,
-            old_closed_on=old_closed_on, closed_on_day=closed_on_day, today=today,
-        )
-        # Rule 5. Postgres decides whether anything would actually change, not Python:
-        # the row is already locked, so `IS DISTINCT FROM` over the very columns being SET
-        # is an exact statement of "this write is a no-op", evaluated with each column's
-        # own type semantics (see _DEAL_COLUMN_TYPES for why the cast is mandatory) and
-        # handling NULL — an unlinked contact_id — the way `=` would not. Comparing a
-        # pre-image in Python instead would be subtly wrong on types the tool layer can
-        # reach: the assistant's arguments are not runtime schema-validated, and
-        # `1.0 == True` is True in Python where Postgres REFUSES to assign a boolean to a
-        # DOUBLE PRECISION column, which would turn an invalid write into a silent no-op.
-        # `updated_at` is set but deliberately NOT part of the test: the question is
-        # whether anything ELSE changed. Values bind twice — once to SET, once to compare.
-        #
-        # Checked HERE, not on the way in: _classify_deal_update can ADD columns
-        # (lost_reason, probability), so this is the first point the final written map
-        # exists. Named explicitly rather than left to a bare KeyError on the cast lookup.
-        undeclared = set(filtered) - _DEAL_COLUMN_TYPES.keys()
-        if undeclared:
-            raise ValueError(
-                f"_write_deal_update: no declared type for {sorted(undeclared)} — "
-                "add it to _DEAL_COLUMN_TYPES"
-            )
-        set_clause = ", ".join(f"{k} = %s" for k in filtered)
-        distinct_clause = " OR ".join(
-            f"{k} IS DISTINCT FROM %s::{_DEAL_COLUMN_TYPES[k]}" for k in filtered
-        )
-        values = list(filtered.values())
-        now = _now()
-        cur.execute(
-            f"UPDATE deals SET {set_clause}, updated_at = %s "
-            f"WHERE id = %s AND ({distinct_clause})",
-            values + [now, deal_id] + values,
-        )
-        # 0 means "the row exists (we hold its lock) and no column would change".
-        changed = cur.rowcount > 0
-        # A stage event exists only when _classify_deal_update saw new_stage != old_stage,
-        # so `stage` differs, so the row IS distinct and the UPDATE fired — gating on
-        # `changed` too makes "no write, no history" structural instead of inferred.
-        if stage_event and changed:
-            cur.execute(
-                "INSERT INTO deal_stage_events (deal_id, old_stage, new_stage) "
-                "VALUES (%s, %s, %s)",
-                (deal_id, stage_event[0], stage_event[1]),
-            )
-        # Rule 6: only when the stored day really changed (an edit to the same day writes
-        # nothing; an undated won deal leaving won never had a closed_on to change).
-        if (changed and "closed_on" in filtered
-                and _iso_day(filtered["closed_on"]) != _iso_day(old_closed_on)):
-            _insert_housekeeping_note_cur(
-                cur, "deal", deal_id, _closed_on_note(old_closed_on, filtered["closed_on"]),
-                actor_id, now,
-            )
+        _, old_contact_id, filtered = result
     # After commit, on purpose: a scoring read inside the transaction would see (and
     # lengthen) the FOR UPDATE window. Dedup/None-filtering is score_on_event's job.
     # Deliberately NOT gated on `changed`, unlike the stage event above — that is the one
@@ -1687,7 +1700,7 @@ def _embed_custom_fields(rows: list[dict]) -> list[dict]:
 def search_deals(
     search: str = "", stage: str | None = None, sort_by: str = "updated_at",
     sort_dir: str = "desc", custom_field_filters: dict | None = None, limit: int = 25,
-    include_archived: bool = False,
+    include_archived: bool = False, open_first: bool = False,
 ) -> list[dict]:
     """Keyword + facet search over live deals, with custom-field values embedded.
 
@@ -1749,6 +1762,9 @@ def search_deals(
         # advertises boolean filter values).
         params.extend([str(key), field_service.normalize_value(value)])
     params.append(limit)
+
+    if open_first:
+        sort_expr = f"({OPEN_PREDICATE_D}) DESC, {sort_expr}"
 
     rows = pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name, co.name AS company_name
