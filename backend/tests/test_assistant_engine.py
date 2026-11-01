@@ -1351,3 +1351,25 @@ async def test_unfound_deal_write_refused_before_confirmation(store, monkeypatch
     assert any('crm_search_deals' in str(event) for event in events)
     assert reg.conversation_id == 'conv1'
     assert calls == []
+
+
+async def test_deal_found_in_an_earlier_batch_can_be_written(store, monkeypatch):
+    # Pins the engine's per-batch bump: without it the find and the write share batch 0
+    # and the write in step 2 is refused as "same batch".
+    from assistant.registry import ToolRegistry
+    from crm import deal_write_guard
+    from crm.links import with_deal_url
+
+    monkeypatch.setattr(deal_write_guard, "pg_fetchall", lambda *a: [])
+    monkeypatch.setattr(deal_write_guard, "pg_execute", lambda *a: 1)
+    reg = ToolRegistry()
+    calls = []
+    reg.executors["crm_get_deal"] = lambda **kw: with_deal_url({"id": 7, "title": "Renewal"})
+    reg.executors["crm_update_deal"] = lambda **kw: calls.append(kw) or {"ok": True}
+    prov = FakeProvider([
+        [_complete([_tc("crm_get_deal", "t1", {"deal_id": 7})], "tool_use")],
+        [_complete([_tc("crm_update_deal", "t2", {"deal_id": 7, "value": 5})], "tool_use")],
+        [_complete()],
+    ])
+    await _run(prov, reg, [{"role": "user", "content": "Bump the renewal"}], tool_mode="power")
+    assert calls == [{"deal_id": 7, "value": 5}]
