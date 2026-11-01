@@ -16,6 +16,15 @@ export function ClosedSalesCard({ refreshKey = 0, wrapperStyle, onOpenDeal }: {
 }) {
   // Kept across a refetch: stale rows beat a "Loading" flash after every mutation.
   const [data, setData] = useState<{ deals: CrmDeal[]; truncated: boolean; failed: boolean } | null>(null);
+  // Bumped at local midnight so a dashboard left open re-reads the window for the new day.
+  const [day, setDay] = useState(0);
+
+  useEffect(() => {
+    const now = new Date();
+    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const timer = setTimeout(() => setDay(d => d + 1), midnight.getTime() - now.getTime());
+    return () => clearTimeout(timer);
+  }, [day]);
 
   useEffect(() => {
     let cancelled = false;
@@ -38,7 +47,7 @@ export function ClosedSalesCard({ refreshKey = 0, wrapperStyle, onOpenDeal }: {
         if (!cancelled) setData({ deals: [], truncated: false, failed: true });
       });
     return () => { cancelled = true; };
-  }, [refreshKey]);
+  }, [refreshKey, day]);
 
   const totals = new Map<string, number>();
   for (const deal of data?.deals ?? []) {

@@ -88,3 +88,13 @@ it('shows loading and failure, then refetches after a mutation', async () => {
   expect(container.textContent).toContain('1 sale');
   expect(container.textContent).toContain('invalid 100');
 });
+it('re-reads the window after local midnight', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+  vi.setSystemTime(new Date(2026, 10, 1, 23, 59));
+  api.mockResolvedValue({ deals: [deal(1, '2026-10-25')] });
+  await render();
+  expect(container.textContent).toContain('1 sale');
+  await act(async () => { vi.advanceTimersByTime(2 * 60 * 1000); });
+  expect(api).toHaveBeenCalledTimes(2);
+  expect(container.textContent).toContain('0 sales');
+});
