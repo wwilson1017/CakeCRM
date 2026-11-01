@@ -608,7 +608,7 @@ def test_scan_actually_examined_the_backend():
 # not a weakening.
 #
 # Other readers interpolate too but stay DECIDABLE, so they are deliberately absent:
-# `search_deals` ends on a literal `id` term after the interpolated column, and
+# `search_deals` and `list_deals` end on a literal `id` term after the interpolated column, and
 # `_stale_ids` is one implicitly-concatenated literal ending on `id` — the scan judges
 # both directly. They keep behavioral tests anyway, as belt and braces against the
 # fragment changing shape.
@@ -624,7 +624,6 @@ def test_scan_actually_examined_the_backend():
 # while a different one appeared — letting the newcomer inherit a registration that was
 # never about it.
 UNDECIDABLE_SITES = {
-    "crm/service.py::list_deals": 1,  # test_dynamic_order_by_filtered_deals
     "crm/service.py::list_contacts": 1,
     "crm/service.py::search_contacts": 1,
     "crm/service.py::list_companies": 1,

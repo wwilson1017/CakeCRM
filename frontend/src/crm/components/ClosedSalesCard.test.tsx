@@ -59,8 +59,8 @@ it('shows an empty state without AI configuration', async () => {
 it('keeps mixed currency totals separate', async () => {
   api.mockResolvedValue({ deals: [deal(1, '2026-11-01'), deal(2, '2026-11-01', 'EUR')] });
   await render();
-  expect(container.textContent).toContain('$100.00');
-  expect(container.textContent).toContain('€100.00');
+  expect(container.textContent).toContain('$100');
+  expect(container.textContent).toContain('€100');
   expect(container.textContent).not.toContain('200');
 });
 // Rendering the full 1000-row cap in jsdom needs more than the default five seconds.
@@ -68,7 +68,7 @@ it('marks a full in-window result as potentially truncated', async () => {
   api.mockResolvedValue({ deals: Array.from({ length: 1000 }, (_, id) => deal(id, '2026-10-25')) });
   await render();
   expect(container.textContent).toContain('1000+ sales');
-  expect(container.textContent).toContain('at least $100,000.00');
+  expect(container.textContent).toContain('at least $100,000');
 }, 20000);
 it('does not mark a full response when its oldest row is outside the window', async () => {
   api.mockResolvedValue({ deals: Array.from({ length: 1000 }, (_, id) => deal(id, id === 0 ? '2026-11-01' : '2026-10-24')) });

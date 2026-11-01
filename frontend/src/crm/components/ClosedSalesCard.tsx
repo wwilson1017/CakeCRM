@@ -5,16 +5,9 @@ import { INK, INK_DIM, LINE, CORAL_TEXT } from '../../shared/styles';
 import { cardStyle, sectionHeading } from '../styles';
 import { matchesClosedOnPreset } from '../pipelineFilters';
 import { OwnerName } from './OwnerName';
+import { money } from '../money';
 
 const LIMIT = 1000;
-
-function money(value: number, currency: string): string {
-  try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(value);
-  } catch {
-    return `${currency} ${value.toLocaleString()}`;
-  }
-}
 
 export function ClosedSalesCard({ refreshKey = 0, wrapperStyle, onOpenDeal }: {
   refreshKey?: number;
@@ -26,7 +19,7 @@ export function ClosedSalesCard({ refreshKey = 0, wrapperStyle, onOpenDeal }: {
 
   useEffect(() => {
     let cancelled = false;
-    api<{ deals: CrmDeal[] }>('/api/crm/deals?stage=won&sort_by=closed_on&limit=1000')
+    api<{ deals: CrmDeal[] }>(`/api/crm/deals?stage=won&sort_by=closed_on&limit=${LIMIT}`)
       .then(({ deals }) => {
         if (cancelled) return;
         const now = new Date();
