@@ -82,5 +82,5 @@
   The page and Baker use the same service functions; paused rows remain editable and voidable.
   Update already existed in #283. Pause silences other people's notifications and resume
   re-arms them, so both keep confirmation, like update; none is background-callable.
-  The help topic documents the flow. No reminders manual page exists yet, so this port does
-  not add a manual section or screenshots.
+  The help topic documents the flow, and so does the manual's first reminders page,
+  `docs/manual/pages/05-todos/12-reminders.md` (prose only, no screenshots yet).
