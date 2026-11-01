@@ -439,6 +439,7 @@ def test_a_note_on_a_deal_already_won_is_not_a_touch():
     won = _deal("Won last month", owner=ada, touched=False)
     _win(won, days_ago=20)
     _note(won)                                      # now, while sitting in Won
+    _activity(won, kind="note")                     # the deal sheet's Note, also after the win
     _deal("Still open, untouched", owner=ada, touched=False)
 
     rep = _reps(service.get_weekly_touches())["Ada"]

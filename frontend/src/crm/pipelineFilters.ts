@@ -45,9 +45,9 @@ export type ClosePreset = 'overdue' | 'next7' | 'thisMonth' | 'noDate';
  *  NOT NULL creation timestamp, so the set is recency windows plus the two quarter buckets the
  *  issue's use case names ("deals created last quarter"). Anything else is a custom range. */
 export type CreatedPreset = 'last7' | 'last30' | 'thisMonth' | 'thisQuarter' | 'lastQuarter';
-/** Relative last-activity buckets (single-select). Activity is DEAL-scoped
- *  (deal-level activity_log rows + un-archived deal chatter); contact-level
- *  activity is not counted — hence "no activity logged", not "never contacted". */
+/** Relative last-contact buckets (single-select), shared by the pipeline and Contacts.
+ *  The timestamp is backend `crm/last_contact.py`'s customer contact on that record;
+ *  `none` (shown as "Never") means nothing qualifying was ever logged. */
 export type ActivityPreset = 'le7' | 'le30' | 'stale30' | 'none';
 
 /** Archived-deal visibility (issue #83). `null` = live deals only, the default and what the

@@ -891,8 +891,8 @@ export function PipelinePage() {
         ...prev,
         // MERGE, never replace. `POST /restore` returns `get_deal`'s projection, which is
         // narrower than the board's: `get_pipeline` also derives `last_contact_at`, and a
-        // wholesale swap would drop it and drop the restored deal into the "no activity logged"
-        // bucket of the Deal-activity facet.
+        // wholesale swap would drop it and drop the restored deal into the "Never"
+        // bucket of the Last contact facet.
         deals: prev.deals.map(d => (d.id === restored.id ? { ...d, ...restored } : d)),
       }
       : prev));

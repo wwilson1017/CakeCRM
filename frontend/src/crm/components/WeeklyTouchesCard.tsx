@@ -14,14 +14,14 @@ import { ownerParamOf, touchDetailPath } from '../weeklyTouches';
 
 /**
  * Weekly Touches KPI (issue #76) — how many deals got touched in a window, counting a
- * deal while it is open and up to and including its move to Won (#179).
+ * deal while it is open and, once won, by its last contact at or before the win (#179, #333).
  *
  * Grouped per DEAL OWNER since #146. #76 shipped it per deal because CakeCRM was
  * single-user and there were no owner columns; #60 landed `deals.owner_id`, so the rows
  * are now the reps the blueprint always had, each expanding to their own top deals. Every
  * owner of an open deal gets a row — including the ones who touched nothing, which is the
- * point of a weekly accountability pull — and so does anyone who won a deal inside the
- * window, so a rep whose only deal closed this week is credited rather than erased. The
+ * point of a weekly accountability pull — and so does anyone whose won deal's last
+ * pre-win contact falls inside the window, so closing a worked deal keeps its credit. The
  * unowned deals are a bucket named "Unassigned" rather than an exclusion, which is what
  * makes the headline the sum of the rows beneath it.
  *
