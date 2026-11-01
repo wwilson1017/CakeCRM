@@ -47,11 +47,35 @@ const defaults: ShrinkDeps = {
   },
 };
 
+const ascii = (bytes: Uint8Array, at: number, text: string) =>
+  [...text].every((c, i) => bytes[at + i] === c.charCodeAt(0));
+
+/**
+ * Animated WebP (VP8X animation flag) and APNG (an acTL chunk) would flatten to their first
+ * frame through a canvas, so they pass through like GIFs. Both markers sit in the header.
+ */
+export async function isAnimated(file: File): Promise<boolean> {
+  const bytes = new Uint8Array(await file.slice(0, 64 * 1024).arrayBuffer());
+  if (file.type === 'image/webp') {
+    return ascii(bytes, 12, 'VP8X') && (bytes[20] & 0x02) !== 0;
+  }
+  if (file.type === 'image/png') {
+    // Chunks are length(4) type(4) data crc(4); acTL must precede the first IDAT.
+    for (let at = 8; at + 8 <= bytes.length;) {
+      if (ascii(bytes, at + 4, 'acTL')) return true;
+      if (ascii(bytes, at + 4, 'IDAT')) return false;
+      at += 12 + new DataView(bytes.buffer).getUint32(at);
+    }
+  }
+  return false;
+}
+
 /** Best-effort shrinking: canvas output drops EXIF; any passthrough retains original bytes. */
 export async function shrinkImage(file: File, deps: ShrinkDeps = defaults): Promise<File> {
   if (!file.type.startsWith('image/') || ['image/gif', 'image/svg+xml'].includes(file.type)) return file;
   let decoded: DecodedImage | undefined;
   try {
+    if (await isAnimated(file)) return file;
     decoded = await deps.decode(file);
     if (!(decoded.width > 0 && decoded.height > 0)) return file;
     let { width, height } = fitWithin(decoded.width, decoded.height, SHRINK_MAX_EDGE);

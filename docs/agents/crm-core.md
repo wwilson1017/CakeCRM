@@ -507,7 +507,7 @@
   upload time and branding logos before their 2 MB check: oriented bitmap decode, 1600 px
   long edge, quality/dimension ladder targeting 300 KB, WebP for PNG/WebP alpha and JPEG
   otherwise. Canvas output strips EXIF location; failures, GIF, SVG and non-images retain
-  original bytes. PNG/WebP never grow; JPEG/HEIC/HEIF re-encode even if larger to strip EXIF.
+  original bytes, as do animated WebP/APNG. PNG/WebP never grow; JPEG/HEIC/HEIF re-encode even if larger to strip EXIF.
   Chatter still refuses originals over 10 MB during synchronous staging. **Take photo** on
   `NoteComposer` uses the rear-camera capture input and timestamp filenames. Baker vision
   remains #345; its composer is unchanged.

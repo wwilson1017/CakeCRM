@@ -66,6 +66,25 @@ describe('shrinkImage', () => {
     expect(await shrinkImage(original, deps)).toBe(original);
     expect(deps.decode).not.toHaveBeenCalled();
   });
+  it('passes animated WebP and APNG through untouched', async () => {
+    const webp = new Uint8Array(30);
+    webp.set([...'RIFF'].map(c => c.charCodeAt(0)), 0);
+    webp.set([...'WEBPVP8X'].map(c => c.charCodeAt(0)), 8);
+    webp[20] = 0x02;
+    const png = new Uint8Array(8 + 12 + 8 + 12);
+    png.set([0, 0, 0, 0], 8); png.set([...'IHDR'].map(c => c.charCodeAt(0)), 12);
+    png.set([0, 0, 0, 8], 20); png.set([...'acTL'].map(c => c.charCodeAt(0)), 24);
+    for (const [bytes, type] of [[webp, 'image/webp'], [png, 'image/png']] as const) {
+      const deps = harness();
+      const original = new File([bytes], 'anim', { type });
+      expect(await shrinkImage(original, deps)).toBe(original);
+      expect(deps.decode).not.toHaveBeenCalled();
+    }
+    webp[20] = 0;
+    const deps = harness();
+    await shrinkImage(new File([webp], 'still', { type: 'image/webp' }), deps);
+    expect(deps.decode).toHaveBeenCalledOnce();
+  });
   it('passes through decoding failure', async () => {
     const original = file();
     const deps = harness();
