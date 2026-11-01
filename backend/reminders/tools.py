@@ -1,9 +1,10 @@
 """Reminders — Baker's tools (issue #283).
 
-Four tools, always advertised (reminders are not a todo-mode feature) and keyless on the
+Six tools, always advertised (reminders are not a todo-mode feature) and keyless on the
 service side:
 
-  * ``reminder_create`` / ``reminder_update`` / ``reminder_void`` — writes, NONE routine:
+  * ``reminder_create`` / ``reminder_update`` / ``reminder_void`` /
+    ``reminder_pause`` / ``reminder_resume`` — writes, NONE routine:
     a reminder notifies someone later (rule 2 in ``assistant/confirm_tier.py``), so each
     keeps its Approve card. ``tests/test_confirm_tier.py`` pins that.
   * ``reminder_list`` — a read, so it is inside the background allowlist; its payload
@@ -114,6 +115,16 @@ def _reminder_void(reminder_id: int, reason: str = "") -> dict:
     return _with_target({"reminder": row}, "reminder", row["id"], record=row)
 
 
+def _reminder_pause(reminder_id: int) -> dict:
+    row = service.pause_reminder(reminder_id)
+    return _with_target({"reminder": row}, "reminder", row["id"], record=row)
+
+
+def _reminder_resume(reminder_id: int) -> dict:
+    row = service.resume_reminder(reminder_id)
+    return _with_target({"reminder": row}, "reminder", row["id"], record=row)
+
+
 def _reminder_list(limit: int = 50, mine_user_id=None, status=None, due_from=None,
                    due_to=None) -> dict:
     rows = service.list_reminders(limit=min(int(limit or 50), 200), mine_user_id=mine_user_id,
@@ -126,6 +137,8 @@ REMINDER_TOOL_EXECUTORS: dict[str, Callable[..., dict]] = {
     "reminder_update": _wrap(_reminder_update),
     "reminder_void": _wrap(_reminder_void),
     "reminder_list": _wrap(_reminder_list),
+    "reminder_pause": _wrap(_reminder_pause),
+    "reminder_resume": _wrap(_reminder_resume),
 }
 
 REMINDER_TOOL_DEFS: list[dict] = [
@@ -159,7 +172,7 @@ REMINDER_TOOL_DEFS: list[dict] = [
         "description": (
             "List reminders. scope 'mine' (default) = ones you set or receive; 'all' = "
             "the whole team's. Each has its note, people (user ids), due date/time, "
-            "repeat and status (upcoming, fired, voided). " + _UNTRUSTED_NOTE
+            "repeat and status (upcoming, paused, fired, voided). " + _UNTRUSTED_NOTE
         ),
         "input_schema": {
             "type": "object",
@@ -177,8 +190,8 @@ REMINDER_TOOL_DEFS: list[dict] = [
         "writes": True,
         "kind": "integration",
         "description": (
-            "Change an upcoming reminder's note, date, time, people or repeat. Only an "
-            "upcoming reminder can be changed; fired and voided ones are history."
+            "Change an upcoming or paused reminder's note, date, time, people or repeat. Only an "
+            "upcoming or paused reminder can be changed; fired and voided ones are history."
         ),
         "input_schema": {
             "type": "object",
@@ -198,7 +211,7 @@ REMINDER_TOOL_DEFS: list[dict] = [
         "writes": True,
         "kind": "integration",
         "description": (
-            "Void an upcoming reminder so it is never sent, with a reason. Nothing is "
+            "Void an upcoming or paused reminder so it is never sent, with a reason. Nothing is "
             "deleted; the reminder stays as history. Voiding a repeating one ends it."
         ),
         "input_schema": {
@@ -208,6 +221,35 @@ REMINDER_TOOL_DEFS: list[dict] = [
                 "reason": {"type": "string", "description": "Why it is no longer needed."},
             },
             "required": ["reminder_id", "reason"],
+        },
+    },
+    {
+        "name": "reminder_pause",
+        "writes": True,
+        "kind": "integration",
+        "description": (
+            "Pause an upcoming reminder so it is not sent until resumed; a paused "
+            "repeating reminder skips its occurrences. Nothing is deleted."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"reminder_id": {"type": "integer"}},
+            "required": ["reminder_id"],
+        },
+    },
+    {
+        "name": "reminder_resume",
+        "writes": True,
+        "kind": "integration",
+        "description": (
+            "Resume a paused reminder. A repeating one picks up at its next time, never "
+            "a missed one; a one-time one whose time passed while paused is eligible "
+            "to be sent on the next tick."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"reminder_id": {"type": "integer"}},
+            "required": ["reminder_id"],
         },
     },
 ]
