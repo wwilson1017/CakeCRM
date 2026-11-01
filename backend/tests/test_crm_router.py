@@ -928,10 +928,10 @@ def test_board_pagination_refused_with_stage_or_contact_filter(client, monkeypat
     monkeypatch.setattr(service, "get_pipeline", explode)
     monkeypatch.setattr(service, "list_deals", explode)
 
-    assert client.get("/api/crm/deals?stage=lead&limit=5").status_code == 400
+    assert client.get("/api/crm/deals?stage=lead&limit=5&after_id=2").status_code == 400
     assert client.get("/api/crm/deals?contact_id=4&limit=5&after_id=2").status_code == 400
     # contact_id=0 is falsy but IS a filter — it must refuse like any other filter.
-    assert client.get("/api/crm/deals?contact_id=0&limit=5").status_code == 400
+    assert client.get("/api/crm/deals?contact_id=0&limit=5&after_id=2").status_code == 400
 
 
 def test_after_id_without_limit_is_400(client):
@@ -1290,3 +1290,15 @@ def test_bulk_move_forwards_closed_on_and_the_actor(client, monkeypatch):
     client.post("/api/crm/deals/bulk-move",
                 json={"deal_ids": [1], "stage": "won", "closed_on": "2026-10-01"})
     assert seen == {"closed_on": "2026-10-01", "actor_id": 1}
+
+
+def test_filtered_deals_sort_and_cap(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(service, "list_deals", lambda **kw: seen.update(kw) or [])
+    assert client.get("/api/crm/deals?stage=won&sort_by=closed_on&limit=1000").status_code == 200
+    assert seen == {"stage": "won", "contact_id": None, "limit": 1000, "sort_by": "closed_on"}
+
+
+def test_deals_sort_refusals(client):
+    assert client.get("/api/crm/deals?stage=won&sort_by=bogus").status_code == 400
+    assert client.get("/api/crm/deals?sort_by=closed_on").status_code == 400

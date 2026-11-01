@@ -8,6 +8,7 @@ import { CollectionDetail, denyEscapeBackdrop } from '../shared/collection';
 import { DEAL_DETAIL_CONFIG } from './dealDetailConfig';
 import { StatCard } from './components/StatCard';
 import { TodayPanel } from './components/TodayPanel';
+import { ClosedSalesCard } from './components/ClosedSalesCard';
 import { WeeklyTouchesCard } from './components/WeeklyTouchesCard';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
 import { stageWriteRequest } from './dealStageWrite';
@@ -53,7 +54,7 @@ export function CrmDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [selectedDealId, setSelectedDealId] = useState<number | null>(null);
   // Bumped by reload() to refetch the self-fetching cards alongside the rest.
-  // Two consumers now: WeeklyTouchesCard (#76) and TodayPanel (#130).
+  // Refresh the independently fetched dashboard cards after a mutation.
   const [cardRefreshKey, setCardRefreshKey] = useState(0);
 
   const navigate = useNavigate();
@@ -289,6 +290,12 @@ export function CrmDashboardPage() {
         wrapperStyle={{ padding: `6px ${px} 22px`, position: 'relative', zIndex: 2 }}
         // issue #56: the sheet carries the per-event evidence behind each touch count,
         // which is the drill-down #76 deferred to this issue.
+        onOpenDeal={openDeal}
+      />
+
+      <ClosedSalesCard
+        refreshKey={cardRefreshKey}
+        wrapperStyle={{ padding: `6px ${px} 22px`, position: 'relative', zIndex: 2 }}
         onOpenDeal={openDeal}
       />
 

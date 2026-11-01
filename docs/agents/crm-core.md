@@ -296,6 +296,9 @@
   is the optimistic mirror of the rule; the edit form edits the date only while Won and
   refuses a blank inline (`crm/closedOn.ts`). The List view gains a Closed on column and the
   facet panel a `closedOn` facet (no storage bump: adding a facet is not a shape change).
+  The dashboard Closed Sales card (#335) reuses `matchesClosedOnPreset` for Last 7 days,
+  fetching `GET /api/crm/deals?stage=won&sort_by=closed_on&limit=1000`; totals stay per
+  currency and a full in-window response marks the count with `+` and totals as "at least".
   Divergences: no admin backfill route or `date_closed` source (no Odoo here); only
   `crm_mark_deal_won` advertises `closed_on` (the stage-move and bulk tools refuse Won, #99);
   no agent "on behalf of" message (the seat is bound instead).
