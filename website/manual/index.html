@@ -369,6 +369,9 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <p>A bar under the tiles splits won from lost. With nothing closed yet it reads "No closed deals yet."</p>
 <h2>Weekly touches</h2>
 <p>Once an AI touch estimate has been computed, the <strong>Weekly touches</strong> card shows each person's deals whose latest customer contact — a note, or a logged call, email or meeting — falls in this window while open, up to the move to Won and never after. Edits, stage moves and creating a deal do not count. Each deal counts once; a won deal uses its last contact at or before its latest recorded win. With no provider the card is not shown.</p>
+<h2>Closed sales</h2>
+<p><strong>Closed sales · last 7 days</strong> lists Won deals by their Closed on date, newest first, with title, value and owner. Click a row to open the deal in place. The window matches the Pipeline's <strong>Closed on → Last 7 days</strong> filter, including the day exactly seven days ago. The card works without an AI provider.</p>
+<p>The header shows the sales count and a separate total for each currency. If the 1000-row cap may omit sales, the count shows <strong>1000+</strong> and totals say <strong>at least</strong>. With no matching wins, it reads "No sales closed in the last 7 days."</p>
 <h2>Stages</h2>
 <p>One row per open stage, with its value and number of deals. Click a row to open the <a href="#/pipeline/board">Pipeline</a> board scrolled to that stage's column. Any filters you had on the board are cleared so the column is in view.</p>
 <h2>Further down</h2>
@@ -1196,11 +1199,13 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <h2>02 Add detail (optional)</h2>
 <ul>
 <li><strong>Project</strong> — pick one, or choose <strong>+ New project…</strong>. The card shows that project's purpose and outcome, so you can check it is the right home.</li>
-<li><strong>Add due date</strong> — only for a real deadline.</li>
-<li><strong>Bring back on…</strong> — hides the todo until that day, then shows it on Today.</li>
+<li><strong>Due date</strong> — only for a real deadline.</li>
+<li><strong>Bring back on</strong> — hides the todo until that day, then shows it on Today.</li>
 <li><strong>Notes</strong> — links, numbers, anything you will want when you do it.</li>
-<li><strong>Edit</strong> opens the full editor, once any note or date you just changed has saved. <strong>Drop</strong> removes the item: it moves to Done → Dropped, where you can reopen it. A todo is never deleted.</li>
+<li><strong>Tags</strong> — comma-separated, like <code>errand, quick</code>. Tags you already use show below the box; tap one to add it.</li>
+<li><strong>Edit</strong> opens the full editor, once any note, date or tags you just changed have saved. <strong>Drop</strong> removes the item: it moves to Done → Dropped, where you can reopen it. A todo is never deleted.</li>
 </ul>
+<p>Each field is labelled on the card, and each saves as you leave it. None of them takes the item out of the inbox.</p>
 <h2>03 Last step — set context</h2>
 <p>Choose a context from <strong>Set context…</strong>, or <strong>+ New context…</strong>. Choosing one files the item into the list you picked in step 01 and clears it out of the inbox. That is why it comes last.</p>
 <h2>Undo</h2>

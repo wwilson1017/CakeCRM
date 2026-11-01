@@ -35,6 +35,12 @@ A bar under the tiles splits won from lost. With nothing closed yet it reads "No
 
 Once an AI touch estimate has been computed, the **Weekly touches** card shows each person's deals whose latest customer contact — a note, or a logged call, email or meeting — falls in this window while open, up to the move to Won and never after. Edits, stage moves and creating a deal do not count. Each deal counts once; a won deal uses its last contact at or before its latest recorded win. With no provider the card is not shown.
 
+## Closed sales
+
+**Closed sales · last 7 days** lists Won deals by their Closed on date, newest first, with title, value and owner. Click a row to open the deal in place. The window matches the Pipeline's **Closed on → Last 7 days** filter, including the day exactly seven days ago. The card works without an AI provider.
+
+The header shows the sales count and a separate total for each currency. If the 1000-row cap may omit sales, the count shows **1000+** and totals say **at least**. With no matching wins, it reads "No sales closed in the last 7 days."
+
 ## Stages
 
 One row per open stage, with its value and number of deals. Click a row to open the [Pipeline](../03-pipeline/01-board.md) board scrolled to that stage's column. Any filters you had on the board are cleared so the column is in view.

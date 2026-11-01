@@ -1391,3 +1391,20 @@ def test_last_touch_excludes_housekeeping_notes_so_archiving_moves_no_clock():
     assert "d.updated_at" not in service.TOUCH_AT_SQL
     assert "%" not in service.TOUCH_AT_SQL
     assert "%" not in service.LAST_TOUCH_SQL
+
+
+@pytest.mark.parametrize("sort_by, order", [
+    ("updated_at", "d.updated_at DESC, d.id DESC"),
+    ("closed_on", "d.closed_on DESC NULLS LAST, d.id DESC"),
+])
+def test_list_deals_sort(rec, sort_by, order):
+    kwargs = {} if sort_by == "updated_at" else {"sort_by": sort_by}
+    service.list_deals(stage="won", limit=1000, **kwargs)
+    assert f"ORDER BY {order} LIMIT %s" in rec.sql_containing("FROM deals")
+    assert rec.params_for("FROM deals") == ["won", 1000]
+
+
+def test_list_deals_unknown_sort_refused_before_io(rec):
+    with pytest.raises(ValueError, match="sort_by"):
+        service.list_deals(sort_by="bogus")
+    assert rec.calls == []
