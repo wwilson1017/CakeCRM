@@ -11,7 +11,7 @@ The **Workspace** tab is for admins only. Members do not see it.
 ## Branding
 
 - **Company name** — shown throughout the app.
-- **Logo** — press **Upload logo**. PNG, JPEG, GIF or WebP, up to 2 MB. SVG is not accepted. You can remove the logo from the same card.
+- **Logo** — press **Upload logo**. PNG, JPEG, GIF or WebP, up to 2 MB after shrinking. Large logos are shrunk in the browser before upload; files that remain over the limit are rejected. SVG is not accepted. You can remove the logo from the same card.
 
 Press **Save branding** to keep your changes.
 
