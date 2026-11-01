@@ -15,6 +15,10 @@ runs, so a reset landing between the read and its saved find leaves that find st
 simplification: the epoch is ``crm_meta.updated_at``, which every reset (``clear_all``,
 ``clear_demo_data``, a sample load) bumps in its own transaction; the few settings writes
 that also bump it only make Baker search again. Upgrade path: a dedicated counter.
+simplification: the check and the write are separate transactions, so a reset that
+also recreates the same deal id in the milliseconds between them is not caught. This is
+a guard against the model guessing ids, not access control; holding the epoch through
+the write would mean threading it into every deal-writing service call.
 """
 
 import logging

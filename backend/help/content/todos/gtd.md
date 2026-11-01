@@ -37,7 +37,7 @@ has saved; the card is locked until then, so nothing changed meanwhile gets undo
   at-sign: calls, office, errands, computer. The existing contexts are offered in a picker,
   with a hatch for a new one.
   To rename one on every todo at once, see the renaming topic (todos/rename-context).
-- **Tags** — anything else. Up to 50.
+- **Tags** — anything else, comma-separated. Up to 50. Settable while triaging.
 - **Star** — today's priorities. Keep starred items to a handful. There is also an option to
   star a todo automatically when it comes due.
 - **Due date** — a real deadline only, never an aspiration. Clear it by emptying the field.

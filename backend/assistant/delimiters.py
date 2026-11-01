@@ -170,7 +170,9 @@ CONTEXT_READ_TOOLS = frozenset({
 # stranger can type a block of text straight into the todo inbox. That row lands in
 # `todos` with `source='capture_web'` — the ONE source value an unauthenticated caller
 # can produce (`crm.gtd_common.TODO_SOURCES` says so, and every write site passes its
-# own literal, so it is never client-chosen).
+# own literal, so it is never client-chosen). A capture from behind a configured token
+# is stamped `capture_token` instead (#326) and is deliberately NOT in the set below:
+# the poster holds the owner's secret, the same trust the todo web app's token gets.
 #
 # Keying this on the TOOL — adding `todo_list` to UNTRUSTED_SOURCE_TOOLS above — was
 # considered and is wrong twice over. That set IS `background.BACKGROUND_EXCLUDED_TOOLS`
