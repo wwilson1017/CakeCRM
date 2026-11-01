@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildBody, closedSuffix, confirmBody, parseValueInput, stageLabel, valueLabel, type QuickUpdatePreview } from './quickUpdate';
+import { buildBody, closedSuffix, confirmBody, parseValueInput, valueLabel, type QuickUpdatePreview } from './quickUpdate';
+import { money } from './money';
 const preview: QuickUpdatePreview = { deal: { id: 5, title: 'Canopy', stage: 'qualified', value: 10, currency: 'USD' }, body: { value: 2500 }, changes: [], needs: ['note'], warnings: [] };
 describe('quickUpdate', () => {
   it('buildBody includes only ON tiles with content', () => {
@@ -19,16 +20,14 @@ describe('quickUpdate', () => {
     expect(confirmBody(preview, ' called ')).toEqual({ value: 2500, note: 'called' });
     expect(confirmBody({ ...preview, needs: [] }, 'ignored')).toEqual(preview.body);
   });
-  it('valueLabel formats USD with a sign and other currencies with a code', () => {
-    expect(valueLabel(2500, 'USD')).toBe('$2,500');
-    expect(valueLabel(12.5, '')).toBe('$12.50');
-    expect(valueLabel(2500, 'EUR')).toBe('2,500 EUR');
+  it('valueLabel uses the shared money formatter and says when there is no value', () => {
+    expect(valueLabel(2500, 'USD')).toBe(money(2500, 'USD'));
+    expect(valueLabel(2500, 'EUR')).toBe(money(2500, 'EUR'));
     expect(valueLabel(null, 'USD')).toBe('no value');
   });
-  it('labels closed stages and capitalizes stage names', () => {
+  it('labels closed stages', () => {
     expect(closedSuffix('won')).toBe(' · WON');
     expect(closedSuffix('lost')).toBe(' · LOST');
     expect(closedSuffix('proposal')).toBe('');
-    expect(stageLabel('proposal')).toBe('Proposal');
   });
 });

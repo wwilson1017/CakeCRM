@@ -1,3 +1,5 @@
+import { money } from './money';
+
 export interface QuickUpdateBody {
   note?: string; value?: number; stage?: string; won?: boolean; closed_on?: string;
   lost?: boolean; lost_reason?: string; followup?: string;
@@ -34,8 +36,5 @@ export function closedSuffix(stage: string): string {
   return stage === 'won' ? ' · WON' : stage === 'lost' ? ' · LOST' : '';
 }
 export function valueLabel(value: number | null | undefined, currency: string): string {
-  if (value == null) return 'no value';
-  const amount = value.toLocaleString('en-US', { minimumFractionDigits: Number.isInteger(value) ? 0 : 2, maximumFractionDigits: 2 });
-  return !currency || currency === 'USD' ? `$${amount}` : `${amount} ${currency}`;
+  return value == null ? 'no value' : money(value, currency);
 }
-export function stageLabel(stage: string): string { return stage.charAt(0).toUpperCase() + stage.slice(1); }

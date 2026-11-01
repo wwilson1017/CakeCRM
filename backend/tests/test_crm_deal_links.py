@@ -225,6 +225,7 @@ DEAL_RETURNING_SERVICES = (
 #: every deals-reading service to appear in one list or the other, so a new one cannot be
 #: silently absent from both.
 NON_RECORD_DEAL_SERVICES = {
+    "_write_deal_update_cur": "returns (changed, old_contact_id, written map) — no deal record; callers re-read the row",
     "get_analytics": "daily series and bucket counts; summarize_analytics carries the records",
     "get_pipeline_analytics": "per-stage durations and conversion rates, no rows",
     "get_weekly_touches": "per-deal touch counts for one card — id, title, count, no deal row",

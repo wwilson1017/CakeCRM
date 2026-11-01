@@ -79,6 +79,7 @@ def test_lost_with_a_blank_reason_is_allowed(client, writes):
     assert client.post(BASE, json={"lost": True, "lost_reason": "  "}).status_code == 200
     assert writes[0][0][1][2] == {"stage": "lost", "probability": 0, "lost_reason": ""}
     assert len(writes[0]) == 1
+    qu.touch_count_service.schedule_recompute.assert_not_called()
 
 
 def test_value_and_stage_are_one_update_deal_call_as_the_member(client, writes):
@@ -90,6 +91,7 @@ def test_value_and_stage_are_one_update_deal_call_as_the_member(client, writes):
     assert kwargs == {"actor_id": 2, "closed_on_day": None, "today": date(2026, 10, 10)}
     assert writes[1].entries == 1
     assert "FOR UPDATE" in writes[1].executed[0][0]
+    qu.scoring_service.score_on_event.assert_called_once_with(deal_ids=(5,), contact_ids=(9,))
 
 
 def test_won_sends_stage_won_with_the_closed_on_day(client, writes):

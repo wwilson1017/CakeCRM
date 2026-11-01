@@ -10,8 +10,9 @@ import { ClosedOnModal } from './components/ClosedOnModal';
 import { LostReasonModal } from './components/LostReasonModal';
 import { useUsers } from './useUsers';
 import { OPEN_STAGES } from './constants';
+import { stageLabel } from './pipelineBoard';
 import {
-  buildBody, closedSuffix, confirmBody, parseValueInput, stageLabel, valueLabel,
+  buildBody, closedSuffix, confirmBody, parseValueInput, valueLabel,
   type Fields, type QuickUpdateBody, type QuickUpdatePreview, type TileKey, type Tiles,
 } from './quickUpdate';
 
