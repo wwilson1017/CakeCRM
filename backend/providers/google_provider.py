@@ -185,6 +185,7 @@ class GoogleProvider(AIProvider):
 
         try:
             response = await chat.send_message_async(send_msg, stream=True)
+            hit_length_cap = False
 
             async for chunk in response:
                 # Text chunks
@@ -195,6 +196,8 @@ class GoogleProvider(AIProvider):
                 # Function calls
                 if chunk.candidates:
                     for candidate in chunk.candidates:
+                        if getattr(candidate.finish_reason, "name", None) == "MAX_TOKENS":
+                            hit_length_cap = True
                         if not candidate.content.parts:
                             continue
                         for part in candidate.content.parts:
@@ -211,7 +214,8 @@ class GoogleProvider(AIProvider):
                                 yield {"type": "tool_start", "tool": fc.name, "tool_use_id": call_id}
                                 yield {"type": "tool_args", "tool": fc.name, "tool_use_id": call_id, "args": args}
 
-            stop_reason = "tool_use" if tool_calls else "stop"
+            # Cut off at the output cap; the engine notes it as unfinished (#340).
+            stop_reason = "tool_use" if tool_calls else ("max_tokens" if hit_length_cap else "stop")
 
         except Exception as e:
             logger.error("Gemini API error: %s", e)

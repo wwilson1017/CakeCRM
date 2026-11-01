@@ -678,9 +678,10 @@ Future MCP dispatch (#323) must retain this guard and advance tool batches too.
 Attended turns treat at least one completed provider round or streamed nonblank text
 as billed for the unfinished-reply note. Errors and cut streams then save unsaved text
 plus a note; exhausted tool rounds save a note on their own. Completed empty/refused
-answers and max_tokens replies fold the note into the existing iteration row. Only
-executed tool calls count as progress; after tools ran the note asks the user to check
-the results, rather than blindly resend. Persistence is best-effort, with warnings.
+answers and max_tokens replies fold the note into the existing iteration row (OpenAI and
+OpenAI-compatible `length` and Gemini `MAX_TOKENS` finishes are reported as `max_tokens`). Only
+executed tool calls count as progress; after tools ran the note, partial reply or not,
+asks the user to check the results rather than blindly resend. Persistence is best-effort, with warnings.
 The detached runner's stop/dead-turn endings, confirmation narration's honest note,
 and deliberate budget termination are unchanged.
 

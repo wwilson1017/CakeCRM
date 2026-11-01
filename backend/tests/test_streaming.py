@@ -28,13 +28,14 @@ class _Delta:
 
 
 class _Choice:
-    def __init__(self, delta):
+    def __init__(self, delta, finish_reason=None):
         self.delta = delta
+        self.finish_reason = finish_reason
 
 
 class _Chunk:
-    def __init__(self, delta):
-        self.choices = [_Choice(delta)]
+    def __init__(self, delta, finish_reason=None):
+        self.choices = [_Choice(delta, finish_reason)]
 
 
 class _FakeStream:
@@ -68,6 +69,24 @@ async def test_openai_compat_text_only():
     events = [e async for e in stream_openai_turn(FakeOpenAIClient(chunks), "m", [], [], "sys")]
     assert "".join(e["text"] for e in events if e["type"] == "text") == "Hi there"
     assert events[-1] == {"type": "_turn_complete", "tool_calls": [], "stop_reason": "stop"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('provider_kind', ['openai', 'compat'])
+async def test_openai_length_finish_is_max_tokens(monkeypatch, provider_kind):
+    """A reply cut at the output cap reaches the engine as max_tokens (#340)."""
+    import openai
+
+    from providers import openai_provider as op
+    from providers.openai_compat import stream_openai_turn
+    client = FakeOpenAIClient([_Chunk(_Delta(content="Half")), _Chunk(_Delta(), finish_reason="length")])
+    if provider_kind == 'compat':
+        stream = stream_openai_turn(client, "m", [], [], "sys")
+    else:
+        monkeypatch.setattr(openai, 'AsyncOpenAI', lambda **kw: client)
+        stream = op.OpenAIProvider(access_token='k', model='m').stream_turn([], [], 'sys')
+    events = [e async for e in stream]
+    assert events[-1]["stop_reason"] == "max_tokens"
 
 
 @pytest.mark.asyncio

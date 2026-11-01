@@ -112,14 +112,15 @@ def _unfinished_reason(stop_reason, text) -> str | None:
 
 
 def _unfinished_note(partial, reason, tool_count, last_tool) -> str:
+    # After a tool ran, never just say "resend": a write may already have happened.
+    steps = (
+        f", after {tool_count} tool call(s) (last: {last_tool}). "
+        "Some steps may already have run; check the results above before asking again"
+        if tool_count else ""
+    )
     if partial.strip():
-        return f"\n\n*(This reply is incomplete: {reason}.)*"
-    if tool_count:
-        return (
-            f"*(No complete reply: {reason}, after {tool_count} tool call(s) (last: {last_tool}). "
-            "Some steps may already have run; check the results above before asking again.)*"
-        )
-    return f"*(No complete reply: {reason}. Please send your message again.)*"
+        return f"\n\n*(This reply is incomplete: {reason}{steps}.)*"
+    return f"*(No complete reply: {reason}{steps or '. Please send your message again'}.)*"
 
 
 async def _save_unfinished(conversation_id, model, reason, *, unsaved, tool_count, last_tool):

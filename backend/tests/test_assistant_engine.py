@@ -1407,7 +1407,7 @@ async def test_unfinished_error_and_cut(store, ending, partial, earlier_round):
     if earlier_round or partial:
         assert len(rows) == (2 if earlier_round else 1)
         assert rows[-1]['content'] == partial + events[-2]['text']
-        if earlier_round and not partial:
+        if earlier_round:
             assert 'after 1 tool call(s) (last: crm_dashboard)' in rows[-1]['content']
             assert 'Some steps may already have run' in rows[-1]['content']
             assert 'send your message again' not in rows[-1]['content']
