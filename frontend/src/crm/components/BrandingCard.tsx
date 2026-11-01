@@ -14,6 +14,7 @@ import { useState } from 'react';
 import { api } from '../../core/api/client';
 import { useBranding } from '../../core/branding/BrandingContext';
 import type { BrandingConfig } from '../../core/branding/brandingConfig';
+import { shrinkImage } from '../../shared/shrinkImage';
 import { toast } from '../../shared/toast';
 import { IconX } from '../../shared/icons';
 import { INK_MUTE, CORAL_TEXT, FONT_SANS, labelStyle, inputStyle } from '../../shared/styles';
@@ -67,14 +68,15 @@ export function BrandingCard({ isMobile }: { isMobile: boolean }) {
     const file = e.target.files?.[0];
     e.target.value = ''; // allow re-selecting the same file after an error
     if (!file) return;
-    if (file.size > MAX_LOGO_BYTES) {
-      toast.error('Logo must be under 2 MB.');
-      return;
-    }
     setLogoBusy(true);
     try {
+      const toSend = await shrinkImage(file);
+      if (toSend.size > MAX_LOGO_BYTES) {
+        toast.error('Logo must be under 2 MB.');
+        return;
+      }
       const form = new FormData();
-      form.append('file', file);
+      form.append('file', toSend);
       await api('/api/branding/logo', { method: 'POST', body: form });
       patchBranding({ has_logo: true });
       bumpLogoVersion();

@@ -503,6 +503,14 @@
   term, since that string is built by dropping blank fields. Chatter now also attaches to
   **companies** (zero-migration: `entity_type` is
   free TEXT), cleaned in `delete_company`.
+  **Photo uploads (landed #339).** `shared/shrinkImage.ts` shrinks chatter attachments at
+  upload time and branding logos before their 2 MB check: oriented bitmap decode, 1600 px
+  long edge, quality/dimension ladder targeting 300 KB, WebP for PNG/WebP alpha and JPEG
+  otherwise. Canvas output strips EXIF location; failures, GIF, SVG and non-images retain
+  original bytes. PNG/WebP never grow; JPEG/HEIC/HEIF re-encode even if larger to strip EXIF.
+  Chatter still refuses originals over 10 MB during synchronous staging. **Take photo** on
+  `NoteComposer` uses the rear-camera capture input and timestamp filenames. Baker vision
+  remains #345; its composer is unchanged.
   **Chatter notes take attachments** (#57, `backend/crm/attachment_service.py` +
   `backend/core/thumbnails.py` + `frontend/src/crm/{chatterAttachments,chatterComposer,postNote,useChatterPost,useAuthedBlobUrl}.ts`
   + `components/{NoteComposer,NoteAttachments,AttachmentLightbox}.tsx`), keyless — nothing

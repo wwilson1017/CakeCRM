@@ -18,12 +18,14 @@ See [Notifications](../01-getting-started/06-notifications.md) for how notificat
 
 ## Attaching files
 
-Press **Attach** in the note composer to add files to a note:
+Press **Attach** in the note composer to add files to a note, or **Take photo** to open your phone camera and attach a shot:
 
-- Up to **10 MB** per file.
+- Up to **10 MB** per original file, before shrinking.
 - Up to **10 files** per note.
 
 Images that the app can preview show as a small tile. Click it to see a larger view. Other files show as a chip that downloads when you click it. You can remove an attachment from its note.
+
+Photos are shrunk in your browser to about **300 KB** before they upload, and the location your phone stored in them is removed. GIFs and other files upload unchanged.
 
 Attachments work with no AI provider connected.
 
