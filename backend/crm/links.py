@@ -177,8 +177,8 @@ def _inert_title(title: str) -> str:
     return title.strip().replace("[", "(").replace("]", ")").replace("`", "'")
 
 
-def remember_deal_refs(result, deal_refs: dict[int, tuple[str, str]] | None) -> None:
-    """Record every deal record in a tool ``result`` into ``deal_refs`` (``{id: (title, url)}``).
+def deal_records(result) -> dict[int, tuple[str, str]]:
+    """Return every deal record in a tool ``result`` as ``{id: (title, url)}``.
 
     A deal record is any dict whose ``url`` is exactly ``deal_url`` of its own ``id``
     (or ``deal_id``, the ``crm_get_deal_health`` shape) and that carries a non-blank
@@ -187,8 +187,7 @@ def remember_deal_refs(result, deal_refs: dict[int, tuple[str, str]] | None) -> 
     dicts and lists are walked, since deal rows ride inside contact/company rollups,
     ``top_deals`` and the like.
     """
-    if deal_refs is None:
-        return
+    deal_refs: dict[int, tuple[str, str]] = {}
 
     def _walk(node) -> None:
         if isinstance(node, dict):
@@ -209,6 +208,13 @@ def remember_deal_refs(result, deal_refs: dict[int, tuple[str, str]] | None) -> 
                 _walk(value)
 
     _walk(result)
+    return deal_refs
+
+
+def remember_deal_refs(result, deal_refs: dict[int, tuple[str, str]] | None) -> None:
+    """Remember tool-returned deal links for outbound text, preserving existing refs."""
+    if deal_refs is not None:
+        deal_refs.update(deal_records(result))
 
 
 def link_deal_refs(text: str, deal_refs: dict[int, tuple[str, str]] | None) -> str:

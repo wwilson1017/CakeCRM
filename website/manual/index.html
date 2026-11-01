@@ -1589,7 +1589,14 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 </ul>
 <h2>Approving a change</h2>
 <p>When Baker wants to make a change that needs approval, its message carries a card naming the action and showing exactly what it will do, with <strong>Approve</strong> and <strong>Deny</strong>. Until you answer, nothing has happened.</p>
-<p>In Telegram the same thing arrives as two buttons, Approve and Deny, and only the linked account can press them. Telegram chats always run in Ask mode.</p><nav class="pn"><a href="#/baker/what-baker-can-do"><small>Previous</small>What Baker can and cannot do</a><a class="next" href="#/baker/memory"><small>Next</small>Baker&#x27;s memory</a></nav></article>
+<p>In Telegram the same thing arrives as two buttons, Approve and Deny, and only the linked account can press them. Telegram chats always run in Ask mode.</p>
+<h2>Baker looks a deal up before changing it</h2>
+<p>Baker must find the deal in this conversation and check its title before changing it.
+The lookup must finish in an earlier step, so a guessed id cannot be sent alongside a
+search and used by luck. This check also runs when you approve a change. After a CRM
+reset, Baker must look the deal up again.</p>
+<p>Changes to lost or archived deals can still go through. Baker receives a warning to
+tell you which deal it changed and check that it is the one you meant.</p><nav class="pn"><a href="#/baker/what-baker-can-do"><small>Previous</small>What Baker can and cannot do</a><a class="next" href="#/baker/memory"><small>Next</small>Baker&#x27;s memory</a></nav></article>
 <article data-route="baker/memory" data-title="Baker&#x27;s memory" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/baker/meet-baker">Baker, the assistant</a></p><h1>Baker&#x27;s memory</h1><p class="lead">See and edit what Baker knows, from its knowledge files to the individual facts it has recorded.</p><p>Baker keeps two kinds of memory: <strong>knowledge files</strong> it reads at the start of a conversation, and <strong>recorded facts</strong> it looks up as you talk. Both are shared by the whole team, and both work with or without an AI provider connected.</p>
 <p>To open them, go to <strong>Settings</strong>, <strong>Assistant</strong>, <strong>Assistant memory</strong> and click <strong>Open memory</strong>. The Memory page has two tabs: <strong>Knowledge files</strong> and <strong>Recorded facts</strong>.</p>
 <figure class="shot"><img data-shot="memory" width="1400" height="954" alt="Baker&#x27;s memory screenshot"></figure>

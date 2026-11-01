@@ -50,6 +50,14 @@ class FakeRegistry:
         self.writes_map.update({name: False for name in delimiters.UNTRUSTED_SOURCE_TOOLS})
         self.calls = []
 
+    conversation_id = None
+
+    def next_tool_batch(self):
+        pass
+
+    def deal_write_refusal(self, name, args):
+        return None
+
     def is_write(self, name):
         return name in self._writes
 

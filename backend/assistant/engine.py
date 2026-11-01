@@ -252,6 +252,8 @@ async def _chat_impl(
             conversation_id = conv["id"]
             new_conversation = True
 
+        registry.conversation_id = conversation_id
+
         if not is_continuation:
             last = messages[-1]
             user_text = last.get("content") or ""
@@ -459,6 +461,7 @@ async def _chat_impl(
         has_pending = False
         terminated = False
 
+        registry.next_tool_batch()
         for tc in tool_calls:
             name = tc.get("name")
             tool_use_id = tc.get("id")
@@ -473,6 +476,16 @@ async def _chat_impl(
                 ):
                     yield line
                 continue
+
+            if is_write:
+                refusal = await asyncio.to_thread(registry.deal_write_refusal, name, args)
+                if refusal:
+                    async for line in _record_result(
+                        conversation_id, iter_msg_id, name, tool_use_id, results,
+                        {"ok": False, "error": refusal}, 0,
+                    ):
+                        yield line
+                    continue
 
             # Per-turn write budget backstop (writes only, all modes).
             if is_write:
@@ -772,6 +785,7 @@ def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decis
         # own click won an approve/deny race.
         existing = history.get_tool_result(conversation_id, tool_use_id, msg_id=msg_id)
         return {"status": "already_resolved", "result": existing}
+    registry.conversation_id = conversation_id
     claimed_msg_id, tool, args = claimed["msg_id"], claimed["tool"], claimed["args"]
     # Defense-in-depth: only a write should ever have been marked pending. If a
     # non-write somehow got here (a future bug in the gate), refuse rather than

@@ -42,3 +42,13 @@ Deleting, archiving, merging, bulk moves and bulk todo updates, recomputing lead
 When Baker wants to make a change that needs approval, its message carries a card naming the action and showing exactly what it will do, with **Approve** and **Deny**. Until you answer, nothing has happened.
 
 In Telegram the same thing arrives as two buttons, Approve and Deny, and only the linked account can press them. Telegram chats always run in Ask mode.
+
+## Baker looks a deal up before changing it
+
+Baker must find the deal in this conversation and check its title before changing it.
+The lookup must finish in an earlier step, so a guessed id cannot be sent alongside a
+search and used by luck. This check also runs when you approve a change. After a CRM
+reset, Baker must look the deal up again.
+
+Changes to lost or archived deals can still go through. Baker receives a warning to
+tell you which deal it changed and check that it is the one you meant.

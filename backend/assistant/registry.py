@@ -30,6 +30,11 @@ features append cleanly):
     constructing a registry does one DB read — the async chat endpoints build it via
     ``asyncio.to_thread``. An unattended registry (``user=None``) gets nothing at all.
 
+Deal writes (#332) require a CRM find from an earlier tool batch in the same
+conversation, including when resolving an approval. The engine checks before offering
+an Approve card; dispatch checks again before the handler. Finds persist per chat;
+conversationless background runs keep them only on this registry.
+
 Construction FAILS LOUD on a malformed composition — a duplicate tool name, a def
 with no executor, an executor with no def, or a non-boolean ``writes`` — so a new
 source can never silently clobber another feature's tool (issue #6 R13).
@@ -66,6 +71,7 @@ from collections.abc import Callable
 
 from assistant.confirm_tier import ROUTINE
 from context_files.tools import get_context_file_tools
+from crm import deal_write_guard
 from crm.gtd_tools import get_gtd_tools
 from crm.links import remember_deal_refs
 from crm.tools import get_crm_tools
@@ -85,6 +91,10 @@ class ToolRegistry:
     def __init__(self, *, background: bool = False, user: dict | None = None) -> None:
         # Per-run flag for the one-notification-per-run guard (see notify_user).
         self._notify_user_called = False
+        self.conversation_id: str | None = None
+        self.tool_batch = 0
+        self.found_deals: dict[int, int] | None = None
+        self.found_epoch = None
 
         # ``{deal_id: (title, url)}`` for every deal record a tool returned through this
         # registry (#238). A registry is built per turn, so the map never outlives the
@@ -156,6 +166,18 @@ class ToolRegistry:
             t["name"] for t in self.tool_defs if t.get("confirm_tier") == ROUTINE
         )
 
+    def next_tool_batch(self) -> None:
+        self.tool_batch += 1
+
+    def deal_write_refusal(self, name: str, args: dict) -> str | None:
+        if not self.is_write(name):
+            return None
+        try:
+            return deal_write_guard.refusal(self, args)
+        except Exception:
+            logger.exception("assistant: could not check deal write for %s", name)
+            return "Not written: could not verify deal finds. Search the CRM and try again."
+
     def is_write(self, name: str) -> bool:
         return self.writes_map.get(name, False)
 
@@ -194,6 +216,13 @@ class ToolRegistry:
         fn = self.executors.get(name)
         if fn is None:
             return {"error": f"Unknown tool: {name}"}
+        refusal = self.deal_write_refusal(name, args or {})
+        if refusal:
+            return {"ok": False, "error": refusal}
+        warning = None
+        if self.is_write(name):
+            warning = deal_write_guard.closed_warning(deal_write_guard.target_deal_ids(args or {}))
+        epoch = deal_write_guard.epoch_before(name, self.is_write(name))
         try:
             result = fn(**(args or {}))
         except TypeError as e:  # LLM passed bad/unexpected arguments
@@ -204,8 +233,11 @@ class ToolRegistry:
             return {"error": f"The tool '{name}' failed. Please try again."}
         try:
             remember_deal_refs(result, self.deal_refs)
+            deal_write_guard.note_found(self, result, epoch)
         except Exception:  # bookkeeping must never cost a tool (a write!) its result
             logger.exception("assistant: could not record deal refs from %s", name)
+        if warning and isinstance(result, dict) and "error" not in result and result.get("ok") is not False:
+            result["closed_deal_warning"] = warning
         return result
 
     async def execute_tool(self, name: str, args: dict | None) -> dict:

@@ -185,6 +185,14 @@ def test_claim_pending_tool_is_once_only(pg_db):
         def __init__(self):
             self.n = 0
 
+        conversation_id = None
+
+        def next_tool_batch(self):
+            pass
+
+        def deal_write_refusal(self, name, args):
+            return None
+
         def is_write(self, name):
             return True
 
