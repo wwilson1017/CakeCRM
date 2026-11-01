@@ -8,6 +8,8 @@ name: AI Code Review
 # - This check is ADVISORY. It MUST NOT be configured as a required status check
 #   (a repo admin can require it, but doing so would let a transient AI outage block
 #   merges). The auto-issues loop treats it as informational.
+# - A review that did not happen (API error, empty model output) FAILS the check so an
+#   unreviewed PR is not shown as green; skips (no key, no code, too large) stay green.
 # - Uses only the GitHub REST API + files under /tmp, so no `checkout` is needed —
 #   this keeps the untrusted PR tree off the runner that holds the Anthropic secret.
 # - `pull_request` (never `pull_request_target`): under `pull_request`, fork PRs run
@@ -345,32 +347,43 @@ jobs:
             exit 0
           fi
 
-          # Parse and validate the review text BEFORE declaring success, so a malformed
-          # or text-less response can't post an empty "successful" review comment.
-          REVIEW_TEXT=$(echo "$BODY" | jq -r '.content[0].text // empty')
-          if [ -z "$(printf '%s' "$REVIEW_TEXT" | tr -d '[:space:]')" ]; then
-            echo "::warning::Anthropic response contained no text content"
-            echo "api_error=true" >> "$GITHUB_OUTPUT"
-            printf '%s' "$BODY" > /tmp/api_error.txt
+          echo "api_error=false" >> "$GITHUB_OUTPUT"
+
+          # Extract the review text: join every text block. Current models think by default,
+          # so content[0] can be a thinking block and `.content[0].text` is null — a valid
+          # response that used to be reported as an API error with no review.
+          printf '%s' "$BODY" | jq -r '[.content[]? | select(.type == "text") | .text] | join("\n")' > /tmp/review.txt
+          # `tr -cd` keeps stop_reason a bare token: later steps interpolate it into shell.
+          STOP_REASON=$(printf '%s' "$BODY" | jq -r '.stop_reason // ""' | tr -cd 'a-z_')
+          echo "stop_reason=$STOP_REASON" >> "$GITHUB_OUTPUT"
+
+          # Validate BEFORE declaring success, so a text-less response can't post an
+          # empty "successful" review comment.
+          if [ -z "$(tr -d '[:space:]' < /tmp/review.txt)" ]; then
+            echo "::warning::The model returned no review text (stop_reason=$STOP_REASON)."
+            echo "empty_review=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          printf '%s' "$REVIEW_TEXT" > /tmp/review.txt
-          echo "api_error=false" >> "$GITHUB_OUTPUT"
+          echo "empty_review=false" >> "$GITHUB_OUTPUT"
 
       # ── Post or update the review comment ──
       - name: Post or update review comment
         id: post_comment
-        if: steps.gate.outputs.has_key == 'true' && steps.diff.outcome == 'success' && steps.review.outcome == 'success' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large' && steps.review.outputs.api_error != 'true'
+        if: steps.gate.outputs.has_key == 'true' && steps.diff.outcome == 'success' && steps.review.outcome == 'success' && steps.diff.outputs.empty != 'true' && steps.diff.outputs.skip != 'true' && steps.diff.outputs.diff_status != 'too_large' && steps.review.outputs.api_error != 'true' && steps.review.outputs.empty_review != 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           REVIEW=$(cat /tmp/review.txt)
           TRUNCATED="${{ steps.diff.outputs.truncated }}"
+          STOP_REASON="${{ steps.review.outputs.stop_reason }}"
 
           BANNER=""
           if [ "$TRUNCATED" = "true" ]; then
             BANNER=$'\n> **Note:** This diff was truncated to fit the model limit. Some changes may not be covered.\n'
+          fi
+          if [ "$STOP_REASON" = "max_tokens" ]; then
+            BANNER="${BANNER}"$'\n> **Note:** The review hit the output limit and ends early.\n'
           fi
 
           MARKER="<!-- ai-code-review-bot -->"
@@ -405,10 +418,10 @@ jobs:
             gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" -f body="$COMMENT"
           fi
 
-      # ── Post a skip / error / too-large notice ──
+      # ── Post a skip / error / too-large / empty notice ──
       - name: Post skip or error notice
         id: post_notice
-        if: "steps.gate.outputs.has_key == 'true' && (steps.diff.outputs.empty == 'true' || steps.diff.outputs.skip == 'true' || steps.diff.outputs.diff_status == 'too_large' || steps.review.outputs.api_error == 'true')"
+        if: "steps.gate.outputs.has_key == 'true' && (steps.diff.outputs.empty == 'true' || steps.diff.outputs.skip == 'true' || steps.diff.outputs.diff_status == 'too_large' || steps.review.outputs.api_error == 'true' || steps.review.outputs.empty_review == 'true')"
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -435,7 +448,7 @@ jobs:
             BODY="${MARKER}
           ## AI Code Review
 
-          :warning: The AI review could not be completed due to an API error. Please review manually.
+          :warning: The AI review could not be completed due to an API error. This check is marked failed so an unreviewed PR is not shown as green. Re-run the workflow or review manually.
 
           <details><summary>Error details</summary>
 
@@ -443,6 +456,11 @@ jobs:
           ${ERROR_DETAIL}
           \`\`\`
           </details>"
+          elif [ "${{ steps.review.outputs.empty_review }}" = "true" ]; then
+            BODY="${MARKER}
+          ## AI Code Review
+
+          :warning: The model returned no review text (stop_reason: \`${{ steps.review.outputs.stop_reason }}\`). This check is marked failed so an unreviewed PR is not shown as green. Re-run the workflow or review manually."
           fi
 
           EXISTING_ID=$(gh api \
@@ -457,16 +475,22 @@ jobs:
             gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" -f body="$BODY"
           fi
 
-      # ── Observability guard ──
-      # Every step above is continue-on-error, so a transient gh/curl/jq failure keeps the
-      # advisory check green — but a green check with no comment looks identical to "no
-      # findings". This always-run, green-preserving step surfaces that silent-failure case
-      # in the run log and the job summary so it isn't invisible. It posts no comment (the
-      # log/summary signal is reliable even when comment posting itself is what failed).
+      # ── Outcome guard ──
+      # Every step above is continue-on-error, so this always-run step is the one place
+      # that decides the job's result. A review that did not happen (API error, empty model
+      # output) fails the check: its notice says so, and an unreviewed PR must not look
+      # reviewed. Skips (no code, too large) stay green because their notice says so.
+      # A transient gh/curl/jq failure that posted nothing still stays green — but a green
+      # check with no comment looks identical to "no findings", so that case is surfaced
+      # in the run log and the job summary. This step posts no comment (the log/summary
+      # signal is reliable even when comment posting itself is what failed).
       - name: Review outcome guard
         if: always() && steps.gate.outputs.has_key == 'true'
         run: |
-          if [ "${{ steps.post_comment.outcome }}" = "success" ] || [ "${{ steps.post_notice.outcome }}" = "success" ]; then
+          if [ "${{ steps.review.outcome }}" = "failure" ] || [ "${{ steps.review.outputs.api_error }}" = "true" ] || [ "${{ steps.review.outputs.empty_review }}" = "true" ]; then
+            echo "::error::AI review did not run (api_error=${{ steps.review.outputs.api_error }}, empty_review=${{ steps.review.outputs.empty_review }}, stop_reason=${{ steps.review.outputs.stop_reason }}); failing the check so the PR is not shown as reviewed."
+            exit 1
+          elif [ "${{ steps.post_comment.outcome }}" = "success" ] || [ "${{ steps.post_notice.outcome }}" = "success" ]; then
             echo "AI review reached a terminal outcome (review comment or notice posted)."
           else
             MSG="AI Code Review did not complete — no review comment or notice was posted (likely a transient gh/curl/jq failure). The check stays green because the review is advisory; inspect this run's logs."
