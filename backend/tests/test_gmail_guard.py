@@ -213,3 +213,25 @@ def test_client_op_allowlist_excludes_send():
     }
     # ops exposes no send/reply operation.
     assert not any(hasattr(ops, n) for n in ("send_email_op", "reply_to_email_op"))
+
+
+def test_the_mcp_surface_carries_no_gmail_tool(monkeypatch):
+    """#322: a person's connected ChatGPT/Claude/Codex never sees or calls a Gmail tool,
+    for any seat: not an admin, not with the mailbox shared with every seat, read-only or
+    not. Built on a registry that REALLY carries the Gmail tools, so the exclusion is
+    what is under test."""
+    from conftest import fake_admin, fake_member
+
+    from assistant.registry import ToolRegistry
+    from gmail import tools as gmail_tools
+    from mcp_endpoint import surface
+
+    monkeypatch.setattr(gmail_tools.store, "is_connected", lambda: True)
+    monkeypatch.setattr(gmail_tools.store, "sharing_enabled", lambda: True)
+    gmail = {d["name"] for d in gmail_tools.GMAIL_TOOL_DEFS}
+    for seat in (fake_admin(), fake_member()):
+        reg = ToolRegistry(user=seat)
+        assert gmail <= reg.writes_map.keys(), "Gmail tools absent: this guard would be vacuous"
+        for read_only in (False, True):
+            assert not gmail & {t.name for t in surface.advertised(reg, read_only=read_only)}
+            assert not gmail & surface.offered_names(reg, read_only=read_only)

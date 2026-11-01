@@ -23,8 +23,9 @@ export type SettingsSectionId = 'personal' | 'assistant' | 'workspace' | 'integr
 
 export type SettingsCardId =
   | 'notifications' | 'change_password' | 'pipeline_board' | 'telegram_link' | 'todo_devices'
+  | 'connect_ai_tool'
   | 'memory' | 'todo_mode'
-  | 'branding' | 'team' | 'custom_fields' | 'export'
+  | 'branding' | 'team' | 'custom_fields' | 'export' | 'ai_tool_connections'
   | 'telegram' | 'gmail';
 
 export interface SettingsCardDef {
@@ -59,6 +60,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
       // (/api/crm/gtd/web-{signin-link,sessions,signout-all}) are `get_current_user` and act
       // on the caller's own devices. The on/off switch stays on the admin-only todo_mode card.
       { id: 'todo_devices', adminOnly: false },
+      // #322. Connecting your own AI tool is per seat: the routes it drives (/api/mcp/
+      // connections, /api/mcp/tokens) act on the caller's own connections. The members
+      // switch and every seat's list stay on the admin-only ai_tool_connections card.
+      { id: 'connect_ai_tool', adminOnly: false },
     ],
   },
   {
@@ -81,6 +86,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
       { id: 'team', adminOnly: true },
       { id: 'custom_fields', adminOnly: true },
       { id: 'export', adminOnly: true },
+      // #322. The members switch and every seat's AI tool connections: /api/mcp/admin/*,
+      // all `require_admin` (pinned in test_route_authz.ADMIN_ONLY).
+      { id: 'ai_tool_connections', adminOnly: true },
     ],
   },
   {

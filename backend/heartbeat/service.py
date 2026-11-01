@@ -54,7 +54,8 @@ def maintenance_tick() -> dict:
     pg_execute("UPDATE heartbeat_state SET last_tick_at = now() WHERE id = 1")
     dreaming = _maybe_run_dreaming()
     scores = _maybe_refresh_scores()
-    return {"dreaming": dreaming, "score_refresh": scores, "turn_sweep": _maybe_sweep_turns()}
+    return {"dreaming": dreaming, "score_refresh": scores, "turn_sweep": _maybe_sweep_turns(),
+            "mcp_sweep": _maybe_sweep_mcp()}
 
 
 def heartbeat_turn_tick() -> dict:
@@ -256,6 +257,18 @@ def _maybe_sweep_turns():
         return {"judged": judged, "pruned": pruned}
     except Exception:
         logger.warning("chat turn sweep errored", exc_info=True)
+        return None
+
+
+def _maybe_sweep_mcp():
+    """#322: delete connected-AI-tool rows that can never be used again (expired codes,
+    sign-in requests and access tokens, dead connections, unused client registrations)
+    and call-log rows past 90 days. Local SQL only; never raises."""
+    try:
+        from mcp_endpoint import store
+        return store.sweep()
+    except Exception:
+        logger.warning("mcp sweep errored", exc_info=True)
         return None
 
 

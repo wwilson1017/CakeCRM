@@ -4054,7 +4054,9 @@ def dismiss_ai_prompt() -> dict:
 def _truncate_all(cur, include_definitions: bool = False) -> None:
     # todo_web_sessions / todo_web_signin_tokens (#293) are deliberately in NEITHER
     # branch: they are auth state, like saved_views, and a CRM reset must not sign the
-    # todo app's devices out.
+    # todo app's devices out. The #322 credential tables (mcp_connections, mcp_credentials,
+    # mcp_oauth_clients, mcp_oauth_requests, mcp_oauth_codes) stay out for the same reason:
+    # a reset must not disconnect anyone's AI tools.
     # Order chosen for the multi-statement writers: delete_contact (SELECT ... FOR
     # UPDATE on contacts, then deletes) and add_note (locks its target, then writes
     # crm_chatter) both take contacts/deals FIRST and crm_chatter LAST, so TRUNCATE
@@ -4115,20 +4117,23 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # reminders (#283) trail both variants: user-authored data like todos. Its only FKs are
     # to users (not truncated) and to itself, and its writers lock only reminders rows, so
     # the last position can't invert. It stays out of is_crm_empty, like todo_projects.
+    # mcp_audit (#322), the per-call log of connected AI tools, trails reminders: it names
+    # record ids a reset makes meaningless. It has no FK to any truncated table and its one
+    # writer is a single-row INSERT, so the last position can't invert either.
     if include_definitions:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
             "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_definitions, "
             "crm_field_values, "
             "crm_field_provenance, deal_stage_events, proactive_nudges, "
-            "deal_ai_touch_evidence, crm_stage_criteria, reminders RESTART IDENTITY"
+            "deal_ai_touch_evidence, crm_stage_criteria, reminders, mcp_audit RESTART IDENTITY"
         )
     else:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
             "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_values, "
             "crm_field_provenance, deal_stage_events, proactive_nudges, deal_ai_touch_evidence, "
-            "crm_stage_criteria, reminders RESTART IDENTITY"
+            "crm_stage_criteria, reminders, mcp_audit RESTART IDENTITY"
         )
 
 

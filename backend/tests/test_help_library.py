@@ -563,6 +563,10 @@ _TOPIC_TO_CARD = {
     "settings/export": "export",
     "settings/notifications": "notifications",
     "settings/passwords-and-2fa": "change_password",
+    # #322 split like Telegram: connecting your own tool is personal, the members switch and
+    # every seat's list are admin-only.
+    "settings/connect-ai-tools": "connect_ai_tool",
+    "settings/ai-tool-connections": "ai_tool_connections",
 }
 
 

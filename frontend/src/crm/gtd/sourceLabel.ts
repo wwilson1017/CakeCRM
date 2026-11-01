@@ -30,6 +30,8 @@ const LABELS: Record<string, TodoSourceLabel> = {
     title: 'Added through the public capture link — anyone with the link can write here',
   },
   telegram: { text: 'Telegram', title: 'Captured from Telegram' },
+  // #322: written by someone's own ChatGPT, Claude or coding tool, working as them.
+  mcp: { text: 'AI tool', title: 'Added by a connected AI tool' },
 };
 
 export function todoSourceLabel(source: Todo['source']): TodoSourceLabel | null {

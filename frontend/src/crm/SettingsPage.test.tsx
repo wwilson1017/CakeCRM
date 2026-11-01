@@ -3,7 +3,7 @@
 // What this pins is the Settings SHELL's contract, not any card's internals (#103):
 //
 //   • the gating partition survives the restructure — a member reaches exactly three cards
-//     across two sections, an admin exactly nine across four, and walking the nav is the
+//     across two sections, an admin every card across four, and walking the nav is the
 //     only way to prove it, because the page renders one section at a time;
 //   • the nav is real navigation — anchors with hrefs, one `aria-current="page"`, and no
 //     `role="tab"` promising a keyboard model we do not implement;
@@ -67,7 +67,7 @@ vi.mock('../shared/useIsMobile', () => ({ useIsMobile: () => mobile.value }));
 
 const { SettingsPage } = await import('./SettingsPage');
 
-// Every endpoint the nine cards hit on mount. Anything unlisted resolves to `{}` rather
+// Every endpoint the cards hit on mount. Anything unlisted resolves to `{}` rather
 // than rejecting, so an unmocked card renders its empty state instead of exploding.
 const RESPONSES: Record<string, unknown> = {
   '/api/users': { users: [] },
@@ -81,15 +81,19 @@ const RESPONSES: Record<string, unknown> = {
   },
   '/api/auth/2fa/status': { enabled: false },
   '/api/crm/demo-status': { todo_mode: 'normal' },
+  '/api/mcp/connections': { may_connect: false, oauth_url: null, connections: [] },
+  '/api/mcp/admin/connections': { members_enabled: false, connections: [] },
 };
 
 // 'Todo mode' is admin-only as of #102, which makes its routes require_admin.
-const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Export data', 'Telegram', 'Gmail', 'Todo mode'];
+// 'AI tool connections' (#322) holds the members switch and every seat's connections.
+const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Export data', 'AI tool connections',
+  'Telegram', 'Gmail', 'Todo mode'];
 // 'Link my Telegram' is the personal half of the Telegram split (#193); the bot card
 // above stays admin-only.
 const MEMBER_TITLES = [
   'Notifications', 'Change password', 'Pipeline board', 'Link my Telegram', 'Todo app devices',
-  'Assistant memory',
+  'Connect an AI tool', 'Assistant memory',
 ];
 
 let container: HTMLDivElement;
@@ -182,13 +186,13 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     }
   });
 
-  it('reaches an admin all thirteen cards, across four sections', async () => {
+  it('reaches an admin all fifteen cards, across four sections', async () => {
     auth.isAdmin = true;
     await render();
     expect(navLabels()).toEqual(['Personal', 'Assistant', 'Workspace', 'Integrations']);
 
     const reachable = await allReachableTitles();
-    expect(reachable).toHaveLength(13);
+    expect(reachable).toHaveLength(15);
     expect(reachable.sort()).toEqual([...MEMBER_TITLES, ...ADMIN_ONLY_TITLES].sort());
   });
 
@@ -212,6 +216,7 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     expect(container.querySelector('[aria-current="page"]')!.textContent).toBe('Personal');
     expect(cardTitles()).toEqual([
       'Notifications', 'Change password', 'Pipeline board', 'Link my Telegram', 'Todo app devices',
+      'Connect an AI tool',
     ]);
   });
 
@@ -219,7 +224,7 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     auth.isAdmin = true;
     await render('/crm/settings?section=workspace');
     expect(container.querySelector('[aria-current="page"]')!.textContent).toBe('Workspace');
-    expect(cardTitles()).toEqual(['Branding', 'Team', 'Custom Fields', 'Export data']);
+    expect(cardTitles()).toEqual(['Branding', 'Team', 'Custom Fields', 'Export data', 'AI tool connections']);
   });
 });
 

@@ -1719,7 +1719,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <p>Models are grouped into three tiers: top, mid and light. Cheap background work uses the light tier, so routine automation does not cost top-tier prices. Each connected card except Ollama's lets an admin override which model sits in each tier, or leave it on <strong>Use inferred default</strong>.</p>
 <h2>Disconnecting</h2>
 <p><strong>Disconnect</strong> deletes that provider's stored key. If it was the active provider, the active provider and model are cleared too, and AI features hide again.</p><nav class="pn"><a href="#/baker/playbooks"><small>Previous</small>Sales playbooks and help</a><a class="next" href="#/settings/personal"><small>Next</small>Personal settings</a></nav></article>
-<article data-route="settings/personal" data-title="Personal settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Personal settings</h1><p class="lead">Notifications, your password, how the pipeline board opens, and linking your own Telegram.</p><p>Open <strong>Settings</strong> at the top right. Settings has four tabs: <strong>Personal</strong>, <strong>Assistant</strong>, <strong>Workspace</strong> and <strong>Integrations</strong>. Everyone sees Personal and Assistant. Workspace and Integrations are for admins only, and members do not see those tabs at all.</p>
+<article data-route="settings/personal" data-title="Personal settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Personal settings</h1><p class="lead">Notifications, your password, how the pipeline board opens, linking your own Telegram, and connecting your own AI tool.</p><p>Open <strong>Settings</strong> at the top right. Settings has four tabs: <strong>Personal</strong>, <strong>Assistant</strong>, <strong>Workspace</strong> and <strong>Integrations</strong>. Everyone sees Personal and Assistant. Workspace and Integrations are for admins only, and members do not see those tabs at all.</p>
 <figure class="shot"><img data-shot="settings-personal" width="1400" height="1829" alt="Personal settings screenshot"></figure>
 
 <h2>Notifications</h2>
@@ -1744,6 +1744,14 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <li><strong>Unlink my Telegram</strong> ends your link. It affects nobody else.</li>
 </ol>
 <p>If no bot is connected yet, the card says so. See <a href="#/integrations/telegram">Telegram</a>.</p>
+<h2>Connect an AI tool</h2>
+<p>Connect an AI tool you already use, such as ChatGPT, Claude, Claude Code or Codex, so it can work in CakeCRM as you. It sees what you can see, and what it adds or changes is recorded as you, made through that tool. CakeCRM needs no AI keys for this. Members can connect once an admin has switched it on under <a href="#/settings/workspace">Workspace settings</a>; admins always can.</p>
+<ul>
+<li><strong>ChatGPT or Claude</strong>: copy the address on the card and add it as a connector in the app. A CakeCRM window opens. Sign in, check which app is asking, choose <strong>Read and write</strong> or <strong>Read only</strong>, and press <strong>Allow</strong>. This needs your CakeCRM to have a public https address; the card says so if it has none.</li>
+<li><strong>Coding tools</strong>: create a personal token with a name, Read and write or Read only, and an expiry of 30 days, 90 days, a year or never. It is shown once, so copy it. Pick your tool on the card to get the exact command or settings block with the token filled in.</li>
+</ul>
+<p>Tools that archive, merge, drop, change many records at once or set reminders ask you before they run. A connected tool never sees Gmail, never deletes a contact, and never changes Baker's notes or memory.</p>
+<p>Each connection shows when it was connected and last used. <strong>Calls</strong> lists what it did over the last 90 days, without what it asked or got back. <strong>Revoke</strong> disconnects it at once. A password change disconnects all of your tools.</p>
 <h2>Light and dark</h2>
 <p>The light and dark switch is in the top bar, not in Settings. See <a href="#/getting-started/light-and-dark">Light and dark mode</a>.</p><nav class="pn"><a href="#/baker/ai-setup"><small>Previous</small>AI setup</a><a class="next" href="#/settings/assistant"><small>Next</small>Assistant settings</a></nav></article>
 <article data-route="settings/assistant" data-title="Assistant settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Assistant settings</h1><p class="lead">Open Baker&#x27;s memory, choose the todo mode, and manage the no-login todo links.</p><p>The <strong>Assistant</strong> tab has two cards. Everyone sees <strong>Assistant memory</strong>. <strong>Todo mode</strong> is for admins only.</p>
@@ -1766,7 +1774,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <p><strong>Copy</strong> puts a link on your clipboard. These links are shown on this card and nowhere else. Treat them like passwords. See <a href="#/todos/no-login-links">No-login links</a>.</p>
 <h2>AI provider keys</h2>
 <p>Connecting an AI provider is not on this tab. Admins use <strong>AI Setup</strong> in the top bar. See <a href="#/baker/ai-setup">AI setup</a>.</p><nav class="pn"><a href="#/settings/personal"><small>Previous</small>Personal settings</a><a class="next" href="#/settings/workspace"><small>Next</small>Workspace settings</a></nav></article>
-<article data-route="settings/workspace" data-title="Workspace settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Workspace settings</h1><p class="lead">Admin-only settings for your company name and logo, your team, custom fields, and exporting your data.</p><p>The <strong>Workspace</strong> tab is for admins only. Members do not see it.</p>
+<article data-route="settings/workspace" data-title="Workspace settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Workspace settings</h1><p class="lead">Admin-only settings for your company name and logo, your team, custom fields, exporting your data, and AI tool connections.</p><p>The <strong>Workspace</strong> tab is for admins only. Members do not see it.</p>
 <figure class="shot"><img data-shot="settings-workspace" width="1400" height="1733" alt="Workspace settings screenshot"></figure>
 
 <h2>Branding</h2>
@@ -1796,7 +1804,10 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <p>Pick <strong>Contacts</strong>, <strong>Companies</strong> or <strong>Deals</strong>, then <strong>+ Add custom field</strong>. Give it a name and a type: text, number, boolean, date or select. Deleting a field deletes its values everywhere, with no undo. See <a href="#/contacts-and-companies/custom-fields">Custom fields</a>.</p>
 <h2>Export data</h2>
 <p><strong>Download CSV export</strong> on the Export data card downloads everything in the CRM as one ZIP, with a CSV file per table: companies, contacts, deals and their stage history, activity, todos and projects, notes, custom fields, saved views, Baker's memory, and a users file for looking up owner names. Archived deals are included. Passwords, two-factor secrets, API keys, connection tokens, note attachments and Baker conversations are never exported.</p>
-<p>It is a snapshot, not a sync: download again for fresh numbers. Take one before a big change, such as clearing data or a large import.</p><nav class="pn"><a href="#/settings/assistant"><small>Previous</small>Assistant settings</a><a class="next" href="#/settings/integrations"><small>Next</small>Integrations settings</a></nav></article>
+<p>It is a snapshot, not a sync: download again for fresh numbers. Take one before a big change, such as clearing data or a large import.</p>
+<h2>AI tool connections</h2>
+<p><strong>Members may connect their own AI tools</strong> is off until you turn it on. Admins can always connect. Turning it off stops every member's connection straight away without deleting it, and turning it back on restores them.</p>
+<p>The card lists every person's connected AI tools: what each one is, whether it signed in or uses a personal token, whether it is read-only, and when it was connected and last used. <strong>Calls</strong> shows a connection's log for the last 90 days, and <strong>Revoke</strong> ends it. See <a href="#/settings/personal">Personal settings</a> for how people connect.</p><nav class="pn"><a href="#/settings/assistant"><small>Previous</small>Assistant settings</a><a class="next" href="#/settings/integrations"><small>Next</small>Integrations settings</a></nav></article>
 <article data-route="settings/integrations" data-title="Integrations settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Integrations settings</h1><p class="lead">Admin-only cards for connecting the team&#x27;s Telegram bot and a Gmail mailbox.</p><p>The <strong>Integrations</strong> tab is for admins only. Members do not see it. It holds two cards.</p>
 <figure class="shot"><img data-shot="settings-integrations" width="1400" height="1331" alt="Integrations settings screenshot"></figure>
 
@@ -1923,7 +1934,7 @@ python run.py
 </tr>
 <tr>
 <td><code>BACKEND_URL</code></td>
-<td>Your public address, if you run behind your own domain or proxy. Gmail's redirect URI is built from it.</td>
+<td>Your public address, if you run behind your own domain or proxy. Gmail's redirect URI is built from it, and ChatGPT and Claude sign in to it when people connect their own AI tool (it must be https for that).</td>
 </tr>
 </tbody>
 </table></div>

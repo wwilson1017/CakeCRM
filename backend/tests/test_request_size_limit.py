@@ -197,6 +197,7 @@ def test_the_attachment_ceiling_clears_the_feature_limit():
         "/api/crm/chatter/note/attachments",  # missing the id segment
         "/api/assistant/chat",  # a route with a legitimately larger body
         "/api/crm/importer",  # a longer name that must not be swallowed by /import
+        "/mcp/extra",  # not the /mcp route (#322)
         "/",
     ],
 )
@@ -351,6 +352,8 @@ def test_each_ceiling_is_exactly_its_feature_cap_plus_the_envelope():
     assert len(templates) == len(set(templates)), f"duplicate template rows: {templates}"
 
     actual = dict(main._ROUTE_REQUEST_LIMIT_SPECS)
+    # The one non-upload row (#322) has no envelope: its value is pinned on its own.
+    assert actual.pop("/mcp") == main.MCP_REQUEST_BYTES
     assert actual.keys() == expected.keys(), "a row was added or removed without a value pinned"
     for template, feature_cap in expected.items():
         assert actual[template] == feature_cap + main.MULTIPART_ENVELOPE_BYTES, (
@@ -513,3 +516,8 @@ def test_a_trailing_slash_does_not_reach_the_parser(attachment_client, monkeypat
     r = attachment_client.post(ATTACHMENT_PATH + "/", files=body, follow_redirects=True)
     assert r.status_code == 413
     assert parsed == []
+
+
+def test_the_mcp_path_has_a_small_ceiling():
+    """#322: reachable without a session, and it takes no upload."""
+    assert main._request_limit_for("/mcp") == main.MCP_REQUEST_BYTES == 1_000_000

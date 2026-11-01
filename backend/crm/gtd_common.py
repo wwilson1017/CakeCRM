@@ -30,8 +30,9 @@ PROJECT_STATUSES = ("active", "someday", "completed", "dropped")
 # can produce, which is what makes it useful: it marks rows whose text a stranger
 # may have typed. Never client-supplied — every write site passes its own literal.
 # `agent` is Baker acting on a request; `observer` is Baker filing something it noticed
-# in a conversation (#260). The GTD UI labels every value but `ui` (gtd/sourceLabel.ts).
-TODO_SOURCES = ("capture_web", "telegram", "agent", "observer", "ui")
+# in a conversation (#260); `mcp` is a connected AI tool working as a seat (#322). The
+# GTD UI labels every value but `ui` (gtd/sourceLabel.ts).
+TODO_SOURCES = ("capture_web", "telegram", "agent", "observer", "ui", "mcp")
 
 # The two statuses that mean "this is finished, stop showing it as work".
 FINISHED_STATUSES = ("done", "dropped")

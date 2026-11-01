@@ -95,6 +95,11 @@ _HIDING_STATUS: dict[str, frozenset[str]] = {
 }
 
 
+# Every tool that can take a record out of view on some arguments. The /mcp surface marks
+# them destructiveHint:true, because an MCP tool hint is per tool, not per call (#322).
+HIDE_CAPABLE_TOOLS: frozenset[str] = frozenset(_HIDING_STATUS)
+
+
 # Arguments other than `status` whose non-empty value hides the record (#261).
 _HIDING_ARGS: dict[str, tuple[str, ...]] = {
     "crm_update_todo": ("bring_back_on",),

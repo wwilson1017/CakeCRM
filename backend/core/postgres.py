@@ -176,6 +176,7 @@ def pg_execute(sql: str, params: tuple | list | dict = ()) -> int:
 #   pg_advisory_xact_lock(1901)       — first-admin bootstrap (users/bootstrap.py)
 #   pg_advisory_xact_lock(2801)       — todo context rename (crm/gtd_service.rename_context)
 #   pg_advisory_xact_lock(2930, user_id) — todo web sessions, per-seat writes (crm/todo_sessions.py)
+#   pg_advisory_xact_lock(3220, user_id) — AI tool connections, per-seat cap (mcp_endpoint/store.py)
 
 
 def run_migrations() -> None:
