@@ -649,7 +649,10 @@ to successful results, including approved writes.
 
 `assistant_deal_finds` is a set keyed by `(conversation_id, deal_id)`, cascading on
 conversation deletion. It has no deals FK, is excluded from export as owner-only
-bookkeeping, and joins both CRM reset branches because deal ids restart. Registry state
+bookkeeping, and joins both CRM reset branches because deal ids restart. Each find is
+stamped with the CRM epoch (`crm_meta.updated_at`, bumped by every reset) read before
+the finding tool runs, and counts only while that epoch is current, so neither a reset
+mid-turn nor a find saved just after a reset can license a write to a reused id. Registry state
 loads it once; load failures fail closed and save failures leave this run's finds usable.
 A fresh approval registry after a reset must find again. Conversationless runs remember
 finds only for that run. Finds survive compaction and are saved before the transcript;

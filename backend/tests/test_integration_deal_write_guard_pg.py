@@ -80,7 +80,13 @@ def test_finds_persist_isolate_warn_cascade_and_reset(pg_db, include_definitions
     with get_connection() as conn, conn.cursor() as cur:
         service._truncate_all(cur, include_definitions=include_definitions)
     assert pg_fetchall("SELECT * FROM assistant_deal_finds") == []
+    # A find saved after a reset (stamped with the old epoch) never counts for the new CRM.
+    service.clear_all()
+    pg_execute("INSERT INTO assistant_deal_finds (conversation_id, deal_id, crm_epoch) "
+               "VALUES (%s, 1, '2000-01-01')", (other,))
     replacement = service.create_deal(title="Replacement renewal")
+    assert replacement["id"] == 1
     fresh = ToolRegistry()
     fresh.conversation_id = other
     assert fresh.execute_tool_sync("crm_update_deal", {"deal_id": replacement["id"]})["ok"] is False
+    pg_execute("DELETE FROM assistant_conversations WHERE id = %s", (other,))  # next param run starts clean

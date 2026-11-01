@@ -9,21 +9,24 @@ from crm.links import with_deal_url
 
 @pytest.fixture
 def guard_db(monkeypatch):
-    finds = set()
+    finds = {}  # (conversation_id, deal_id) -> crm epoch
     closed = []
+    crm = {"epoch": 1}
 
     def fetch(sql, params):
         if 'assistant_deal_finds' in sql:
-            return [{"deal_id": i} for cid, i in sorted(finds) if cid == params[0]]
+            return [{"deal_id": i} for (cid, i), epoch in sorted(finds.items())
+                    if cid == params[0] and epoch == params[1]]
         return [row for row in closed if row['id'] in params[0]]
 
     def execute(sql, params):
-        assert 'ON CONFLICT DO NOTHING' in sql
-        finds.update((params[0], i) for i in params[1])
+        assert 'ON CONFLICT' in sql
+        finds.update(((params[0], i), params[2]) for i in params[1])
 
     monkeypatch.setattr(guard, 'pg_fetchall', fetch)
     monkeypatch.setattr(guard, 'pg_execute', execute)
-    return finds, closed
+    monkeypatch.setattr(guard, 'pg_fetchone', lambda sql: {"updated_at": crm["epoch"]})
+    return finds, closed, crm
 
 
 @pytest.fixture
@@ -115,7 +118,7 @@ def test_optional_links_and_contacts_are_not_deal_targets(make_registry):
 def test_next_message_and_conversation_isolation(make_registry, guard_db):
     first = make_registry('chat')
     first.execute_tool_sync('crm_get_deal', {})
-    assert guard_db[0] == {('chat', 7)}
+    assert set(guard_db[0]) == {('chat', 7)}
     second = make_registry('chat')
     assert 'error' not in second.execute_tool_sync('crm_update_deal', {'deal_id': 7})
     assert 'error' in make_registry('other').execute_tool_sync('crm_update_deal', {'deal_id': 7})
@@ -223,3 +226,42 @@ def test_reset_invalidates_a_pending_approval(make_registry, guard_db, monkeypat
     result = engine.resolve_confirmation(fresh, "chat", "t", "approve", user=None)["result"]
     assert result["ok"] is False
     assert fresh.calls == []
+
+
+def test_reset_mid_turn_drops_the_cached_find(make_registry, guard_db):
+    reg = make_registry("chat")
+    reg.execute_tool_sync("crm_get_deal", {})
+    reg.next_tool_batch()
+    guard_db[0].clear()
+    guard_db[2]["epoch"] = 2  # CRM reset; a new deal 7 may now exist.
+    assert reg.execute_tool_sync("crm_update_deal", {"deal_id": 7})["ok"] is False
+    assert len(reg.calls) == 1
+
+
+def test_find_saved_after_a_racing_reset_does_not_count(make_registry, guard_db):
+    reg = make_registry("chat")
+    read = reg.executors["crm_get_deal"]
+
+    def read_then_reset(**args):
+        result = read(**args)
+        guard_db[2]["epoch"] = 2  # the reset lands after the read, before its find is saved
+        return result
+
+    reg.executors["crm_get_deal"] = read_then_reset
+    reg.execute_tool_sync("crm_get_deal", {})
+    assert guard_db[0] == {("chat", 7): 1}
+    reg.next_tool_batch()
+    assert reg.execute_tool_sync("crm_update_deal", {"deal_id": 7})["ok"] is False
+    assert make_registry("chat").execute_tool_sync("crm_update_deal", {"deal_id": 7})["ok"] is False
+
+
+def test_unreadable_epoch_refuses_writes_and_records_no_find(make_registry, guard_db, monkeypatch):
+    def broken(sql):
+        raise RuntimeError("unavailable")
+
+    monkeypatch.setattr(guard, "pg_fetchone", broken)
+    reg = make_registry("chat")
+    reg.execute_tool_sync("crm_get_deal", {})
+    assert guard_db[0] == {}
+    reg.next_tool_batch()
+    assert reg.execute_tool_sync("crm_update_deal", {"deal_id": 7})["ok"] is False

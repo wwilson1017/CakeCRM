@@ -94,6 +94,7 @@ class ToolRegistry:
         self.conversation_id: str | None = None
         self.tool_batch = 0
         self.found_deals: dict[int, int] | None = None
+        self.found_epoch = None
 
         # ``{deal_id: (title, url)}`` for every deal record a tool returned through this
         # registry (#238). A registry is built per turn, so the map never outlives the
@@ -221,6 +222,7 @@ class ToolRegistry:
         warning = None
         if self.is_write(name):
             warning = deal_write_guard.closed_warning(deal_write_guard.target_deal_ids(args or {}))
+        epoch = deal_write_guard.epoch_before(name, self.is_write(name))
         try:
             result = fn(**(args or {}))
         except TypeError as e:  # LLM passed bad/unexpected arguments
@@ -231,7 +233,7 @@ class ToolRegistry:
             return {"error": f"The tool '{name}' failed. Please try again."}
         try:
             remember_deal_refs(result, self.deal_refs)
-            deal_write_guard.note_found(self, name, self.is_write(name), result)
+            deal_write_guard.note_found(self, result, epoch)
         except Exception:  # bookkeeping must never cost a tool (a write!) its result
             logger.exception("assistant: could not record deal refs from %s", name)
         if warning and isinstance(result, dict) and "error" not in result and result.get("ok") is not False:

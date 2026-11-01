@@ -1338,6 +1338,7 @@ async def test_unfound_deal_write_refused_before_confirmation(store, monkeypatch
     from crm import deal_write_guard
 
     monkeypatch.setattr(deal_write_guard, 'pg_fetchall', lambda *a: [])
+    monkeypatch.setattr(deal_write_guard, 'pg_fetchone', lambda *a: None)
     reg = ToolRegistry()
     calls = []
     reg.executors['crm_archive_deal'] = lambda **kw: calls.append(kw)
@@ -1362,6 +1363,7 @@ async def test_deal_found_in_an_earlier_batch_can_be_written(store, monkeypatch)
 
     monkeypatch.setattr(deal_write_guard, "pg_fetchall", lambda *a: [])
     monkeypatch.setattr(deal_write_guard, "pg_execute", lambda *a: 1)
+    monkeypatch.setattr(deal_write_guard, "pg_fetchone", lambda *a: None)
     reg = ToolRegistry()
     calls = []
     reg.executors["crm_get_deal"] = lambda **kw: with_deal_url({"id": 7, "title": "Renewal"})
