@@ -2,9 +2,10 @@
  * Reminders (issue #283), on the shared collection layer — shaped like TodosPage.
  *
  * The corpus is every reminder (the list endpoint's keyset sweep); Mine / status / date
- * filtering is the collection layer's, client-side. Only an upcoming reminder can be
- * edited or voided; any reminder can be copied with Remind again. Each action closes the
- * detail before opening its form, as TodosPage does, so no modal is nested in another.
+ * filtering is the collection layer's, client-side. An upcoming or paused reminder can be
+ * edited or voided; Pause / Resume keep its detail open. Any reminder can be copied with
+ * Remind again. Actions with forms close the detail first, as TodosPage does, so no modal
+ * is nested in another.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../core/api/client';
@@ -19,7 +20,7 @@ import { pageHeading, btnPrimary, btnSecondary, btnSmall } from './styles';
 import { RefreshButton } from './components/RefreshButton';
 import { ReminderForm, VoidReminderForm } from './components/ReminderForm';
 import { REPEAT_LABELS, makeRemindersCollectionConfig, reminderWhen } from './remindersCollection';
-import { useCrmCorpus, type CrmCorpus } from './usePatchableAssembly';
+import { useCrmCorpus, writeMayHaveLanded, type CrmCorpus } from './usePatchableAssembly';
 import { useLocalDay } from './useLocalDay';
 import { useUsers } from './useUsers';
 import { getFilters } from './gtd/api';
@@ -28,7 +29,7 @@ import { formatDay, todayStr } from './gtd/util';
 const NO_ROWS: CrmReminder[] = [];
 
 const STATUS_LABEL: Record<CrmReminder['status'], string> = {
-  upcoming: 'Upcoming', fired: 'Sent', voided: 'Voided',
+  upcoming: 'Upcoming', paused: 'Paused', fired: 'Sent', voided: 'Voided',
 };
 
 type Modal =
@@ -141,6 +142,19 @@ interface CollectionProps {
 function RemindersCollection(
   { corpus, columns, meId, today, nameFor, selectedId, onSelect, onAction }: CollectionProps,
 ) {
+  // The collection can remount its detail during a retry; keep write feedback here.
+  const [write, setWrite] = useState<{ id: number; saving: boolean; error: string } | null>(null);
+  async function changeStatus(r: CrmReminder) {
+    setWrite({ id: r.id, saving: true, error: '' });
+    try {
+      const action = r.status === 'paused' ? 'resume' : 'pause';
+      corpus.upsert(await api<CrmReminder>(`/api/crm/reminders/${r.id}/${action}`, { method: 'POST' }));
+      setWrite(null);
+    } catch (err: unknown) {
+      setWrite({ id: r.id, saving: false, error: err instanceof Error ? err.message : 'Failed to save' });
+      if (writeMayHaveLanded(err)) corpus.retry();
+    }
+  }
   const config = useMemo(() => makeRemindersCollectionConfig({ columns, meId }), [columns, meId]);
   const rows = corpus.items ?? NO_ROWS;
   const state = useCollectionState(config, rows);
@@ -150,7 +164,7 @@ function RemindersCollection(
       state={state}
       items={rows}
       selectedId={selectedId}
-      onSelect={id => onSelect(id === null ? null : Number(id))}
+      onSelect={id => { setWrite(null); onSelect(id === null ? null : Number(id)); }}
       searchPlaceholder="Search reminders..."
       loading={{
         loading: corpus.loading,
@@ -159,8 +173,12 @@ function RemindersCollection(
         retry: corpus.retry,
       }}
       detail={{
-        render: r => <ReminderDetailBody reminder={r} today={today} nameFor={nameFor} onAction={onAction} />,
-        // Each action closes this detail before opening its form, so none can be orphaned.
+        render: r => (
+          <ReminderDetailBody key={r.id} reminder={r} today={today} nameFor={nameFor}
+            onAction={onAction} onChangeStatus={() => changeStatus(r)}
+            saving={write?.id === r.id && write.saving} error={write?.id === r.id ? write.error : ''} />
+        ),
+        // Actions with forms close this detail first, so none can be orphaned.
         onRequestClose: () => true,
       }}
     />
@@ -168,8 +186,9 @@ function RemindersCollection(
 }
 
 function ReminderDetailBody(
-  { reminder: r, today, nameFor, onAction }:
-  { reminder: CrmReminder; today: string; nameFor: (id: number | null) => string; onAction: (m: Modal) => void },
+  { reminder: r, today, nameFor, onAction, onChangeStatus, saving, error }:
+  { reminder: CrmReminder; today: string; nameFor: (id: number | null) => string; onAction: (m: Modal) => void;
+    onChangeStatus: () => void; saving: boolean; error: string },
 ) {
   const btn = { ...btnSecondary, padding: '10px 16px', borderRadius: 6, fontSize: 13, border: `1px solid ${LINE_STRONG}`, color: INK };
   return (
@@ -183,14 +202,16 @@ function ReminderDetailBody(
         {r.fired_at && <DetailRow label="Sent" value={formatDay(r.fired_at)} />}
         {r.status === 'voided' && <DetailRow label="Voided because" value={r.void_reason} />}
       </div>
+      {error && <p role="alert" style={{ color: CORAL_TEXT, fontSize: 12, marginBottom: 12 }}>{error}</p>}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {r.status === 'upcoming' && (
+        {(r.status === 'upcoming' || r.status === 'paused') && (
           <>
-            <button onClick={() => onAction({ kind: 'edit', reminder: r })} style={btn}>Edit</button>
-            <button onClick={() => onAction({ kind: 'void', reminder: r })} style={btn}>Void</button>
+            <button disabled={saving} onClick={() => onAction({ kind: 'edit', reminder: r })} style={btn}>Edit</button>
+            <button disabled={saving} onClick={onChangeStatus} style={btn}>{r.status === 'paused' ? 'Resume' : 'Pause'}</button>
+            <button disabled={saving} onClick={() => onAction({ kind: 'void', reminder: r })} style={btn}>Void</button>
           </>
         )}
-        <button onClick={() => onAction({ kind: 'again', reminder: r })} style={btn}>Remind again</button>
+        <button disabled={saving} onClick={() => onAction({ kind: 'again', reminder: r })} style={btn}>Remind again</button>
       </div>
     </div>
   );

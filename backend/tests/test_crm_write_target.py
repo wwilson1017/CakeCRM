@@ -340,9 +340,13 @@ def test_reminder_writes_name_their_target(monkeypatch):
     monkeypatch.setattr(reminder_service, "create_reminder", lambda **kw: row)
     monkeypatch.setattr(reminder_service, "update_reminder", lambda rid, fields: row)
     monkeypatch.setattr(reminder_service, "void_reminder", lambda rid, reason: row)
+    monkeypatch.setattr(reminder_service, "pause_reminder", lambda rid: row)
+    monkeypatch.setattr(reminder_service, "resume_reminder", lambda rid: row)
     ex = reminder_tools.REMINDER_TOOL_EXECUTORS
     for result in (ex["reminder_create"](note="Call Acme", due_date="2030-01-01"),
                    ex["reminder_update"](reminder_id=9, note="Call Acme"),
-                   ex["reminder_void"](reminder_id=9, reason="done")):
+                   ex["reminder_void"](reminder_id=9, reason="done"),
+                   ex["reminder_pause"](reminder_id=9),
+                   ex["reminder_resume"](reminder_id=9)):
         assert result["target"] == {"entity_type": "reminder", "id": 9, "title": "Call Acme",
                                     "owner_id": 2}

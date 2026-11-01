@@ -345,7 +345,7 @@ export interface CrmTodayReminderItem {
 export type CrmTodayItem = CrmTodayTodoItem | CrmTodayDealItem | CrmTodayReminderItem;
 
 export type ReminderRepeat = 'daily' | 'weekly' | 'monthly' | 'yearly';
-export type ReminderStatus = 'upcoming' | 'fired' | 'voided';
+export type ReminderStatus = 'upcoming' | 'paused' | 'fired' | 'voided';
 
 /** A reminder (#283): a note delivered verbatim to `people` at a date and optional time. */
 export interface CrmReminder {
