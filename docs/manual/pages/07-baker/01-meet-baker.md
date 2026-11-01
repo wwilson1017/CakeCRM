@@ -48,3 +48,9 @@ Baker's memory is different: the facts it records and the files it keeps are sha
 ## On your phone
 
 Each person can link their own Telegram account and chat with Baker from there. See [Telegram](../09-integrations/02-telegram.md).
+
+## Talk to Baker and hear replies
+
+When an OpenAI key is connected and your browser can record audio, a mic appears beside Send. Hold to speak and let go to send, slide left to cancel, or tap or swipe up for hands-free recording. Stop in hands-free mode puts the words in the box to review. Text arrives after recording ends; a timer and wave show progress while you speak. Recordings stop after three minutes. The mic needs a secure page and browser permission. An OpenAI key can handle speech even when another provider handles chat.
+
+The speaker toggle in the header reads new replies once they finish. It starts off and is remembered on this device. Sending a message arms that thread for automatic reading, including replies after approvals; opening history alone does not. Each finished reply also has a Read aloud button. The browser's speech engine needs no additional key; some voices use a network service from your browser vendor. Starting the mic stops playback. Recordings go through your install to the transcribing provider and are never stored by CakeCRM.

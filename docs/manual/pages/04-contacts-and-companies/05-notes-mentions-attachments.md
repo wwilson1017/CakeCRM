@@ -34,3 +34,7 @@ Each note has **Edit** and **Archive**. An edited note is marked "· edited". An
 ## Notes field versus Chatter
 
 A contact or company also has a single **Notes** field on its form. It shows in a card near the top of the page. Use it for a standing summary, such as "Weekly bread and pastry buyer." Use Chatter for the running story.
+
+## Dictate a note
+
+With a transcribing provider connected (today OpenAI) and a browser that supports recording, use the mic beside Attach on a contact, company or deal. Hold to speak and release, or tap for hands-free recording and press Stop. The transcript is appended to your draft, with a best-effort tidy of filler words and false starts. Nothing is saved until you press Post. Review names, numbers and meaning: a conservative word check falls back to the raw transcript for some changes, but cannot catch every mistake. The audio goes through your install to the transcribing provider and is never stored by CakeCRM; the text also goes to the active chat provider for the tidy pass.

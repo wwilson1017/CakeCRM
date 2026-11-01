@@ -114,6 +114,15 @@ class AIProvider(ABC):
         """
         return None
 
+    @property
+    def can_transcribe(self) -> bool:
+        """Whether this provider supports speech to text; unsupported mics stay hidden."""
+        return False
+
+    async def transcribe(self, audio: bytes, mime: str, filename: str) -> str:
+        """Transcribe one clip without retaining its bytes."""
+        raise NotImplementedError(f"{self.provider_name} cannot transcribe audio")
+
     def build_tool_turn(
         self,
         text: str,

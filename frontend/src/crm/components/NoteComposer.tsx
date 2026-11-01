@@ -10,6 +10,7 @@ import {
 import {
   COMPOSER_MIN_HEIGHT_PX, composerKeyAction, MAX_NOTE_LEN, nextComposerHeight,
 } from '../chatterComposer';
+import { VoiceMicButton } from '../../shared/voice/VoiceMicButton';
 import { useMentionPicker } from './MentionPicker';
 import {
   ACCENT, ACCENT_INK, ACCENT_TEXT, CORAL_FILL, CORAL_TEXT, INK, INK_DIM, INK_MUTE, LINE, LINE_STRONG,
@@ -278,7 +279,7 @@ export function NoteComposer({
         </ul>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
         <input
           ref={fileInputRef}
           type="file"
@@ -299,6 +300,10 @@ export function NoteComposer({
             opacity: staged.length >= MAX_ATTACHMENTS ? 0.5 : 1,
           }}
         >Attach</button>
+        <VoiceMicButton mode="review" tidy disabled={disabled} onTranscript={transcript => {
+          setText(prev => (prev.trim() ? `${prev.replace(/\s+$/, '')} ${transcript}` : transcript));
+          textareaRef.current?.focus();
+        }} />
         <span style={{ ...mono(10), color: INK_DIM, flex: 1 }}>
           Paste or drop files · Cmd/Ctrl+Enter to post
         </span>

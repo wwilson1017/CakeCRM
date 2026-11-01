@@ -643,3 +643,40 @@
   `test_assistant_turns.py` (memory twin), `test_assistant_turn_routes.py`,
   `test_assistant_turns_pg.py` (integration), `useAssistantChat.reattach.test.tsx`,
   `WorkingIndicator.test.tsx`.
+
+- **Voice (#338, port of cake_os #3832/#3820/#4019/#4020 — `backend/voice/`,
+  `frontend/src/shared/voice/`).** `AIProvider.can_transcribe` defaults false and
+  `transcribe` defaults to unsupported. Only OpenAI implements it, with a lazy SDK
+  import and fixed `gpt-4o-mini-transcribe` model; other endpoints are unverified.
+  `get_transcriber` prefers the active capable provider, then usable OpenAI.
+  `voice_ready = ai_ready and transcriber` comes from setup status; `VoiceReadyContext`
+  shares CrmLayout's existing fetch with both composers. Missing readiness or browser
+  recording support hides the mic.
+  `POST /api/voice/transcribe?tidy=true` accepts a raw audio body: auth, transcriber,
+  per-seat throttle (20/minute), MIME check, then bounded stream read (8 MiB), empty
+  check, transcription. Refusals before reading avoid even a multipart disk spool.
+  The Content-Length backstop includes the standard 64 KiB envelope; the stream cap
+  remains exactly 8 MiB. No audio file, row or log is written. Provider errors expose
+  only a generic response and exception class. The optional chatter tidy resolves the
+  ACTIVE provider's light tier inside the fail-open boundary, nonce-fences dictation,
+  bounds the reply/time, and uses `facts_preserved` to reject dropped digit tokens or
+  capitalised words. This is a conservative token guard, not a guarantee of meaning:
+  all dictated notes are reviewed before Post. The prompt joins the genericization guard.
+  Hold/release sends in Baker; slide left 80 px cancels; swipe up 60 px or tap under
+  250 ms locks; Stop and the three-minute/byte caps review. Chatter always reviews.
+  Tracks stop on every exit. New chat and conversation open increment `threadEpoch`
+  at their start to remount the mic, cancel recording and abort/drop stale uploads.
+  Read-aloud uses browser `speechSynthesis`, one page-wide generation-guarded player,
+  markdown-to-prose and utterances of at most 250 characters. Preference is local,
+  default off. Explicit `arm` on each local send enables automatic completed replies
+  and later approval continuations; `disarm` on thread changes keeps history silent.
+  New sends, disable, unmount and recording cancel playback. No voice key gate for
+  playback itself. SDK clients opened for transcription are closed after each request.
+  Deliberately not ported: live transcription (upstream's direct browser Realtime
+  websocket bypasses the install; server-routed preview needs a follow-up), hold-key,
+  Voice words, ElevenLabs, speed, usage/cost rows. No schema or dependency changes.
+  Tests: backend `test_voice_provider`, `test_voice_router`, `test_voice_tidy`, setup
+  status in `test_router`, request limits, genericization, help and manual; frontend
+  shared voice tests cover gestures, recorder teardown, mic availability/upload races,
+  prose cleanup, segments, preference and player ownership; `useReadAloud.test.tsx`
+  pins arming/continuations/history, and `NoteComposer.test.tsx` pins review-only append.
