@@ -118,6 +118,7 @@ export function InboxPage() {
           todo={head}
           projects={projects}
           contexts={filters?.contexts ?? []}
+          tags={filters?.tags ?? []}
           onProcessed={processed}
           onChanged={changed}
           onEdit={setEditTodo}
