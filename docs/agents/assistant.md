@@ -672,3 +672,21 @@ the user check intent. This is an assistant guard, not record access control.
 Tests: `test_deal_write_guard.py`, the pre-card case in `test_assistant_engine.py`, and
 `test_integration_deal_write_guard_pg.py` (persistence, isolation, cascade and reset).
 Future MCP dispatch (#323) must retain this guard and advance tool batches too.
+
+## Honest endings and 429 backoff (#340, port of cake_os #3831/#3855)
+
+Attended turns treat at least one completed provider round or streamed nonblank text
+as billed for the unfinished-reply note. Errors and cut streams then save unsaved text
+plus a note; exhausted tool rounds save a note on their own. Completed empty/refused
+answers and max_tokens replies fold the note into the existing iteration row. Only
+executed tool calls count as progress; after tools ran the note asks the user to check
+the results, rather than blindly resend. Persistence is best-effort, with warnings.
+The detached runner's stop/dead-turn endings, confirmation narration's honest note,
+and deliberate budget termination are unchanged.
+
+Anthropic, OpenAI and OpenAI-compatible 429 events name the actual model via the tier
+label rule and carry retry_after seconds. The engine retries only an attempt whose
+first event is that error, once per entire turn (including confirmation narration),
+on the same model: 2 seconds by default, supplied delays clamped to 0–10 seconds.
+The provider stream closes before the cancellable wait; tests patch _sleep.
+Not ported: fallback-model switching, background runner changes, or Google 429 handling.

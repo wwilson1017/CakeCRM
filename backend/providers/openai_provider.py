@@ -12,7 +12,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator
 
-from providers.base import AIProvider
+from providers.base import AIProvider, rate_limit_event
 
 logger = logging.getLogger(__name__)
 
@@ -183,8 +183,8 @@ class OpenAIProvider(AIProvider):
 
             stop_reason = "tool_use" if tool_calls else "stop"
 
-        except openai.RateLimitError:
-            yield {"type": "error", "error": "OpenAI is rate-limited. Please try again in a moment."}
+        except openai.RateLimitError as e:
+            yield rate_limit_event(self.model, e)
             yield {"type": "_turn_complete", "tool_calls": [], "stop_reason": "error"}
             return
 

@@ -15,7 +15,7 @@ import time
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
 
-from providers.base import AIProvider
+from providers.base import AIProvider, rate_limit_event
 from providers.windows import get_context_window
 
 if TYPE_CHECKING:  # annotations only — never imported at runtime
@@ -206,8 +206,8 @@ class AnthropicProvider(AIProvider):
                 final_message = await stream.get_final_message()
                 stop_reason = final_message.stop_reason
 
-        except anthropic.RateLimitError:
-            yield {"type": "error", "error": "Claude is rate-limited. Please try again in a moment."}
+        except anthropic.RateLimitError as e:
+            yield rate_limit_event(self.model, e)
             yield {"type": "_turn_complete", "tool_calls": [], "stop_reason": "error"}
             return
 
