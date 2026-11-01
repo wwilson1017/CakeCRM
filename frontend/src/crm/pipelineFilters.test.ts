@@ -99,30 +99,30 @@ describe('last-activity buckets', () => {
   const daysAgo = (n: number) => new Date(2026, 4, 15 - n, 12, 0, 0).toISOString();
 
   it('le7 and le30 are recency windows', () => {
-    expect(dealMatchesAdvanced(deal({ last_activity_at: daysAgo(3) }), adv({ lastActivity: 'le7' }), now)).toBe(true);
-    expect(dealMatchesAdvanced(deal({ last_activity_at: daysAgo(20) }), adv({ lastActivity: 'le7' }), now)).toBe(false);
-    expect(dealMatchesAdvanced(deal({ last_activity_at: daysAgo(20) }), adv({ lastActivity: 'le30' }), now)).toBe(true);
+    expect(dealMatchesAdvanced(deal({ last_contact_at: daysAgo(3) }), adv({ lastActivity: 'le7' }), now)).toBe(true);
+    expect(dealMatchesAdvanced(deal({ last_contact_at: daysAgo(20) }), adv({ lastActivity: 'le7' }), now)).toBe(false);
+    expect(dealMatchesAdvanced(deal({ last_contact_at: daysAgo(20) }), adv({ lastActivity: 'le30' }), now)).toBe(true);
   });
 
   it('stale30 INCLUDES never-contacted deals, so le30 and stale30 partition the set', () => {
     const stale = adv({ lastActivity: 'stale30' });
-    expect(dealMatchesAdvanced(deal({ last_activity_at: daysAgo(40) }), stale, now)).toBe(true);
+    expect(dealMatchesAdvanced(deal({ last_contact_at: daysAgo(40) }), stale, now)).toBe(true);
     // The subtle one: a deal with no activity at all is stale, not excluded.
-    expect(dealMatchesAdvanced(deal({ last_activity_at: null }), stale, now)).toBe(true);
-    expect(dealMatchesAdvanced(deal({ last_activity_at: daysAgo(3) }), stale, now)).toBe(false);
+    expect(dealMatchesAdvanced(deal({ last_contact_at: null }), stale, now)).toBe(true);
+    expect(dealMatchesAdvanced(deal({ last_contact_at: daysAgo(3) }), stale, now)).toBe(false);
 
     // Partition check: every deal is in exactly one of le30 / stale30.
     const le30 = adv({ lastActivity: 'le30' });
-    for (const d of [deal({ last_activity_at: daysAgo(3) }), deal({ last_activity_at: daysAgo(40) }), deal({ last_activity_at: null })]) {
+    for (const d of [deal({ last_contact_at: daysAgo(3) }), deal({ last_contact_at: daysAgo(40) }), deal({ last_contact_at: null })]) {
       expect(dealMatchesAdvanced(d, le30, now) !== dealMatchesAdvanced(d, stale, now)).toBe(true);
     }
   });
 
   it("'none' matches only a deal with no logged activity", () => {
     const f = adv({ lastActivity: 'none' });
-    expect(dealMatchesAdvanced(deal({ last_activity_at: null }), f, now)).toBe(true);
+    expect(dealMatchesAdvanced(deal({ last_contact_at: null }), f, now)).toBe(true);
     expect(dealMatchesAdvanced(deal(), f, now)).toBe(true);
-    expect(dealMatchesAdvanced(deal({ last_activity_at: daysAgo(3) }), f, now)).toBe(false);
+    expect(dealMatchesAdvanced(deal({ last_contact_at: daysAgo(3) }), f, now)).toBe(false);
   });
 });
 
@@ -132,11 +132,11 @@ describe('the two buckets combine with AND', () => {
 
   it('a deal must satisfy both active buckets, not either', () => {
     const f = adv({ closeDate: 'overdue', lastActivity: 'stale30' });
-    const match = deal({ stage: 'proposal', expected_close_date: '2026-05-01', last_activity_at: daysAgo(40) });
+    const match = deal({ stage: 'proposal', expected_close_date: '2026-05-01', last_contact_at: daysAgo(40) });
     expect(dealMatchesAdvanced(match, f, now)).toBe(true);
     // Break each half in turn.
     expect(dealMatchesAdvanced({ ...match, expected_close_date: '2026-06-30' }, f, now)).toBe(false);
-    expect(dealMatchesAdvanced({ ...match, last_activity_at: daysAgo(2) }, f, now)).toBe(false);
+    expect(dealMatchesAdvanced({ ...match, last_contact_at: daysAgo(2) }, f, now)).toBe(false);
   });
 });
 
@@ -150,10 +150,10 @@ describe('activity timestamps parse through parseUTC, not bare Date', () => {
     // parseUTC appends the Z, so the deal is correctly outside `le7`.
     const naive = '2026-05-08T02:00:00';
     expect(dealMatchesAdvanced(
-      deal({ last_activity_at: naive }), adv({ lastActivity: 'le7' }), now,
+      deal({ last_contact_at: naive }), adv({ lastActivity: 'le7' }), now,
     )).toBe(false);
     expect(dealMatchesAdvanced(
-      deal({ last_activity_at: naive }), adv({ lastActivity: 'stale30' }), now,
+      deal({ last_contact_at: naive }), adv({ lastActivity: 'stale30' }), now,
     )).toBe(false); // still inside 30 days — only the 7-day edge moved
   });
 
@@ -163,7 +163,7 @@ describe('activity timestamps parse through parseUTC, not bare Date', () => {
     // parseUTC truncates. Kept as a statement of the input shape, not as a regression guard.
     const sixDigits = '2026-05-13T09:15:30.123456+00:00';
     expect(dealMatchesAdvanced(
-      deal({ last_activity_at: sixDigits }), adv({ lastActivity: 'le7' }), now,
+      deal({ last_contact_at: sixDigits }), adv({ lastActivity: 'le7' }), now,
     )).toBe(true);
   });
 
@@ -268,7 +268,7 @@ describe('dealMatchesAdvanced with the created bucket', () => {
     const d = deal({
       created_at: '2026-05-10T12:00:00Z',
       expected_close_date: '2026-05-20',
-      last_activity_at: '2026-05-14T12:00:00Z',
+      last_contact_at: '2026-05-14T12:00:00Z',
     });
     expect(dealMatchesAdvanced(d, adv({ createdDate: 'last7', closeDate: 'thisMonth' }), may15)).toBe(true);
     // Same deal, a created bucket it falls outside — the AND fails even though close still matches.

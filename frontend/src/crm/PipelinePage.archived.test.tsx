@@ -182,7 +182,7 @@ function asServed(d: CrmDeal): CrmDeal {
  *  difference is the entire subject of the MERGE test. */
 function detailProjection(d: CrmDeal): CrmDeal {
   const row: CrmDeal = { ...d, archived_at: null };
-  delete row.last_activity_at;
+  delete row.last_contact_at;
   return row;
 }
 
@@ -337,8 +337,8 @@ async function clearArchivedFacet(option: 'Include archived' | 'Archived only') 
   await pickFacetOption(option);
 }
 
-/** Open the Deal-activity facet and pick one of its buckets. */
-async function pickActivityFacet(option: 'No activity logged') {
+/** Open the Last-contact facet and pick one of its buckets. */
+async function pickActivityFacet(option: 'Never') {
   await pickFacetOption(option);
 }
 
@@ -496,7 +496,7 @@ describe('PipelinePage — archived deals', () => {
     // a deal archived after a restore the server actually performed. So the patch is the
     // correctness mechanism and the refresh is additive — it exists because a restore closes
     // the sheet exactly as Close does, and that path refreshes so an in-sheet note reaches
-    // the board's derived `last_activity_at`.
+    // the board's derived `last_contact_at`.
     //
     // The refresh is therefore held open across the assertions. That is not an artificial
     // pause: it is precisely the case the patch was designed for — a refresh that is slow,
@@ -570,16 +570,16 @@ describe('PipelinePage — archived deals', () => {
   it('MERGES the restored row into the board rather than replacing it', async () => {
     // Two different projections of one deal: `POST /restore` answers with `get_deal`'s,
     // while the board's rows come from `get_pipeline`, which additionally derives
-    // `last_activity_at`. Swapping the row wholesale drops that field — and a dropped
+    // `last_contact_at`. Swapping the row wholesale drops that field — and a dropped
     // field is not a blank cell here, it is a wrong answer: the deal falls into the
-    // Deal-activity facet's "No activity logged" bucket, so a deal with a fortnight of
+    // Last-contact facet's "Never" bucket, so a deal with a fortnight of
     // logged calls on it reads as never touched the moment it is restored.
     const touched = deal({
       id: 2, title: 'Zebra rebuild', stage: 'lead', value: 99_999,
       archived_at: '2026-08-20T00:00:00+00:00',
-      last_activity_at: new Date().toISOString(),
+      last_contact_at: new Date().toISOString(),
     });
-    // RESTORED carries no `last_activity_at` KEY at all (not the key set to undefined),
+    // RESTORED carries no `last_contact_at` KEY at all (not the key set to undefined),
     // which is exactly what the detail projection sends — and what makes a merge preserve
     // the board's copy rather than blank it.
     const refresh = deferred<{ deals: CrmDeal[] }>();
@@ -589,7 +589,7 @@ describe('PipelinePage — archived deals', () => {
       over: path => {
         if (path === '/api/crm/deals/2') return touched;
         // Hold the restore's follow-up refresh open for good. The server would re-supply
-        // `last_activity_at` on that GET and paper straight over a patch that dropped it —
+        // `last_contact_at` on that GET and paper straight over a patch that dropped it —
         // which is the whole failure this test exists to catch, and would make it vacuous.
         // The board's guarantee is that the PATCH is right on its own.
         if (path === ARCHIVED_PATH && ++archivedLoads === 2) return refresh.promise;
@@ -601,7 +601,7 @@ describe('PipelinePage — archived deals', () => {
     await click(card('Zebra rebuild'), 'archived card');
     await click(button('Restore'), 'Restore');
 
-    await pickActivityFacet('No activity logged');
+    await pickActivityFacet('Never');
     // Acme has genuinely never been touched, so the bucket is non-empty either way and the
     // board keeps rendering — the only question the assertion asks is whether the restored
     // deal joined it.

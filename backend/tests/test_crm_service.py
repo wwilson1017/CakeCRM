@@ -8,7 +8,7 @@ writes go through ``get_connection`` and use the shared ``fake_conn`` fixture.
 
 import pytest
 
-from crm import gtd_common, scoring_service, service
+from crm import gtd_common, last_contact, scoring_service, service
 
 
 class Recorder:
@@ -777,29 +777,29 @@ def test_get_deal_joins_company_name(rec):
     assert "co.name AS company_name" in sql and "LEFT JOIN companies co" in sql
 
 
-# ── Pipeline board payload: company_name + derived last_activity_at (issue #21) ─
+# ── Pipeline board payload: company_name + derived last_contact_at (issue #21) ─
 
-def test_get_pipeline_includes_company_and_last_activity(rec):
+def test_get_pipeline_includes_company_and_last_contact(rec):
     # deals query, then the stage_summary aggregate query.
     rec.fetchall_queue = [
         [{"id": 1, "stage": "lead", "contact_name": "Ann",
-          "company_name": "Acme", "last_activity_at": "2026-07-20T10:00:00+00:00"}],
+          "company_name": "Acme", "last_contact_at": "2026-07-20T10:00:00+00:00"}],
         [{"stage": "lead", "count": 1, "total_value": 100.0}],
     ]
     out = service.get_pipeline()
-    sql = rec.sql_containing("last_activity_at")
+    sql = rec.sql_containing("last_contact_at")
     # company join mirrors get_deal; new derived field is aliased.
     assert "co.name AS company_name" in sql and "LEFT JOIN companies co" in sql
-    assert "la.last_at AS last_activity_at" in sql
-    # last_activity blends BOTH genuine activity lanes via UNION ALL → one row per deal.
+    assert "la.last_at AS last_contact_at" in sql
+    # last_contact blends BOTH customer-contact lanes via UNION ALL → one row per deal.
     assert "UNION ALL" in sql and "GROUP BY deal_id" in sql
-    assert "FROM activity_log WHERE deal_id IS NOT NULL" in sql
+    assert " ".join(last_contact.DEAL_CONTACTS_UNION_SQL.split()) in sql
     assert "FROM crm_chatter" in sql and "entity_type = 'deal'" in sql and "archived = 0" in sql
     # unfiltered board load carries no stage WHERE.
     assert "WHERE d.stage" not in sql
     # new fields pass straight through the payload.
     assert out["deals"][0]["company_name"] == "Acme"
-    assert out["deals"][0]["last_activity_at"] == "2026-07-20T10:00:00+00:00"
+    assert out["deals"][0]["last_contact_at"] == "2026-07-20T10:00:00+00:00"
     assert out["total_pipeline_value"] == 100.0
 
 
@@ -807,14 +807,14 @@ def test_get_pipeline_stage_branch_carries_new_fields(rec):
     # The stage-filtered branch (used by the assistant's crm_get_pipeline tool) must
     # carry the same new fields — the unified query guarantees the branches can't drift.
     rec.fetchall_queue = [
-        [{"id": 2, "stage": "lead", "company_name": None, "last_activity_at": None}],
+        [{"id": 2, "stage": "lead", "company_name": None, "last_contact_at": None}],
         [],
     ]
     service.get_pipeline(stage="lead")
-    sql = rec.sql_containing("last_activity_at")
+    sql = rec.sql_containing("last_contact_at")
     assert "WHERE d.archived_at IS NULL AND d.stage = %s" in sql
-    assert "la.last_at AS last_activity_at" in sql and "co.name AS company_name" in sql
-    assert rec.params_for("last_activity_at") == ["lead"]
+    assert "la.last_at AS last_contact_at" in sql and "co.name AS company_name" in sql
+    assert rec.params_for("last_contact_at") == ["lead"]
 
 
 # ── Pipeline board: the three bounding modes (issue #59) ──────────────────────
@@ -828,8 +828,9 @@ def test_get_pipeline_keyset_first_page(rec):
     # A page must use the per-deal LATERAL, never the whole-table grouped aggregate:
     # the grouped form would scan all of activity_log on every page of a sweep.
     assert "LEFT JOIN LATERAL" in sql and "GROUP BY deal_id" not in sql
+    assert " ".join(last_contact.last_contact_sql("deal", "d.id").split()) in sql
     # ...while still carrying every column the unbounded board carries.
-    assert "la.last_at AS last_activity_at" in sql and "co.name AS company_name" in sql
+    assert "la.last_at AS last_contact_at" in sql and "co.name AS company_name" in sql
     assert "d.id > %s" not in sql, "a first page has no cursor"
     assert rec.params_for("ORDER BY d.id ASC") == [501]
     # A FIRST page still pays for — and returns — the envelope.
@@ -1227,6 +1228,7 @@ def test_contact_list_search_and_detail_all_derive_last_contact_at(rec):
         call()
         sql = rec.sql_containing("last_contact_at")
         assert "lt.last_at AS last_contact_at" in sql
+        assert " ".join(last_contact.last_contact_sql("contact", "ct.id").split()) in sql
         # Both signals, and the archived + housekeeping exclusions.
         assert "FROM activity_log a WHERE a.contact_id = ct.id" in sql
         assert "ch.entity_type = 'contact'" in sql
@@ -1380,11 +1382,14 @@ def test_every_housekeeping_writer_matches_the_family_and_renders_without_a_perc
 
 
 def test_last_touch_excludes_housekeeping_notes_so_archiving_moves_no_clock():
-    """Today panel, stale deals, the nudges and Weekly Touches (via TOUCH_AT_SQL) all
-    read LAST_TOUCH_SQL, so all of them now agree an audit note is not a touch."""
+    """Staleness and customer contact share the housekeeping exclusion."""
     predicate = scoring_service.not_housekeeping_sql("ch.message")
     assert predicate in service.LAST_TOUCH_SQL
-    assert service.LAST_TOUCH_SQL in service.TOUCH_AT_SQL
+    assert " ".join(last_contact.last_contact_sql("deal", "d.id").split()) in " ".join(
+        service.TOUCH_AT_SQL.split()
+    )
+    assert "d.updated_at" not in service.TOUCH_AT_SQL
+    assert "%" not in service.TOUCH_AT_SQL
     assert "%" not in service.LAST_TOUCH_SQL
 
 

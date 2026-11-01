@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ReactElement } from 'react';
 import type { CrmDeal } from '../core/types';
 import type { SortFieldDef } from '../shared/search';
 import { isManualSort, sortItems } from '../shared/search';
 import { PIPELINE_DEFAULT_SORT, pipelineSortFields } from './pipelineSort';
 import { buildPipelineListColumns } from './components/pipelineListColumns';
+
+afterEach(() => vi.useRealTimers());
 
 function deal(over: Partial<CrmDeal> & { id: number }): CrmDeal {
   return {
@@ -33,7 +36,7 @@ describe('absent values sort as null, never 0 or empty string', () => {
     ['touches', deal({ id: 1, ai_touch_count: null })],
     ['closeDate', deal({ id: 1, expected_close_date: '' })],
     ['closedOn', deal({ id: 1, closed_on: null })],
-    ['lastActivity', deal({ id: 1, last_activity_at: null })],
+    ['lastActivity', deal({ id: 1, last_contact_at: null })],
     ['owner', deal({ id: 1, owner_id: null })],
   ];
 
@@ -121,56 +124,47 @@ describe('date columns are parsed by KIND, not uniformly', () => {
       .toBe(new Date(2026, 4, 15).toLocaleDateString());
   });
 
-  it('a full timestamp last_activity_at converts to the viewer local day', () => {
-    // 03:00 UTC on the 16th is 22:00 on the 15th in Chicago — the conversion is correct here.
-    expect(cell('lastActivity', deal({ id: 1, last_activity_at: '2026-05-16T03:00:00Z' })))
-      .toBe(new Date(2026, 4, 15).toLocaleDateString());
-  });
-
-  it('renders an em dash for an absent date rather than "Invalid Date"', () => {
+  it('renders an em dash for an absent calendar date rather than "Invalid Date"', () => {
     expect(cell('closeDate', deal({ id: 1, expected_close_date: '' }))).toBe('—');
-    expect(cell('lastActivity', deal({ id: 1, last_activity_at: null }))).toBe('—');
   });
 });
 
-// ── TIMESTAMPTZ parsing (found by Codex on #109's column) ────────────────────────────────────
-//
-// `last_activity_at` carries SIX fractional digits where ECMA-262 defines three. The finding
-// claimed JavaScriptCore rejects the extra ones, so the column showed "—" in Safari; measured on
-// WebKit 26.5 that is NOT true and never was. What stands: >3 digits is implementation-defined
-// rather than guaranteed, and a zone-LESS string is read as LOCAL by the bare constructor and as
-// UTC by `parseUTC` — which is the difference these tests can actually observe, and the reason
-// the first one below is written against a zone-less input.
-//
-// The suite runs under TZ=America/Chicago, so a UTC instant late in the day is the previous local
-// calendar day — which is exactly what makes this assert the conversion rather than the string.
-describe('a six-fraction-digit timestamp', () => {
-  const MICROS = '2026-05-15T02:30:00.123456+00:00';
+// The pinned Chicago TZ makes a bare Date constructor read the zone-less input five
+// hours late (2d instead of 3d), proving the column goes through formatAge → parseUTC.
+describe('Last contact column', () => {
+  const MICROS = '2026-05-17T12:00:00.123456+00:00';
+  const column = () => buildPipelineListColumns(() => 'x').find(c => c.key === 'lastActivity')!;
+  const rendered = (at: string | null) => (
+    column().render(deal({ id: 1, last_contact_at: at })) as ReactElement<{ children: string; title: string }>
+  ).props;
 
-  it('renders the Last activity column through parseUTC, not the bare constructor', () => {
-    // ASSERTED ON THE ZONE-LESS CASE ON PURPOSE. Every current engine accepts six fractional
-    // digits, so a microsecond string alone renders identically with or without the fix and the
-    // obvious test would pass against the code it is meant to reject. What the constructor and
-    // `parseUTC` DO disagree about is a timestamp carrying no zone: the constructor reads it as
-    // LOCAL, `parseUTC` appends `Z` and reads it as UTC. Pinning that is what proves this column
-    // goes through `parseUTC` at all.
-    const col = buildPipelineListColumns(() => 'x').find(c => c.key === 'lastActivity')!;
-    const rendered = col.render(deal({ id: 1, last_activity_at: '2026-05-15T02:30:00.123456' })) as string;
-    // 02:30 UTC is the evening of the 14th in Chicago; read as local it would still be the 15th.
-    expect(rendered).toBe(new Date(2026, 4, 14).toLocaleDateString());
+  it('uses the same Last contact label for the sort and column', () => {
+    expect(column().header).toBe('Last contact');
+    expect(fields.find(f => f.value === 'lastActivity')?.label).toBe('Last contact');
   });
 
-  it('still renders the exact string shape Postgres returns', () => {
-    // Cannot fail on any current engine — kept as documentation of the real input, with the
-    // falsifiable half above. It would catch a future `parseUTC` that broke on microseconds.
-    const col = buildPipelineListColumns(() => 'x').find(c => c.key === 'lastActivity')!;
-    expect(col.render(deal({ id: 1, last_activity_at: MICROS })) as string).not.toBe('—');
+  it('renders Never when no customer contact is recorded', () => {
+    expect(rendered(null)).toMatchObject({ children: 'Never', title: 'No customer contact logged' });
+  });
+
+  it.each(['2026-05-17T12:00:00Z', '2026-05-17T12:00:00'])(
+    'renders contact age through parseUTC: %s', at => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-05-20T12:00:00Z'));
+      expect(rendered(at)).toMatchObject({ children: '3d', title: at });
+    },
+  );
+
+  it('renders the six-fraction-digit shape Postgres returns', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-20T12:00:00Z'));
+    expect(rendered(MICROS).children).not.toBe('Never');
   });
 
   it('sorts on the instant, so it is not treated as an absent value', () => {
     const field = pipelineSortFields(() => 'x').find(f => f.value === 'lastActivity')!;
-    const older = field.get!(deal({ id: 1, last_activity_at: '2026-05-15T02:00:00.000001+00:00' }));
-    const newer = field.get!(deal({ id: 2, last_activity_at: MICROS }));
+    const older = field.get!(deal({ id: 1, last_contact_at: '2026-05-15T02:00:00.000001+00:00' }));
+    const newer = field.get!(deal({ id: 2, last_contact_at: MICROS }));
     expect(older).not.toBeNull();
     expect(newer).not.toBeNull();
     expect(Number(newer)).toBeGreaterThan(Number(older));
@@ -179,12 +173,12 @@ describe('a six-fraction-digit timestamp', () => {
   it('orders the same instant identically however its zone is punctuated', () => {
     // `Z` sorts after `+` lexically, so the old string comparison called these two unequal.
     const field = pipelineSortFields(() => 'x').find(f => f.value === 'lastActivity')!;
-    expect(field.get!(deal({ id: 1, last_activity_at: '2026-05-15T02:30:00.123Z' })))
-      .toBe(field.get!(deal({ id: 2, last_activity_at: '2026-05-15T02:30:00.123+00:00' })));
+    expect(field.get!(deal({ id: 1, last_contact_at: '2026-05-15T02:30:00.123Z' })))
+      .toBe(field.get!(deal({ id: 2, last_contact_at: '2026-05-15T02:30:00.123+00:00' })));
   });
 
   it('sinks an unparseable timestamp rather than poisoning the comparison with NaN', () => {
     const field = pipelineSortFields(() => 'x').find(f => f.value === 'lastActivity')!;
-    expect(field.get!(deal({ id: 1, last_activity_at: 'not a date' }))).toBeNull();
+    expect(field.get!(deal({ id: 1, last_contact_at: 'not a date' }))).toBeNull();
   });
 });
