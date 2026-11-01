@@ -1323,7 +1323,17 @@ def get_pipeline(
     return result
 
 
-def list_deals(stage: str | None = None, contact_id: int | None = None, limit: int = 50) -> list[dict]:
+def list_deals(
+    stage: str | None = None, contact_id: int | None = None, limit: int = 50,
+    sort_by: str = "updated_at",
+) -> list[dict]:
+    orders = {
+        "updated_at": "d.updated_at DESC, d.id DESC",
+        "closed_on": "d.closed_on DESC NULLS LAST, d.id DESC",
+    }
+    if sort_by not in orders:
+        raise ValueError("sort_by must be updated_at or closed_on")
+    order = orders[sort_by]
     conditions = [LIVE_PREDICATE_D]
     params: list = []
     if stage:
@@ -1341,7 +1351,7 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
     return pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name
             FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
-            {where} ORDER BY d.updated_at DESC, d.id DESC LIMIT %s""",
+            {where} ORDER BY {order} LIMIT %s""",
         params,
     )
 

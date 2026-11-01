@@ -624,6 +624,7 @@ def test_scan_actually_examined_the_backend():
 # while a different one appeared — letting the newcomer inherit a registration that was
 # never about it.
 UNDECIDABLE_SITES = {
+    "crm/service.py::list_deals": 1,  # test_dynamic_order_by_filtered_deals
     "crm/service.py::list_contacts": 1,
     "crm/service.py::search_contacts": 1,
     "crm/service.py::list_companies": 1,
@@ -1027,3 +1028,11 @@ def test_tied_timestamps_paginate_without_dupes_or_gaps():
                 "WHERE datname = %s AND pid <> pg_backend_pid()", (dbname,))
             cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
         admin.close()
+
+
+@pytest.mark.parametrize("sort_by", ["updated_at", "closed_on"])
+def test_dynamic_order_by_filtered_deals(crm_recorder, sort_by):
+    from crm import service
+
+    service.list_deals(stage="won", sort_by=sort_by)
+    _assert_recorded_orders_are_total(crm_recorder)
