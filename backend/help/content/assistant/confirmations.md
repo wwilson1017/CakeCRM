@@ -35,8 +35,11 @@ it already produced.
 
 - **Writing or deleting one of Baker's two protected knowledge files.** See
   `assistant/context-files`.
-- **A conversation that has read untrusted outside content.** Reading mail, or uploading a
-  file, brings in text somebody else wrote. From that point the conversation drops back to
+- **A conversation that has read untrusted outside content.** Reading mail, uploading a
+  file, or listing a todo that arrived through the capture link while no token was
+  configured (anyone could have posted it), brings in text somebody else wrote. A capture
+  through your tokened link is your own text and does not count. From that point the
+  conversation drops back to
   asking before every change, for the rest of its life — even after the message that brought
   the content in has aged out of view. The taint is recorded against the conversation itself,
   so it cannot be shaken off by talking for long enough.

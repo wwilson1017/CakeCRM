@@ -29,6 +29,8 @@ const LABELS: Record<string, TodoSourceLabel> = {
     text: 'Capture link',
     title: 'Added through the public capture link — anyone with the link can write here',
   },
+  // Behind a configured token the link is a secret only the owner holds (#326).
+  capture_token: { text: 'Capture link', title: 'Added through your capture link' },
   telegram: { text: 'Telegram', title: 'Captured from Telegram' },
 };
 

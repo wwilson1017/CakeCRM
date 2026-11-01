@@ -509,3 +509,21 @@ def test_the_public_source_set_is_a_real_todos_source_value():
 
     assert delimiters.PUBLIC_CAPTURE_SOURCES
     assert delimiters.PUBLIC_CAPTURE_SOURCES <= set(TODO_SOURCES)
+    # The tokened capture is a real source too, and is NOT public (#326).
+    assert "capture_token" in TODO_SOURCES
+    assert "capture_token" not in delimiters.PUBLIC_CAPTURE_SOURCES
+
+
+def test_a_tokened_capture_row_is_the_owners_own_text():
+    """#326: behind a configured token the poster holds the owner's secret, so the row is
+    neither fenced nor tainting — only the bare, tokenless surface is a stranger's."""
+    payload = {"todos": [_capture_row(source="capture_token"), _capture_row()]}
+    fenced, tainted = delimiters.fence_public_rows(payload)
+    assert tainted is True  # the capture_web row still is
+    mine, stranger = fenced["todos"]
+    assert mine == _capture_row(source="capture_token")
+    assert stranger["title"].startswith('<untrusted_external_content id=')
+
+    fenced, tainted = delimiters.fence_public_rows({"todos": [_capture_row(source="capture_token")]})
+    assert tainted is False
+    assert fenced == {"todos": [_capture_row(source="capture_token")]}
