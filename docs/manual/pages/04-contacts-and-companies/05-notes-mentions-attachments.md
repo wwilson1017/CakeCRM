@@ -25,7 +25,7 @@ Press **Attach** in the note composer to add files to a note, or **Take photo** 
 
 Images that the app can preview show as a small tile. Click it to see a larger view. Other files show as a chip that downloads when you click it. You can remove an attachment from its note.
 
-Photos are shrunk in your browser to about **300 KB** before they upload, and the location your phone stored in them is removed. GIFs and other files upload unchanged.
+Photos are shrunk in your browser to about **300 KB** before they upload, which also removes the location your phone stored in them. If your browser can't shrink a photo, it uploads as it is, location included. GIFs, animated images and other files upload unchanged.
 
 Attachments work with no AI provider connected.
 
