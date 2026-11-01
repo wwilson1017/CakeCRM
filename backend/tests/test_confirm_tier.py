@@ -470,7 +470,7 @@ def test_reminder_tools_are_never_routine(todo_mode):
     Approve card, and the read stays a read."""
     todo_mode("normal")
     reg = ToolRegistry()
-    for name in ("reminder_create", "reminder_update", "reminder_void"):
+    for name in ("reminder_create", "reminder_update", "reminder_void", "reminder_pause", "reminder_resume"):
         assert reg.is_write(name) is True, name
         assert reg.is_routine_write(name) is False, name
     assert reg.is_write("reminder_list") is False

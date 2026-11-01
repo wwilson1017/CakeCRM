@@ -498,10 +498,10 @@ async def delete_contact(contact_id: int, user=Depends(get_current_user)):
 # ── Deals ─────────────────────────────────────────────────────────────────────
 
 @router.get("/deals")
-async def list_deals(
+def list_deals(
     stage: str = "", contact_id: int | None = None,
     include_archived: bool = False,
-    sort: str = "",
+    sort: str = "", sort_by: str = "",
     limit: int | None = Query(None, ge=1, le=1000),
     after_id: int | None = Query(None, ge=0, le=2_147_483_647),
     user=Depends(get_current_user),
@@ -515,7 +515,9 @@ async def list_deals(
     and silently dropping an advertised flag is worse than saying no.
 
     `limit`/`after_id` (issue #59) are the board's OPT-IN keyset page. Omitting them
-    returns the whole board exactly as before. The frontend sweeps every page and
+    returns the whole board exactly as before. On a filtered list, `limit` is a plain
+    cap (default 50), and `sort_by` selects updated_at or closed_on descending.
+    The frontend sweeps every board page and
     reassembles the complete corpus before rendering, so paging is transport only and
     the client-side facet model is unchanged.
 
@@ -535,13 +537,21 @@ async def list_deals(
         # Same reasoning as include_archived: `list_deals` has no cursor, and silently
         # dropping an advertised paginator looks exactly like a client stuck re-reading
         # page one — the failure the #77 cursor rules exist to prevent. Refuse instead.
-        if limit is not None or after_id is not None:
+        if after_id is not None:
             raise HTTPException(
                 status_code=400,
-                detail="limit and after_id are not supported with stage or contact_id",
+                detail="after_id is not supported with stage or contact_id",
             )
-        deals = crm.list_deals(stage=stage or None, contact_id=contact_id)
+        try:
+            deals = crm.list_deals(
+                stage=stage or None, contact_id=contact_id,
+                limit=limit if limit is not None else 50, sort_by=sort_by or "updated_at",
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
         return {"deals": deals, "count": len(deals)}
+    if sort_by:
+        raise HTTPException(status_code=400, detail="sort_by requires stage or contact_id")
     # The shared assembly wire format (assemblyPage.ts) always sends `sort=id`, and that
     # parameter is what makes the cursor meaningful. Accepting `sort=updated_at` here
     # while still returning id order would be a silently-ignored pagination input, so a

@@ -608,7 +608,7 @@ def test_scan_actually_examined_the_backend():
 # not a weakening.
 #
 # Other readers interpolate too but stay DECIDABLE, so they are deliberately absent:
-# `search_deals` ends on a literal `id` term after the interpolated column, and
+# `search_deals` and `list_deals` end on a literal `id` term after the interpolated column, and
 # `_stale_ids` is one implicitly-concatenated literal ending on `id` — the scan judges
 # both directly. They keep behavioral tests anyway, as belt and braces against the
 # fragment changing shape.
@@ -1027,3 +1027,11 @@ def test_tied_timestamps_paginate_without_dupes_or_gaps():
                 "WHERE datname = %s AND pid <> pg_backend_pid()", (dbname,))
             cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
         admin.close()
+
+
+@pytest.mark.parametrize("sort_by", ["updated_at", "closed_on"])
+def test_dynamic_order_by_filtered_deals(crm_recorder, sort_by):
+    from crm import service
+
+    service.list_deals(stage="won", sort_by=sort_by)
+    _assert_recorded_orders_are_total(crm_recorder)

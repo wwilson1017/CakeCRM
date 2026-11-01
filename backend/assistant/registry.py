@@ -10,7 +10,7 @@ read ``is_write`` from here, so they can never diverge.
 Sources (issue #6 turned this from a single-source wrapper into a composition so
 features append cleanly):
   * always: ``crm.tools.get_crm_tools()`` + ``crm.gtd_tools.get_gtd_tools()``
-  * always: ``reminders.tools.get_reminder_tools(user=…)`` (issue #283) — four tools,
+  * always: ``reminders.tools.get_reminder_tools(user=…)`` (issue #283) — six tools,
     keyless, no enable gate; owner bound server-side; none routine (they notify).
   * background only (``ToolRegistry(background=True)``): ``notify_user`` — Chatty
     gates it behind background mode; interactive chat never needs it.
