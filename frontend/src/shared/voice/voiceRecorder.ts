@@ -18,15 +18,6 @@ export function pickAudioMimeType(isSupported: (type: string) => boolean): strin
   return null;
 }
 
-export function audioFileExtension(mimeType: string): string {
-  const base = (mimeType || '').split(';', 1)[0].trim().toLowerCase();
-  if (base === 'audio/mp4') return 'm4a';
-  if (base === 'audio/ogg') return 'ogg';
-  if (base === 'audio/mpeg') return 'mp3';
-  if (base === 'audio/wav' || base === 'audio/x-wav') return 'wav';
-  return 'webm';
-}
-
 export function elapsedSeconds(startedAt: number, now: number): number {
   return Math.max(0, Math.floor((now - startedAt) / 1000));
 }

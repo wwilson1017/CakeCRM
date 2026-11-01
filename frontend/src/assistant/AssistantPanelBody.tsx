@@ -264,7 +264,7 @@ export default function AssistantPanelBody({
           />
           {!chat.isStreaming && <VoiceMicButton key={threadEpoch} mode="send" onTranscript={onTranscript} />}
           {chat.isStreaming ? (
-            <button onClick={chat.stop} title="Stop" style={{ ...sendBtn, background: BG_RAISED, color: INK_MUTE }}>■</button>
+            <button onClick={() => { readAloud?.disarm(); chat.stop(); }} title="Stop" style={{ ...sendBtn, background: BG_RAISED, color: INK_MUTE }}>■</button>
           ) : (
             <button onClick={submit} title="Send" disabled={!input.trim() && files.length === 0} style={{ ...sendBtn, opacity: !input.trim() && files.length === 0 ? 0.5 : 1 }}>
               <IconArrowUpInline />

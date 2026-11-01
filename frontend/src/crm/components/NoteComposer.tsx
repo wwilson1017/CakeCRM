@@ -10,6 +10,7 @@ import {
 import {
   COMPOSER_MIN_HEIGHT_PX, composerKeyAction, MAX_NOTE_LEN, nextComposerHeight,
 } from '../chatterComposer';
+import { joinDraft } from '../../shared/voice/dictationGesture';
 import { VoiceMicButton } from '../../shared/voice/VoiceMicButton';
 import { useMentionPicker } from './MentionPicker';
 import {
@@ -301,7 +302,7 @@ export function NoteComposer({
           }}
         >Attach</button>
         <VoiceMicButton mode="review" tidy disabled={disabled} onTranscript={transcript => {
-          setText(prev => (prev.trim() ? `${prev.replace(/\s+$/, '')} ${transcript}` : transcript));
+          setText(prev => joinDraft(prev, transcript));
           textareaRef.current?.focus();
         }} />
         <span style={{ ...mono(10), color: INK_DIM, flex: 1 }}>
