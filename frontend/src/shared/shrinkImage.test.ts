@@ -80,6 +80,14 @@ describe('shrinkImage', () => {
       expect(await shrinkImage(original, deps)).toBe(original);
       expect(deps.decode).not.toHaveBeenCalled();
     }
+    // acTL behind a 100 KB ancillary chunk is still found.
+    const big = new Uint8Array(8 + 12 + 100_000 + 8 + 12);
+    const view = new DataView(big.buffer);
+    view.setUint32(8, 100_000); big.set([...'iCCP'].map(c => c.charCodeAt(0)), 12);
+    view.setUint32(8 + 12 + 100_000, 8);
+    big.set([...'acTL'].map(c => c.charCodeAt(0)), 8 + 12 + 100_000 + 4);
+    const apng = new File([big], 'big', { type: 'image/png' });
+    expect(await shrinkImage(apng, harness())).toBe(apng);
     webp[20] = 0;
     const deps = harness();
     await shrinkImage(new File([webp], 'still', { type: 'image/webp' }), deps);

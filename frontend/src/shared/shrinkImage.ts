@@ -52,19 +52,23 @@ const ascii = (bytes: Uint8Array, at: number, text: string) =>
 
 /**
  * Animated WebP (VP8X animation flag) and APNG (an acTL chunk) would flatten to their first
- * frame through a canvas, so they pass through like GIFs. Both markers sit in the header.
+ * frame through a canvas, so they pass through like GIFs. Both markers precede the image data.
  */
 export async function isAnimated(file: File): Promise<boolean> {
-  const bytes = new Uint8Array(await file.slice(0, 64 * 1024).arrayBuffer());
+  const read = async (at: number, n: number) =>
+    new Uint8Array(await file.slice(at, at + n).arrayBuffer());
   if (file.type === 'image/webp') {
-    return ascii(bytes, 12, 'VP8X') && (bytes[20] & 0x02) !== 0;
+    const head = await read(0, 21);
+    return ascii(head, 12, 'VP8X') && (head[20] & 0x02) !== 0;
   }
   if (file.type === 'image/png') {
-    // Chunks are length(4) type(4) data crc(4); acTL must precede the first IDAT.
-    for (let at = 8; at + 8 <= bytes.length;) {
-      if (ascii(bytes, at + 4, 'acTL')) return true;
-      if (ascii(bytes, at + 4, 'IDAT')) return false;
-      at += 12 + new DataView(bytes.buffer).getUint32(at);
+    // Walk chunk headers (length(4) type(4), then data and a 4-byte CRC) up to the first
+    // IDAT, reading 8 bytes per chunk so a large colour profile can't hide acTL.
+    for (let at = 8; at + 8 <= file.size;) {
+      const head = await read(at, 8);
+      if (ascii(head, 4, 'acTL')) return true;
+      if (ascii(head, 4, 'IDAT')) return false;
+      at += 12 + new DataView(head.buffer).getUint32(0);
     }
   }
   return false;
