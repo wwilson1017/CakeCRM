@@ -95,6 +95,7 @@ export interface FieldProvenance {
 }
 
 export interface CrmCompany {
+  merged_into_id?: number | null;
   /** Owner (issue #60). null = unassigned, which is a real state, not missing data.
    *  Ownership is an assignment and a filter, never a permission. */
   owner_id?: number | null;
@@ -548,4 +549,11 @@ export interface CrmTimelineEntry {
 export interface CrmTimelinePage {
   entries: CrmTimelineEntry[];
   has_more: boolean;
+}
+
+export interface CrmCompanyMergePlan {
+  survivor: { id: number; name: string };
+  absorbed: { id: number; name: string; status: string };
+  moves: { contacts: number; deals: number; archived_deals: number; todos: number; notes: number; custom_fields: number };
+  fields: { field: string; old: string | null; new: string }[];
 }

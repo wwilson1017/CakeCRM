@@ -351,7 +351,7 @@ def create_contact(
     # which the router maps to 400.
     row = pg_fetchone(
         """INSERT INTO contacts (name, email, phone, company, title, source, status, tags, notes, company_id, owner_id)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, company_follow_merge(%s), %s) RETURNING id""",
         (name, email, phone, company, title, source, status, _normalize_tags(tags), notes,
          company_id, owner_id),
     )
@@ -543,11 +543,24 @@ def _write_status_audited(
     now = _now()
     with get_connection() as conn:
         cur = conn.cursor()
+        # Gate before any contact row lock; merge/delete hold it exclusively (#334).
+        if table == "contacts" and filtered.get("company_id") is not None:
+            cur.execute("SELECT company_follow_merge(%s)", (filtered["company_id"],))
+            filtered["company_id"] = cur.fetchone()[0]
         cur.execute(f"SELECT status FROM {table} WHERE id = %s FOR UPDATE", (entity_id,))
         row = cur.fetchone()
         if row is None:
             return False
         old, new = row[0], filtered.get("status")
+        if table == "companies" and new is not None and new != "archived":
+            # Check under the same lock as the write, including a concurrent merge.
+            cur.execute("SELECT merged_into_id FROM companies WHERE id = %s", (entity_id,))
+            successor = cur.fetchone()[0]
+            if successor is not None:
+                raise ValueError(
+                    f"Company #{entity_id} was merged into #{successor} and cannot be restored "
+                    f"— open #{successor} instead"
+                )
         archiving = new == "archived" and old != "archived"
         restoring = old == "archived" and new is not None and new != "archived"
         # Raising here rolls back before anything is written.
@@ -759,6 +772,9 @@ def resolve_or_create_company_ids(names: list[str]) -> dict[str, int]:
     normalize; two spellings that normalize alike both appear as keys mapping to
     the same id.
 
+    Merged duplicate spellings follow their successor chain to the survivor (#334).
+    Company-assigning writes follow again under the shared merge gate.
+
     Two fixed statements regardless of ``len(names)`` — a 5000-row import costs
     2 queries here, not 5000.
 
@@ -813,7 +829,7 @@ def resolve_or_create_company_ids(names: list[str]) -> dict[str, int]:
     # 2) Map every raw spelling back to its id. The co.name side is exactly the
     #    uq_companies_name_ci expression, so the join is index-assisted.
     rows = pg_fetchall(
-        r"""SELECT t.n AS raw, co.id AS id
+        r"""SELECT t.n AS raw, company_follow_merge(co.id) AS id
             FROM unnest(%s::text[]) AS t(n)
             JOIN companies co
               ON LOWER(btrim(co.name, E' \t\n\r\f\x0b'))
@@ -953,6 +969,7 @@ def delete_company(company_id: int) -> bool:
     """
     with get_connection() as conn:
         cur = conn.cursor()
+        cur.execute("SELECT company_merge_gate()")
         cur.execute("SELECT id FROM companies WHERE id = %s FOR UPDATE", (company_id,))
         if cur.fetchone() is None:
             return False
@@ -1063,7 +1080,7 @@ def create_deal(
     # company_id appended last (see create_contact); a bad FK -> ForeignKeyViolation.
     row = pg_fetchone(
         """INSERT INTO deals (title, contact_id, stage, value, notes, expected_close_date, probability, currency, company_id, owner_id, deal_temperature, closed_on)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, company_follow_merge(%s), %s, %s, %s) RETURNING id""",
         (title, contact_id, stage, value, notes, expected_close_date, probability, currency,
          company_id, owner_id, deal_temperature, closed_on_day),
     )
@@ -1589,6 +1606,9 @@ def _write_deal_update(
     closed_on_day = resolve_closed_on(closed_on, today) if explicit_closed_on else None
     with get_connection() as conn:
         cur = conn.cursor()
+        if filtered.get("company_id") is not None:
+            cur.execute("SELECT company_follow_merge(%s)", (filtered["company_id"],))
+            filtered["company_id"] = cur.fetchone()[0]
         cur.execute(
             "SELECT stage, archived_at, contact_id, closed_on FROM deals WHERE id = %s FOR UPDATE",
             (deal_id,),

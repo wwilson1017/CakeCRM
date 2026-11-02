@@ -30,7 +30,8 @@ export type WarmTab = 'pipeline' | 'contacts' | 'companies';
  * empty every cache on each deploy. The rule is recorded in `docs/agents/list-pages.md`.
  */
 // 2: #279 added `closed_on` to the board's `CrmDeal`.
-export const WARM_SCHEMA_VERSION = 2;
+// #334: CrmCompany now carries merged_into_id.
+export const WARM_SCHEMA_VERSION = 3;
 export const WARM_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**

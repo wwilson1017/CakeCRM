@@ -23,11 +23,11 @@ def test_def_and_executor_counts():
     # Phase 2: get_deal_health, get_pipeline_analytics) + 2 (#70 todo parity:
     # crm_update_todo, crm_delete_todo) + 1 (#55 crm_bulk_move_deals) + 1 (#200
     # crm_get_setup_status) - 1 (#299 removed crm_delete_todo) + N (sibling
-    # additions) — SUM the additions, never overwrite the number. On rebase behind a
+    # additions) + 2 (#334 crm_preview_company_merge, crm_merge_companies) — SUM the additions, never overwrite the number. On rebase behind a
     # sibling that also adds a tool, recompute cumulative (do NOT keep-both a single
     # number). The executor count is always defs + 1 (crm_log_note alias).
-    assert len(CRM_TOOL_DEFS) == 47
-    assert len(TOOL_EXECUTORS) == 48
+    assert len(CRM_TOOL_DEFS) == 49
+    assert len(TOOL_EXECUTORS) == 50
     # Relative invariant (robust to any future additions): exactly one alias-only executor.
     assert len(TOOL_EXECUTORS) == len(CRM_TOOL_DEFS) + 1
 
