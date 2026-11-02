@@ -128,6 +128,15 @@ It returns nothing.
   aloud uses the browser's speech engine: CakeCRM sends no speech request, though some browser
   voices use a network service supplied by the browser vendor.
 
+- **Live transcription (off by default, admin switch).** Live transcription shows your words
+  while you speak. To do that, your browser hands the microphone audio to its own speech
+  recognition service, which is usually run online by the browser maker (for example Google
+  for Chrome, Apple for Safari). That audio goes straight from the browser, not through this
+  install, under that company's terms, and cancelling a recording cannot take back audio it
+  has already heard. The text that is sent or saved still comes from the normal
+  transcription after you let go. When the switch is off (the default), audio goes only
+  through this install to your transcribing provider.
+
 - **Message bodies only, never your files.** Gmail stores an unusually large *text
   body* outside the message and behind an attachment id. Reading a thread will pull
   such a body back in, under a hard byte cap, so a long email doesn't silently

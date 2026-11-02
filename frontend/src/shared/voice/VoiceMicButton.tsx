@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { IconMic, IconX } from '../icons';
 import { ACCENT_INK, BG_CARD, CORAL_FILL, INK_MUTE } from '../styles';
-import { useVoiceReady } from './VoiceReadyContext';
+import { useSpeechPreview } from './useSpeechPreview';
+import { useVoiceReady, useVoiceLivePreview } from './VoiceReadyContext';
 import { IDLE, dictationReducer, type DictationEvent, type DictationEffect, type DictationIntent, type DictationState } from './dictationGesture';
 import { useAudioRecorder, type RecordedClip, type RecorderError } from './useAudioRecorder';
 import { DICTATION_BITS_PER_SECOND, DICTATION_MAX_BYTES, DICTATION_MAX_SECONDS, DICTATION_UPLOAD_CAP_BYTES, formatDuration } from './voiceRecorder';
@@ -21,6 +22,7 @@ export interface VoiceMicButtonProps {
 }
 export function VoiceMicButton({ mode, tidy = false, onTranscript, disabled }: VoiceMicButtonProps) {
   const ready = useVoiceReady();
+  const live = useVoiceLivePreview();
   const [state, setState] = useState<DictationState>(IDLE);
   const [notice, setNotice] = useState('');
   const stateRef = useRef<DictationState>(IDLE);
@@ -51,6 +53,7 @@ export function VoiceMicButton({ mode, tidy = false, onTranscript, disabled }: V
     onClip: clip => { if (mountedRef.current) { clipRef.current = clip; dispatch({ type: 'clip' }); } },
     onError: code => { if (mountedRef.current) { setNotice(ERROR_COPY[code]); dispatch({ type: 'recorderFailed' }); } },
   });
+  const preview = useSpeechPreview(live && ready && !disabled && recorder.recording && (state.phase === 'holding' || state.phase === 'locked'));
   const callbacksRef = useRef({ onTranscript, mode });
   useEffect(() => { callbacksRef.current = { onTranscript, mode }; });
   const cancelRecording = recorder.cancel;
@@ -105,9 +108,9 @@ export function VoiceMicButton({ mode, tidy = false, onTranscript, disabled }: V
           ? <button type="button" aria-label="Cancel recording" onClick={() => dispatch({ type: 'cancel' })} style={buttonStyle}><IconX size={16} /></button>
           : <span aria-hidden style={{ width: 8, height: 8, flexShrink: 0, borderRadius: '50%', background: CORAL_FILL }} />}
         <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{recorder.requesting ? 'Allow mic…' : formatDuration(recorder.seconds)}</span>
-        <div aria-hidden style={{ display: 'flex', flex: 1, minWidth: 0, height: 24, alignItems: 'center', gap: 2, overflow: 'hidden' }}>
+        {preview ? <div aria-live="polite" style={{ flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', direction: 'rtl' }}><bdi>{preview}</bdi></div> : <div aria-hidden style={{ display: 'flex', flex: 1, minWidth: 0, height: 24, alignItems: 'center', gap: 2, overflow: 'hidden' }}>
           {WAVE.map((w, i) => <span key={i} style={{ flexShrink: 0, width: 3, borderRadius: 2, background: CORAL_FILL, height: `${Math.max(12, Math.round(recorder.level * w * 100))}%` }} />)}
-        </div>
+        </div>}
         {state.phase === 'holding' && <span style={{ fontSize: 11, color: INK_MUTE }}>{mode === 'review' || state.dx > 0 ? '‹ Slide to cancel' : '‹ cancel · swipe up to lock'}</span>}
       </>}
       {state.phase === 'transcribing' && <span role="status">Transcribing…</span>}

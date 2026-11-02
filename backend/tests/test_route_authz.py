@@ -71,6 +71,8 @@ PUBLIC_SURFACE_GUARDS = {"_session_api_guard"}
 # Install configuration + destructive/global operations. Members may do everything
 # else, including all record CRUD — ownership is not access control.
 ADMIN_ONLY = {
+    ("/api/voice/live-preview", "GET"),
+    ("/api/voice/live-preview", "POST"),
     # Accounts
     ("/api/users", "POST"),
     ("/api/users/{user_id}", "PATCH"),

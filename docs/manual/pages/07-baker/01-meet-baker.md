@@ -67,6 +67,14 @@ Each person can link their own Telegram account and chat with Baker from there. 
 
 ## Talk to Baker and hear replies
 
-When an OpenAI key is connected and your browser can record audio, a mic appears beside Send. Hold to speak and let go to send, slide left to cancel, or tap or swipe up for hands-free recording. Stop in hands-free mode puts the words in the box to review. Text arrives after recording ends; a timer and wave show progress while you speak. Recordings stop after three minutes. The mic needs a secure page and browser permission. An OpenAI key can handle speech even when another provider handles chat.
+When an OpenAI key is connected and your browser can record audio, a mic appears beside Send. Hold to speak and let go to send, slide left to cancel, or tap or swipe up for hands-free recording. Stop in hands-free mode puts the words in the box to review. Unless an admin enables Live transcription, text arrives after recording ends; a timer and wave show progress while you speak. Recordings stop after three minutes. The mic needs a secure page and browser permission. An OpenAI key can handle speech even when another provider handles chat.
 
 The speaker toggle in the header reads new replies once they finish. It starts off and is remembered on this device. Sending a message arms that thread for automatic reading, including replies after approvals; opening history alone does not. Each finished reply also has a Read aloud button. The browser's speech engine needs no additional key; some voices use a network service from your browser vendor. Starting the mic stops playback. Recordings go through your install to the transcribing provider and are never stored by CakeCRM.
+
+## Live transcription
+
+Admins can opt in under **Settings → Assistant → Live transcription** when a transcribing provider is ready. The switch starts off. Changes apply on this page immediately; other open tabs pick them up when reloaded.
+
+Live transcription shows your words while you speak. To do that, your browser hands the microphone audio to its own speech recognition service, which is usually run online by the browser maker (for example Google for Chrome, Apple for Safari). That audio goes straight from the browser, not through this install, under that company's terms, and cancelling a recording cannot take back audio it has already heard. The text that is sent or saved still comes from the normal transcription after you let go. When the switch is off (the default), audio goes only through this install to your transcribing provider.
+
+Desktop Chrome, Edge and Safari, and iOS Safari where speech recognition exists, can show a preview. Some browsers, including Firefox and Android, show no live text; the recording works as usual.

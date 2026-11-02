@@ -16,7 +16,7 @@ import { AssistantLauncher } from './components/AssistantLauncher';
 import { BrandLogo } from './components/BrandLogo';
 import { NotificationsBell } from './components/NotificationsBell';
 import { ThemeToggle } from './components/ThemeToggle';
-import { VoiceReadyContext } from '../shared/voice/VoiceReadyContext';
+import { VoiceReadyContext, VoiceLivePreviewContext, VoiceLivePreviewSetterContext } from '../shared/voice/VoiceReadyContext';
 import { ActiveRecordProvider } from './RecordContext';
 import { resyncPushSubscription } from '../core/notifications/pushSubscription';
 import { TodoModeContext, TodoModeSetterContext } from './gtd/TodoModeContext';
@@ -176,7 +176,7 @@ const DEMO_STATUS_UNKNOWN: DemoStatus = {
   todo_mode: 'gtd',
 };
 
-interface SetupStatus { ai_ready: boolean; credentials_present: boolean; voice_ready?: boolean; }
+interface SetupStatus { ai_ready: boolean; credentials_present: boolean; voice_ready?: boolean; voice_live_preview?: boolean; }
 
 export function CrmLayout() {
   const isMobile = useIsMobile();
@@ -233,6 +233,10 @@ export function CrmLayout() {
     if (viewerEmail) void purgeForeignWarm(viewerEmail);
   }, [viewerEmail]);
 
+  const handleSetVoiceLivePreview = useCallback((on: boolean) => {
+    setSetup(current => current ? { ...current, voice_live_preview: on } : current);
+  }, []);
+
   // #102: the Settings card switches the mode, but this layout owns it for the whole
   // CRM and does not refetch on navigation — so the card pushes the new value up here
   // instead of keeping its own copy. Without this, switching mode in Settings left
@@ -288,6 +292,8 @@ export function CrmLayout() {
 
   return (
     <ActiveRecordProvider>
+      <VoiceLivePreviewSetterContext.Provider value={handleSetVoiceLivePreview}>
+      <VoiceLivePreviewContext.Provider value={!!setup?.voice_ready && !!setup?.voice_live_preview}>
       <VoiceReadyContext.Provider value={setup === null ? null : (setup.voice_ready ?? false)}>
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ borderBottom: `1px solid ${LINE}` }}>
@@ -464,6 +470,8 @@ export function CrmLayout() {
       <AssistantLauncher aiReady={aiReady} />
     </div>
       </VoiceReadyContext.Provider>
+      </VoiceLivePreviewContext.Provider>
+      </VoiceLivePreviewSetterContext.Provider>
     </ActiveRecordProvider>
   );
 }
