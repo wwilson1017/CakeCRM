@@ -111,6 +111,7 @@ def test_lost_goes_through_mark_deal_lost_with_the_reason_and_author(client, wri
     assert client.post(BASE, json={"lost": True, "lost_reason": "price"}).json()["saved"] == ["lost"]
     assert writes[0][0][1][2] == {"stage": "lost", "probability": 0, "lost_reason": "price"}
     assert writes[0][1][1][1:5] == ("deal", 5, "Deal lost — price", 2)
+    assert writes[0][1][2] == {"system_note": True}
 
 
 def test_a_note_is_authored_by_the_member(client, writes):
@@ -130,6 +131,8 @@ def test_write_order_is_deal_columns_then_lost_then_note_then_follow_up(client, 
     assert response.json()["saved"] == ["value", "lost", "note", "follow-up"]
     assert [x[0] for x in writes[0]] == ["_write_deal_update_cur", "insert_note_cur", "insert_note_cur", "_create_todo_cur"]
     assert len({id(x[1][0]) for x in writes[0]}) == 1
+    assert writes[0][1][2] == {"system_note": True}
+    assert writes[0][2][2] == {}
 
 
 def test_an_archived_deal_is_refused_before_any_write(client, writes):

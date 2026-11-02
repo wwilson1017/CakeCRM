@@ -113,5 +113,6 @@ a last-contact date range, and **archived**. Filters are remembered per browser
 tab. Dragging still works while a filter is on, because a drop only assigns a stage and never
 a position.
 
-A deal's last contact is its newest note (automatic archive and restore notices aside) or logged call, email or
-meeting; edits and stage moves do not count, and the list column and sort read the same date.
+A deal's last contact is its newest note written by a person or Baker (automatic notes about archiving,
+restoring, merging, a lost reason, a closed-on date or confirming an AI-populated value do not count)
+or logged call, email or meeting; edits and stage moves do not count, and the list column and sort read the same date.

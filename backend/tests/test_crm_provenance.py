@@ -178,7 +178,8 @@ def test_confirm_happy_path_updates_and_audits_in_one_txn(monkeypatch):
     assert any("SELECT * FROM contacts WHERE id = %s FOR UPDATE" in s for s in stmts)
     assert any("FROM crm_field_provenance WHERE entity_type = %s AND entity_id = %s AND field_name = %s FOR UPDATE" in s for s in stmts)
     assert any("UPDATE crm_field_provenance SET confirmed_at" in s for s in stmts)
-    assert any("INSERT INTO crm_chatter" in s for s in stmts)
+    note_sql = next(s for s in stmts if "INSERT INTO crm_chatter" in s)
+    assert "system_note" in note_sql and note_sql.endswith("true)")
     assert out["confirmed_at"] == "c"        # live value matched snapshot → confirmed, not stale
 
 

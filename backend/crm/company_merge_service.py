@@ -144,8 +144,8 @@ def merge_companies(survivor_id, absorbed_id, *, actor_id: int | None,
         cur.execute("UPDATE deals SET company_id = %s WHERE company_id = %s RETURNING id", (s, a))
         deal_ids = [r[0] for r in cur.fetchall()]
         cur.execute(
-            """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, archived)
-               SELECT 'company', %s, left(%s || message, %s), created_at, archived
+            """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, archived, system_note)
+               SELECT 'company', %s, left(%s || message, %s), created_at, archived, system_note
                  FROM crm_chatter WHERE entity_type = 'company' AND entity_id = %s""",
             (s, f"[Merged from company #{a}] ", chatter_service.MAX_MESSAGE_LEN, a),
         )
@@ -163,8 +163,8 @@ def merge_companies(survivor_id, absorbed_id, *, actor_id: int | None,
                 WHERE crm_field_values.value IS NULL OR crm_field_values.value = ''""", (s, a),
         )
         cur.execute(
-            "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id) "
-            "VALUES ('company', %s, %s, %s, %s)",
+            "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id, system_note) "
+            "VALUES ('company', %s, %s, %s, %s, true)",
             (s, f'Merged company #{a} ("{absorbed["name"]}") into this company — {text}', now, actor_id),
         )
         cur.execute(

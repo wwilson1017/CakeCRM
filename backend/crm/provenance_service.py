@@ -284,8 +284,8 @@ def confirm(entity_type: str, entity_id: int, field_name: str) -> dict | None:
         # deliberately NOT chatter_service.add_note: the entity row is already locked here,
         # and a confirm note is CRM housekeeping that must not trigger a touch recompute.
         cur.execute(
-            """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at)
-               VALUES (%s, %s, %s, %s)""",
+            """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, system_note)
+               VALUES (%s, %s, %s, %s, true)""",
             (entity_type, entity_id,
              f"Confirmed AI-populated value for '{field_name}'.", now),
         )

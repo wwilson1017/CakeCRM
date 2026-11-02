@@ -1589,8 +1589,66 @@ def test_a_closed_on_note_is_not_a_touch(pg_db):
     before = pg_fetchone(f"SELECT ({service.LAST_TOUCH_SQL}) AS t FROM deals d WHERE d.id = %s",
                          (did,))["t"]
     pg_execute("UPDATE deals SET stage = 'won', closed_on = current_date WHERE id = %s", (did,))
-    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message) VALUES ('deal', %s, %s)",
+    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, system_note) VALUES ('deal', %s, %s, true)",
                (did, service._closed_on_note(None, "2026-10-01")))
     after = pg_fetchone(f"SELECT ({service.LAST_TOUCH_SQL}) AS t FROM deals d WHERE d.id = %s",
                         (did,))["t"]
     assert after == before
+
+
+def test_system_note_backfill_marks_legacy_rows(pg_db):
+    from pathlib import Path
+
+    from core import postgres
+    from core.postgres import pg_execute, pg_fetchall
+    from crm import service
+
+    did = service.create_deal("Legacy notes")["id"]
+    messages = [
+        ("Confirmed AI-populated value for 'title'.", True),
+        ("Archived — x", True),
+        ("Restored from archive.", True),
+        (service._closed_on_note(None, "2026-10-01"), True),
+        ("Deal lost — price", True),
+        ('Merged deal #9 ("Dupe") into this deal.', True),
+        ('Merged company #9 ("Dupe") into this company — same', True),
+        ("[Merged from deal #9] Archived — x", True),
+        ("[Merged from deal #8] [Merged from deal #9] Restored from archive.", True),
+        ("[Merged from company #9] Deal lost — y", True),
+        ("Archived the samples in the fridge", False),
+        ("[Merged from deal #9] real note", False),
+        ("[Merged from deal #8] [Merged from deal #9] real note", False),
+        ("spoke", False),
+    ]
+    for message, _ in messages:
+        pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message) VALUES ('deal', %s, %s)",
+                   (did, message))
+    query = "SELECT message, system_note FROM crm_chatter WHERE entity_type = 'deal' AND entity_id = %s ORDER BY id"
+    assert all(row["system_note"] is False for row in pg_fetchall(query, (did,)))
+    migration = Path(postgres.__file__).parent.parent / "migrations" / "20261102031239_chatter_system_note.sql"
+    expected = [{"message": message, "system_note": flag} for message, flag in messages]
+    for _ in range(2):
+        pg_execute(migration.read_text())
+        assert pg_fetchall(query, (did,)) == expected
+
+
+def test_merge_copies_preserve_real_and_system_note_markers(pg_db):
+    from core.postgres import pg_fetchall
+    from crm import chatter_service, service
+
+    target = service.create_deal("Survivor")["id"]
+    source = service.create_deal("Duplicate")["id"]
+    chatter_service.add_note("deal", source, "Called about next steps")
+    service.archive_deal(source, reason="duplicate")
+    service.archive_deal(source, archived=False)
+    service.merge_deals(target, source)
+    rows = pg_fetchall(
+        "SELECT message, system_note FROM crm_chatter WHERE entity_type = 'deal' AND entity_id = %s ORDER BY id",
+        (target,),
+    )
+    assert {r["message"]: r["system_note"] for r in rows} == {
+        f"[Merged from deal #{source}] Called about next steps": False,
+        f"[Merged from deal #{source}] Archived — duplicate": True,
+        f"[Merged from deal #{source}] Restored from archive.": True,
+        f'Merged deal #{source} ("Duplicate") into this deal.': True,
+    }

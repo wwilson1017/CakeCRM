@@ -50,6 +50,7 @@ from core.postgres import (
     pg_fetchone,
     row_to_dict,
 )
+from crm.last_contact import live_note_sql
 
 logger = logging.getLogger(__name__)
 
@@ -70,41 +71,11 @@ _REFRESH_INTERVAL = timedelta(hours=24)
 # tick's other passes.
 _REFRESH_BATCH = 100
 
-# Housekeeping notes that provenance_service.confirm inserts directly into crm_chatter
-# ("Confirmed AI-populated value for '<field>'.") are CRM audit rows, NOT customer engagement,
-# so they are excluded from the engagement count/recency. Must mirror that message prefix.
-#
-# PUBLIC since #77: the contact list's derived `last_contact_at` and
-# analytics_service.get_contact_staleness both answer the question "when did we last talk to
-# this person?", and all three have to exclude the same rows or they contradict each other —
-# the assistant would call a contact stale while the list showed it touched today.
-#
-# Since #239 this is a FAMILY, not one pattern: the archive/restore audit notes that
-# archive_deal, merge_deals and update_contact/update_company write are state changes, not
-# touches, so archiving a record must not reset its staleness clock either. Every writer
-# builds its text from these constants, so the exclusion cannot drift from the writer.
-#
-# Rendered as `starts_with(...)` literals rather than bound LIKE params, because the one
-# consumer that needs it most — service.LAST_TOUCH_SQL — is a param-less fragment
-# interpolated into other parameterized statements, where a literal `%` raises at execute
-# time. `starts_with` carries no `%`, and the assert below keeps it that way. Accepted
-# residual, the same one the provenance prefix always had: a human note that happens to
-# start with one of these prefixes is excluded too.
-PROVENANCE_NOTE_PREFIX = "Confirmed AI-populated value for "
+# Writers build their text here; exclusion is crm_chatter.system_note, read via
+# last_contact.live_note_sql.
 ARCHIVE_NOTE_PREFIX = "Archived — "
 RESTORE_NOTE = "Restored from archive."
-# #279: every set, clear or edit of a deal's closed_on ("Closed on: none → 2026-10-01").
 CLOSED_ON_NOTE_PREFIX = "Closed on: "
-HOUSEKEEPING_NOTE_PREFIXES = (
-    PROVENANCE_NOTE_PREFIX, ARCHIVE_NOTE_PREFIX, RESTORE_NOTE, CLOSED_ON_NOTE_PREFIX,
-)
-assert all("%" not in p and "'" not in p for p in HOUSEKEEPING_NOTE_PREFIXES)
-
-
-def not_housekeeping_sql(column: str) -> str:
-    """An AND-able predicate excluding every housekeeping note. No `%` and no bind
-    parameter, on purpose — see HOUSEKEEPING_NOTE_PREFIXES."""
-    return " AND ".join(f"NOT starts_with({column}, '{p}')" for p in HOUSEKEEPING_NOTE_PREFIXES)
 
 
 # Safety valve for a MANUAL backfill("all") of a huge dataset (runs off-thread via the
@@ -421,9 +392,9 @@ def _read_deal_score(deal_id: int, q1, now: datetime) -> dict | None:
     if deal is None:
         return None
     chat = q1(
-        "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM crm_chatter "
-        "WHERE entity_type = 'deal' AND entity_id = %s AND archived = 0 AND "
-        + not_housekeeping_sql("message"),
+        "SELECT COUNT(*) AS cnt, MAX(ch.created_at) AS newest FROM crm_chatter ch "
+        "WHERE ch.entity_type = 'deal' AND ch.entity_id = %s AND "
+        + live_note_sql("ch"),
         (deal_id,),
     ) or {}
     # Engagement counts BOTH notes and logged activities (symmetric with contact scoring) —
@@ -439,9 +410,9 @@ def _read_contact_score(contact_id: int, q1, qall, now: datetime) -> dict | None
     if contact is None:
         return None
     chat = q1(
-        "SELECT COUNT(*) AS cnt, MAX(created_at) AS newest FROM crm_chatter "
-        "WHERE entity_type = 'contact' AND entity_id = %s AND archived = 0 AND "
-        + not_housekeeping_sql("message"),
+        "SELECT COUNT(*) AS cnt, MAX(ch.created_at) AS newest FROM crm_chatter ch "
+        "WHERE ch.entity_type = 'contact' AND ch.entity_id = %s AND "
+        + live_note_sql("ch"),
         (contact_id,),
     ) or {}
     act = q1(

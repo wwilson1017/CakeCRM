@@ -64,8 +64,8 @@
   integration test pins that they return the same `last_contact_at`. `NotesThread` gained an
   optional `onChanged` so a note added on the detail page reaches the list's column.
   Both surfaces now exclude `provenance_service.confirm`'s housekeeping notes via
-  the shared housekeeping predicate (public since #77; since #239 it is
-  `scoring_service.not_housekeeping_sql`, covering archive/restore audit notes too) — the
+  the shared `last_contact.live_note_sql` predicate (#352), which reads
+  `crm_chatter.system_note` and excludes every system-written note — the
   assistant confirming an AI-populated field was silently resetting a contact's staleness clock.
   **Contacts and Companies keep ROUTED detail pages**, which is a deliberate refusal of the
   issue's "detail in the `CollectionDetail` shell" — though only one of its two reasons still

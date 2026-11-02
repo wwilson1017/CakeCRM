@@ -65,6 +65,7 @@ def test_add_note_locks_target_then_inserts_in_one_txn(monkeypatch, fake_conn):
     assert "%s" in insert_sql and "?" not in insert_sql
     insert_params = next(p for s, p in conn.executed if "INSERT INTO crm_chatter" in s)
     assert insert_params[0] == "deal" and insert_params[1] == 3 and insert_params[2] == "hi"  # trimmed
+    assert insert_params[5] is False
     assert result == {"id": 5, "message": "hi", "mentions": []}
 
 
@@ -244,3 +245,12 @@ def test_unarchive_note_returns_true_when_row(rec):
     rec.fetchone_queue = [{"id": 5}]
     assert chatter_service.unarchive_note(5) is True
     assert "archived = 0" in rec.sql_containing("UPDATE crm_chatter SET archived = 0")
+
+
+def test_add_note_can_mark_a_system_note(monkeypatch, fake_conn):
+    conn = fake_conn(monkeypatch, chatter_service, fetchone_results=[(1,), (5,)])
+    monkeypatch.setattr(chatter_service, "row_to_dict", lambda cur, r: {"id": r[0]})
+    chatter_service.add_note("deal", 3, "Deal lost — price", system_note=True)
+    sql, params = next((s, p) for s, p in conn.executed if "INSERT INTO crm_chatter" in s)
+    assert "system_note" in sql
+    assert params[5] is True

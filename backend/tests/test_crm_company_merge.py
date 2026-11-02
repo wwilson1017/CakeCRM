@@ -246,3 +246,14 @@ def test_gap_fill_preserves_populated_values_and_identical_notes(db):
     fields = merge.plan_merge(1, 2)['fields']
     assert {f['field'] for f in fields} == {'industry', 'phone', 'address', 'source'}
     assert next(f for f in fields if f['field'] == 'industry')['new'] == 'Retail'
+
+
+def test_merge_copies_the_marker_and_marks_its_automatic_notes(db):
+    _, cursors, _, _, _ = db
+    merge.merge_companies(1, 2, reason="same org", actor_id=2)
+    inserts = [sql for sql, _ in cursors[0].calls if "INSERT INTO crm_chatter" in sql]
+    copy = next(sql for sql in inserts if "left(%s || message, %s)" in sql)
+    assert copy.count("archived, system_note") == 2
+    notes = [sql for sql in inserts if sql != copy]
+    assert len(notes) == 2
+    assert all("system_note" in sql and sql.endswith("true)") for sql in notes)

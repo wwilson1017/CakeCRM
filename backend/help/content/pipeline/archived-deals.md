@@ -63,4 +63,4 @@ deal does not reset how long it has gone untouched.
 
 When two deals are merged the source is archived. Restoring it makes it visible again, but
 the merge already moved its activity and todos and copied its notes onto the survivor. Those
-do not come back.
+do not come back. The automatic merge notes do not count as contact.

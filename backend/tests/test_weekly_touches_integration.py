@@ -176,13 +176,14 @@ def _activity_at(deal_id: int, instant) -> str:
     )["created_at"]
 
 
-def _note(deal_id: int, message: str = "spoke", days_ago: int = 0, archived: int = 0) -> str:
+def _note(deal_id: int, message: str = "spoke", days_ago: int = 0, archived: int = 0,
+          *, system_note: bool = False) -> str:
     from core.postgres import pg_fetchone
 
     return pg_fetchone(
-        "INSERT INTO crm_chatter (entity_type, entity_id, message, archived, created_at) "
-        "VALUES ('deal', %s, %s, %s, now() - make_interval(days => %s)) RETURNING created_at",
-        (deal_id, message, archived, days_ago),
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, archived, created_at, system_note) "
+        "VALUES ('deal', %s, %s, %s, now() - make_interval(days => %s), %s) RETURNING created_at",
+        (deal_id, message, archived, days_ago, system_note),
     )["created_at"]
 
 
@@ -260,7 +261,7 @@ def test_only_customer_contacts_count():
     _activity(_deal("Follow up", touched=False), kind="follow_up")
     _activity(_deal("Free text", touched=False), kind="field edited")
     _note(_deal("Archived note", touched=False), archived=1)
-    _note(_deal("Housekeeping", touched=False), message=scoring_service.RESTORE_NOTE)
+    _note(_deal("Housekeeping", touched=False), message=scoring_service.RESTORE_NOTE, system_note=True)
 
     out = service.get_weekly_touches()
     assert out["total_touches"] == 5
@@ -797,3 +798,41 @@ def test_working_a_deal_from_the_drill_down_does_not_remove_it_from_the_list():
     after = service.get_weekly_touch_detail(owner_id=ada)
     assert after["rep"]["touches"] == 1
     assert worked in {d["id"] for d in after["deals"]}
+
+
+@pytest.mark.parametrize("real_message", ["called back", "Closed on: discussed next steps"])
+def test_system_notes_move_neither_weekly_touches_nor_last_contact(real_message):
+    from core.postgres import pg_fetchall, pg_fetchone
+    from crm import chatter_service, provenance_service, service
+
+    ada = _user("Ada")
+    deal = _deal("Customer", owner=ada, touched=False)
+    contact_at = _activity(deal, days_ago=20)
+    source = _deal("Dupe", owner=ada, touched=False)
+    lost = _deal("Declined", owner=ada, touched=False)
+    stale_sql = f"SELECT ({service.LAST_TOUCH_SQL}) AS t FROM deals d WHERE d.id = %s"
+    before = pg_fetchone(stale_sql, (deal,))["t"]
+
+    service.archive_deal(deal, reason="pause", actor_id=ada)
+    service.archive_deal(deal, archived=False, actor_id=ada)
+    service.merge_deals(deal, source, actor_id=ada)
+    service.mark_deal_lost(lost, lost_reason="price", author_id=ada)
+    lost_notes = pg_fetchall(
+        "SELECT message, system_note FROM crm_chatter WHERE entity_type = 'deal' AND entity_id = %s ORDER BY id",
+        (lost,),
+    )
+    assert lost_notes == [{"message": "Deal lost — price", "system_note": True}]
+    provenance_service.record("deal", deal, "value", "1000", "assistant")
+    assert provenance_service.confirm("deal", deal, "value") is not None
+
+    assert _reps(service.get_weekly_touches())["Ada"]["touches"] == 0
+    pipeline = {d["id"]: d for d in service.get_pipeline()["deals"]}
+    assert pipeline[deal]["last_contact_at"] == contact_at
+    assert pg_fetchone(stale_sql, (deal,))["t"] == before
+
+    note = chatter_service.add_note("deal", deal, real_message, author_id=ada)
+    assert note["system_note"] is False
+    assert _reps(service.get_weekly_touches())["Ada"]["touches"] == 1
+    detail = service.get_weekly_touch_detail(owner_id=ada)
+    pipeline = {d["id"]: d for d in service.get_pipeline()["deals"]}
+    assert detail["deals"][0]["touched_at"] == pipeline[deal]["last_contact_at"] == note["created_at"]

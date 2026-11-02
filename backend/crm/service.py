@@ -1464,7 +1464,7 @@ def _iso_day(value) -> str | None:
 
 def _closed_on_note(old, new) -> str:
     """The housekeeping note recording a Closed on set/clear/edit (#279). A note, not a
-    touch: its prefix is in ``HOUSEKEEPING_NOTE_PREFIXES``, so no staleness read counts it."""
+    touch: it is written with ``system_note = true``."""
     return (f"{scoring_service.CLOSED_ON_NOTE_PREFIX}"
             f"{_iso_day(old) or 'none'} → {_iso_day(new) or 'none'}")
 
@@ -2013,8 +2013,8 @@ def bulk_move_deals(
             if closed_on_notes:
                 # Same cursor, same transaction as the writes they record (#279).
                 cur.execute(
-                    "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id) "
-                    "SELECT 'deal', t.id, t.msg, %s, %s "
+                    "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id, system_note) "
+                    "SELECT 'deal', t.id, t.msg, %s, %s, true "
                     "FROM unnest(%s::int[], %s::text[]) AS t(id, msg)",
                     (now, actor_id, [n[0] for n in closed_on_notes],
                      [n[1] for n in closed_on_notes]),
@@ -2074,7 +2074,8 @@ def mark_deal_lost(
     #128). The REST route passes the logged-in user; the assistant tool leaves it
     NULL, which is the honest answer there — Phase A does not thread identity into
     tool executors (see chatter_service.add_note). Without it a reason a rep typed
-    themselves would post as unattributed and undercount that rep's own activity.
+    themselves would post as unattributed. The reason records the close, not a
+    customer touch (#352).
     """
     reason = (lost_reason or "").strip()[:MAX_LOST_REASON]
     if not _write_deal_update(
@@ -2084,7 +2085,7 @@ def mark_deal_lost(
     if reason:
         try:
             chatter_service.add_note(
-                "deal", deal_id, f"Deal lost — {reason}", author_id=author_id
+                "deal", deal_id, f"Deal lost — {reason}", author_id=author_id, system_note=True
             )
         except Exception:
             logger.warning("lost-reason note failed for deal %s", deal_id, exc_info=True)
@@ -2099,11 +2100,11 @@ def _insert_housekeeping_note_cur(
 
     A direct INSERT rather than chatter_service.add_note, following provenance_service
     .confirm: the parent row is already locked here, and a housekeeping row must not
-    schedule a touch recompute. The text is built from scoring_service's housekeeping
-    constants, which every touch/staleness read excludes."""
+    schedule a touch recompute. ``system_note = true`` is what excludes it, not
+    its text."""
     cur.execute(
-        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id) "
-        "VALUES (%s, %s, %s, %s, %s)",
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id, system_note) "
+        "VALUES (%s, %s, %s, %s, %s, true)",
         (entity_type, entity_id, message, now, author_id),
     )
 
@@ -2250,8 +2251,8 @@ def merge_deals(
         # left(...) keeps a copied note inside chatter_service.MAX_MESSAGE_LEN so the
         # annotated copy stays editable in the UI (the validator rejects longer text).
         cur.execute(
-            """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, archived)
-               SELECT 'deal', %s, left(%s || message, %s), created_at, archived
+            """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, archived, system_note)
+               SELECT 'deal', %s, left(%s || message, %s), created_at, archived, system_note
                  FROM crm_chatter WHERE entity_type = 'deal' AND entity_id = %s""",
             (target_deal_id, f"[Merged from deal #{source_deal_id}] ",
              chatter_service.MAX_MESSAGE_LEN, source_deal_id),
@@ -2281,8 +2282,8 @@ def merge_deals(
             (target_deal_id, source_deal_id),
         )
         cur.execute(
-            "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id) "
-            "VALUES ('deal', %s, %s, %s, %s)",
+            "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id, system_note) "
+            "VALUES ('deal', %s, %s, %s, %s, true)",
             (target_deal_id,
              f'Merged deal #{source_deal_id} ("{titles[source_deal_id]}") into this deal.',
              now, actor_id),
@@ -3398,27 +3399,23 @@ OPEN_PREDICATE = "stage NOT IN ('won', 'lost')"
 OPEN_PREDICATE_D = "d.stage NOT IN ('won', 'lost')"
 
 # "When was this deal last touched" — the newest of: any edit (updated_at), any logged
-# activity, any un-archived note. Requires the deals table aliased as `d`.
+# activity, any live non-system note. Requires the deals table aliased as `d`.
 #
 # Shared by get_analytics (below) and analytics_service.get_stale_deals (issue #22), so
 # the dashboard's stale count and the assistant's stale-deal list can never disagree
 # about staleness. Today and deal health use this clock too. Weekly Touches instead
 # reads customer contact through TOUCH_AT_SQL below (#333).
 #
-# Housekeeping notes are not touches (#239): the archive/restore audit notes and the
-# provenance confirmations are state changes, so an archive→restore round trip must leave
-# the clock where it was. The predicate is scoring_service's shared family, rendered with
-# no `%` because this fragment is interpolated into parameterized statements. Excluding
-# provenance confirmations here too is deliberate — the contact side (#77) already does,
-# and one definition of "housekeeping" is the point.
+# System notes are not touches (#352). The shared marker predicate is percent-free
+# for embedding in parameterized statements. updated_at still moves on deal edits;
+# only the automatic note's contribution is excluded.
 LAST_TOUCH_SQL = f"""GREATEST(
     d.updated_at,
     COALESCE((SELECT MAX(a.created_at) FROM activity_log a
                WHERE a.deal_id = d.id), d.updated_at),
     COALESCE((SELECT MAX(ch.created_at) FROM crm_chatter ch
                WHERE ch.entity_type = 'deal' AND ch.entity_id = d.id
-                 AND ch.archived = 0
-                 AND {scoring_service.not_housekeeping_sql('ch.message')}), d.updated_at)
+                 AND {last_contact.live_note_sql('ch')}), d.updated_at)
 )"""
 
 # "When did this deal earn its accountability touch" (#179, redefined #333): a won
@@ -3574,25 +3571,17 @@ def _shape_activity_types(rows: list[dict]) -> list[dict]:
 
 # Chatter rows that are NOT somebody's work, and must never inflate a rep's numbers.
 #
-#   1. provenance_service.confirm inserts its audit note DIRECTLY, bypassing
-#      add_note — confirming AI-populated fields would otherwise read as engagement.
+#   1. System notes record automatic state changes, not customer contact.
 #   2. merge_deals COPIES the source deal's notes onto the target and leaves the
 #      originals in place on the archived source. Both copies are archived = 0, so
 #      filtering on that alone counts one person's note twice.
 #
-# Both are identified by their marker prefix, which is the only thing that
-# distinguishes them; `[` has no special meaning in SQL LIKE, only % and _.
-#
-# Housekeeping notes (provenance confirmations and, since #239, archive/restore audit
-# notes) are excluded through scoring_service's shared, `%`-free predicate — the SAME
-# family the #77 last-contact join and the engagement reads exclude, so no fourth copy
-# can drift from the writers. The merge-copy marker is still a bound PARAMETER rather
-# than inlined: psycopg2 interpolates `%` in any statement it is given parameters for,
-# so a literal `'[Merged from deal #%'` in the SQL raises "IndexError: tuple index out
-# of range" at execute time — a runtime 500, not a syntax error anything catches
-# earlier.
+# System notes use the same marker predicate as every contact/engagement reader.
+# Real-note merge copies are separately excluded to avoid double-credit. Their
+# prefix stays a bound parameter: a literal percent in parameterized SQL would
+# be interpreted by psycopg2.
 _ACTIVITY_CHATTER_EXCLUSIONS = (
-    f" AND {scoring_service.not_housekeeping_sql('ch.message')} AND ch.message NOT LIKE %s"
+    f" AND {last_contact.live_note_sql('ch')} AND ch.message NOT LIKE %s"
 )
 _MERGE_COPY_PATTERN = "[Merged from deal #%"
 
@@ -3784,7 +3773,7 @@ def get_analytics(days: int = 30, stale_days: int = 14, stale_limit: int = 8) ->
             SELECT ch.author_id, lower(btrim(ch.entity_type)), ch.entity_id
               FROM crm_chatter ch
              WHERE ch.created_at >= %s AND ch.created_at < %s
-               AND ch.archived = 0{_ACTIVITY_CHATTER_EXCLUSIONS}
+               {_ACTIVITY_CHATTER_EXCLUSIONS}
         ) acts
         LEFT JOIN users u ON u.id = acts.actor
         GROUP BY acts.actor, u.name, u.email
