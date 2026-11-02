@@ -71,6 +71,11 @@ the text is extracted — the original bytes are never stored — and it is wrap
 content, which tightens the confirmation rules for the rest of that conversation. Baker has no
 way to upload a file to a record; note attachments are added by you.
 
+Photos (JPEG, PNG, WebP) are accepted when the active model can see images. The photo
+is kept with the conversation and accompanies the provider requests for its attached turn,
+including tool steps and an approval continuation; later turns carry only a placeholder.
+The server's hard per-photo limit is 3.75 MB / 8000 px per side. See `assistant/photos`.
+
 ## Yours, and the team's
 
 Your conversation history with me is yours alone — nobody else can read it, admins included.

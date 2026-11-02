@@ -351,7 +351,8 @@ async def list_models(provider: str, user=Depends(get_current_user)):
 
 @setup_router.get("/status")
 def setup_status(user=Depends(get_current_user)):
-    """AI and voice readiness gates for the frontend. ``voice_ready`` requires
+    """Readiness gates for the frontend. Vision readiness follows the active model.
+    ``voice_ready`` requires
     a usable transcriber (the active provider or an OpenAI profile). ``ai_ready`` (the active provider
     resolves to a usable provider) is the flag the CRM UI keys AI affordances off;
     ``credentials_present`` is the softer "any provider configured" signal;
@@ -363,9 +364,11 @@ def setup_status(user=Depends(get_current_user)):
     from providers import get_ai_provider, get_transcriber
     store = CredentialStore()
     try:
-        ai_ready = get_ai_provider() is not None
+        provider = get_ai_provider()
     except Exception:
-        ai_ready = False
+        provider = None
+    ai_ready = provider is not None
+    vision_ready = bool(ai_ready and getattr(provider, "supports_images", False))
     try:
         voice_ready = ai_ready and get_transcriber(store=store) is not None
     except Exception:
@@ -382,6 +385,7 @@ def setup_status(user=Depends(get_current_user)):
         voice_live_preview = False
     return {
         "ai_ready": ai_ready,
+        "vision_ready": vision_ready,
         "voice_ready": voice_ready,
         "voice_live_preview": voice_live_preview,
         "credentials_present": store.is_configured(),

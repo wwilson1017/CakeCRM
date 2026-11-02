@@ -5,6 +5,7 @@ factory, engine, and history are monkeypatched, so nothing touches a DB or SDK.
 """
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from conftest import fake_admin
@@ -31,7 +32,7 @@ async def _fake_stream(*a, **k):
 @pytest.fixture
 def with_provider(monkeypatch):
     """A configured provider + a capturing engine.chat stub."""
-    monkeypatch.setattr(router_mod, "get_ai_provider", lambda: object())
+    monkeypatch.setattr(router_mod, "get_ai_provider", lambda: SimpleNamespace(model="m", supports_images=True))
     captured = {}
 
     def _chat(provider, registry, messages, **kwargs):
@@ -680,3 +681,55 @@ def test_keyless_with_a_page_still_gives_the_clean_400(client, monkeypatch):
         "messages": [{"role": "user", "content": "hi"}],
         "page": {"page": "settings", "section": "workspace"}})
     assert r.status_code == 400
+
+
+@pytest.mark.parametrize("text", ["what is this?", ""])
+def test_upload_photo_fenced_and_passed_to_engine(client, with_provider, text):
+    import io
+
+    from PIL import Image
+
+    from assistant import delimiters
+
+    buf = io.BytesIO()
+    Image.new("RGB", (1, 1)).save(buf, "PNG")
+    raw = buf.getvalue()
+    payload = json.dumps({"messages": [{"role": "user", "content": text}], "tool_mode": "power"})
+    r = client.post("/api/assistant/chat/upload", data={"payload": payload},
+                    files=[("files", ("card.png", raw, "image/png"))])
+    assert r.status_code == 200
+    assert with_provider["kwargs"]["images"] == [{"filename": "card.png", "mime": "image/png", "data": raw}]
+    assert with_provider["kwargs"]["tool_mode"] == "normal"
+    assert with_provider["kwargs"]["title_hint"] == (text or "card.png")
+    content = with_provider["messages"][-1]["content"]
+    assert content.endswith(text)
+    assert 'kind="image"' in content and delimiters.UNTRUSTED_FILE_MARKER in content
+
+
+def test_nonvision_photo_refused_before_parse(client, with_provider, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(router_mod, "get_ai_provider", lambda: SimpleNamespace(model="text-model", supports_images=False))
+
+    def forbidden(*args):
+        raise AssertionError("must not parse a photo for a text model")
+
+    monkeypatch.setattr(router_mod.uploads, "read_image", forbidden)
+    r = client.post("/api/assistant/chat/upload",
+                    data={"payload": json.dumps({"messages": [{"role": "user", "content": ""}]})},
+                    files=[("files", ("card.png", b"data", "image/png"))])
+    assert r.status_code == 400
+    assert "can't see photos" in r.json()["detail"]
+    assert not with_provider
+
+
+def test_user_upload_fences_become_attachment_names():
+    from assistant import delimiters
+
+    text = delimiters.wrap_untrusted_file('notes & "quotes".txt', "untrusted")
+    text += "\n\n" + delimiters.wrap_untrusted_image("card.png") + "\n\nwhat is this?"
+    result = router_mod._message_for_ui({"role": "user", "content": text, "tool_results": []})
+    assert result == {"role": "user", "content": "what is this?", "attachments": ['notes & "quotes".txt', "card.png"]}
+    plain = {"role": "user", "content": "hello"}
+    assert router_mod._message_for_ui(plain) == plain
+    assert "attachments" not in plain

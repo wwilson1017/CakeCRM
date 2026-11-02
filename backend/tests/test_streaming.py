@@ -54,6 +54,7 @@ class _Completions:
         self._chunks = chunks
 
     async def create(self, **kwargs):
+        self.kwargs = kwargs
         return _FakeStream(self._chunks)
 
 
@@ -168,7 +169,11 @@ class _AnthStream:
 
 class FakeAnthClient:
     def __init__(self, events, final):
-        self.messages = type("_M", (), {"stream": lambda _self, **kw: _AnthStream(events, final)})()
+        def stream(**kw):
+            self.kwargs = kw
+            return _AnthStream(events, final)
+
+        self.messages = type("_M", (), {"stream": staticmethod(stream)})()
 
 
 @pytest.mark.asyncio
@@ -258,3 +263,72 @@ async def test_provider_rate_limit_names_model(monkeypatch, provider_kind):
         'rate_limited': True, 'retry_after': 7.0,
     }
     assert events[1]['stop_reason'] == 'error'
+
+
+async def test_anthropic_photo_sdk_shape_and_cache(monkeypatch):
+    from providers import anthropic_provider as ap
+
+    client = FakeAnthClient([], _FinalMsg("end_turn"))
+    monkeypatch.setattr(ap, "_get_client", lambda api_key="": client)
+    content = [{"type": "image", "media_type": "image/png", "data": "cGhvdG8="}, {"type": "text", "text": "read"}]
+    events = [e async for e in ap.AnthropicProvider().stream_turn([{"role": "user", "content": content}], [], "sys")]
+    assert events[-1]["type"] == "_turn_complete"
+    sent = client.kwargs["messages"][0]["content"]
+    assert sent[0] == {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "cGhvdG8="}}
+    assert sent[-1] == {"type": "text", "text": "read", "cache_control": {"type": "ephemeral"}}
+    assert "cache_control" not in content[-1]
+
+
+@pytest.mark.parametrize("kind", ["openai", "compat"])
+async def test_openai_photo_sdk_shape(monkeypatch, kind):
+    import openai
+
+    from providers.openai_compat import stream_openai_turn
+    from providers.openai_provider import OpenAIProvider
+
+    client = FakeOpenAIClient([])
+    content = [{"type": "image", "media_type": "image/png", "data": "cGhvdG8="}, {"type": "text", "text": "read"}]
+    messages = [{"role": "user", "content": content}]
+    monkeypatch.setattr(openai, "AsyncOpenAI", lambda **kw: client)
+    stream = (OpenAIProvider("k").stream_turn(messages, [], "sys") if kind == "openai"
+              else stream_openai_turn(client, "m", messages, [], "sys"))
+    events = [e async for e in stream]
+    assert events[-1]["type"] == "_turn_complete"
+    assert client.chat.completions.kwargs["messages"][-1]["content"] == [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,cGhvdG8="}}, content[-1]]
+
+
+async def test_google_photos_in_history_and_last_message(monkeypatch):
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    from providers.google_provider import GoogleProvider
+
+    captured = {}
+
+    async def send(message, **kw):
+        captured["message"] = message
+        return _FakeStream([])
+
+    def start_chat(**kw):
+        captured.update(kw)
+        return SimpleNamespace(send_message_async=send)
+
+    fake = ModuleType("google.generativeai")
+    fake.configure = lambda **kw: None
+    fake.GenerativeModel = lambda **kw: SimpleNamespace(start_chat=start_chat)
+    fake.protos = SimpleNamespace(Part=SimpleNamespace, Blob=SimpleNamespace, Content=SimpleNamespace)
+    google = ModuleType("google")
+    google.generativeai = fake
+    monkeypatch.setitem(sys.modules, "google", google)
+    monkeypatch.setitem(sys.modules, "google.generativeai", fake)
+    provider = GoogleProvider()
+    monkeypatch.setattr(provider, "_format_tools", lambda tools: [])
+    content = [{"type": "image", "media_type": "image/png", "data": "cGhvdG8="}, {"type": "text", "text": "read"}]
+    messages = [{"role": "user", "content": content}, {"role": "assistant", "content": "ok"}, {"role": "user", "content": content}]
+    events = [e async for e in provider.stream_turn(messages, [], "sys")]
+    assert events[-1]["stop_reason"] == "stop"
+    for parts in (captured["history"][0].parts, captured["message"].parts):
+        assert parts[0].inline_data.mime_type == "image/png"
+        assert parts[0].inline_data.data == b"photo"
+        assert parts[1].text == "read"

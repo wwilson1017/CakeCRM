@@ -264,9 +264,9 @@ MULTIPART_ENVELOPE_BYTES = 64 * 1024
 # table exists to close. Deriving the pattern from the template makes that class of drift
 # unrepresentable rather than merely fixed.
 #
-# The assistant upload route is deliberately ABSENT: its legitimate maximum is MAX_FILES x
-# MAX_FILE_SIZE = 50 MB against the same 64 MB backstop, so the global ceiling is already
-# the tight one there and a row would only duplicate it.
+# The assistant upload route is deliberately ABSENT: photos (#345) share its
+# MAX_FILES x MAX_FILE_SIZE = 50 MB cap. The 64 MB backstop remains the tight one
+# for the multipart request, so no route-specific row is added.
 _ROUTE_REQUEST_LIMIT_SPECS: tuple[tuple[str, int], ...] = (
     (
         "/api/crm/chatter/note/{note_id}/attachments",

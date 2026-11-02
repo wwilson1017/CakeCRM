@@ -222,10 +222,14 @@ async def chat(
     title_hint: str | None = None,
     context: dict | None = None,
     page: dict | None = None,
+    images: list[dict] | None = None,
     *,
     user: dict | None,
 ) -> AsyncGenerator[str, None]:
     """Stream one assistant turn as SSE.
+
+    ``images`` are photos uploaded with this message, persisted beside its row;
+    the assembler attaches them to the provider request.
 
     ``messages`` carries only the newest user message (history lives server-side).
     An EMPTY ``messages`` with a ``conversation_id`` is a *continuation* — used to
@@ -255,7 +259,7 @@ async def chat(
     stop).
     """
     try:
-        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint, context, page, user):
+        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint, context, page, images, user):
             yield line
     except Exception:
         logger.exception("assistant.chat crashed mid-stream")
@@ -271,6 +275,7 @@ async def _chat_impl(
     title_hint: str | None = None,
     context: dict | None = None,
     page: dict | None = None,
+    images: list[dict] | None = None,
     user: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     if tool_mode not in _VALID_MODES:
@@ -319,7 +324,7 @@ async def _chat_impl(
             # Fail-closed: if we can't record the user's message we can't assemble
             # reliable history, so don't proceed.
             await asyncio.to_thread(
-                history.save_message, conversation_id, user_msg_id, "user", user_text
+                history.save_message, conversation_id, user_msg_id, "user", user_text, images=images
             )
             # Durable half of the untrusted-content taint (#72 Phase 3). The scan below
             # reads the ASSEMBLED context, which compaction can empty of this row; the

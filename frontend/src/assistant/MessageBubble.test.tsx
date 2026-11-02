@@ -27,3 +27,13 @@ it.each([
 ])('does not offer speech for an ineligible message %j', message => {
   render(message); expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
 });
+
+it.each(['read this', ''])('shows filename chips with user text %j', content => {
+  render({ id: 'u', role: 'user', content, attachments: ['card.jpg'] });
+  const chips = container.querySelectorAll('[data-testid="user-attachment"]');
+  expect(chips).toHaveLength(1);
+  expect(chips[0].textContent?.trim()).toBe('card.jpg');
+  const bubble = chips[0].parentElement!.parentElement!;
+  expect(bubble.children).toHaveLength(content ? 2 : 1);
+  expect(container.querySelector('img')).toBeNull();
+});

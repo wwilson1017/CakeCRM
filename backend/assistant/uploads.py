@@ -3,8 +3,9 @@
 Extracts readable text from uploaded PDF / DOCX / XLSX / CSV / plain-text files
 so the assistant can read them. Extracted text is wrapped in untrusted-content
 delimiters (assistant/delimiters.py) and prepended into the user's message by the
-router — there is no attachments table and no file cache (nothing forwards the
-original bytes anywhere). Adapted from Chatty's ``core/agents/tools/text_extraction.py``.
+router. Document bytes are not stored or forwarded; extracted text persists in the
+user row. Photo bytes persist in assistant_message_images, linked to that row,
+whose text contains only a nonce-fenced placeholder. Adapted from Chatty's ``core/agents/tools/text_extraction.py``.
 
 Heavy parsers (pdfplumber / python-docx / openpyxl) are imported LAZILY inside
 the functions that use them, so the assistant package imports cleanly even when
@@ -16,8 +17,12 @@ import io
 from assistant import delimiters
 
 # These limits are the authoritative gate; frontend/src/assistant/AssistantPanelBody.tsx
-# mirrors them for a pre-submit UX check. Keep the two in sync.
+# mirrors them (including IMAGE_EXTENSIONS) for a pre-submit UX check. Keep the two in sync.
 ALLOWED_EXTENSIONS = {"csv", "json", "xlsx", "md", "txt", "pdf", "docx"}
+IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
+IMAGE_MIMES = ("image/jpeg", "image/png", "image/webp")
+MAX_IMAGE_BYTES = 5 * 1024 * 1024 * 3 // 4  # Anthropic caps the base64 image at 5 MB; base64 adds a third
+MAX_IMAGE_EDGE = 8000
 MAX_FILES = 5
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 MAX_CHARS = 50_000  # per-file extracted-text cap
@@ -32,6 +37,31 @@ class UploadError(ValueError):
 
 def _ext(filename: str) -> str:
     return filename.rsplit(".", 1)[-1].lower() if filename and "." in filename else ""
+
+
+def is_image_name(filename: str) -> bool:
+    return _ext(filename) in IMAGE_EXTENSIONS
+
+
+def read_image(filename: str, data: bytes) -> dict:
+    """Check magic bytes and header dimensions; refuse rather than re-encode."""
+    from crm.attachment_service import sniff_mime
+
+    mime = sniff_mime(data[:16])
+    if mime not in IMAGE_MIMES:
+        raise UploadError(f"'{filename}' is not a JPEG, PNG or WebP image.")
+    if len(data) > MAX_IMAGE_BYTES:
+        raise UploadError(f"'{filename}' exceeds the 3.75 MB photo limit.")
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as im:
+            w, h = im.size
+    except Exception as e:
+        raise UploadError(f"Could not read image '{filename}'.") from e
+    if max(w, h) > MAX_IMAGE_EDGE:
+        raise UploadError(f"'{filename}' is larger than {MAX_IMAGE_EDGE} px on a side — shrink it first.")
+    return {"filename": filename, "mime": mime, "data": data}
 
 
 def extract_pdf_text(data: bytes, max_chars: int) -> str:
@@ -142,8 +172,12 @@ def extract_upload(filename: str, data: bytes) -> str:
     (still wrapped, so the model sees the filename).
     """
     ext = _ext(filename)
+    if ext in ("heic", "heif"):
+        raise UploadError("HEIC photos aren't supported — save it as a JPEG or PNG first.")
+    if ext == "gif":
+        raise UploadError("GIFs aren't supported — attach a JPEG, PNG or WebP photo.")
     if ext not in ALLOWED_EXTENSIONS:
-        allowed = ", ".join(sorted(ALLOWED_EXTENSIONS))
+        allowed = ", ".join(sorted(ALLOWED_EXTENSIONS | IMAGE_EXTENSIONS))
         raise UploadError(f"Unsupported file type '.{ext or filename}'. Allowed: {allowed}.")
 
     text = _extract_by_ext(ext, data, MAX_CHARS)

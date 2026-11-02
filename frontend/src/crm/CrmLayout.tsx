@@ -16,6 +16,7 @@ import { AssistantLauncher } from './components/AssistantLauncher';
 import { BrandLogo } from './components/BrandLogo';
 import { NotificationsBell } from './components/NotificationsBell';
 import { ThemeToggle } from './components/ThemeToggle';
+import { VisionReadyContext } from '../shared/VisionReadyContext';
 import { VoiceReadyContext, VoiceLivePreviewContext, VoiceLivePreviewSetterContext } from '../shared/voice/VoiceReadyContext';
 import { ActiveRecordProvider } from './RecordContext';
 import { resyncPushSubscription } from '../core/notifications/pushSubscription';
@@ -176,7 +177,7 @@ const DEMO_STATUS_UNKNOWN: DemoStatus = {
   todo_mode: 'gtd',
 };
 
-interface SetupStatus { ai_ready: boolean; credentials_present: boolean; voice_ready?: boolean; voice_live_preview?: boolean; }
+interface SetupStatus { ai_ready: boolean; credentials_present: boolean; voice_ready?: boolean; vision_ready?: boolean; voice_live_preview?: boolean; }
 
 export function CrmLayout() {
   const isMobile = useIsMobile();
@@ -294,6 +295,7 @@ export function CrmLayout() {
     <ActiveRecordProvider>
       <VoiceLivePreviewSetterContext.Provider value={handleSetVoiceLivePreview}>
       <VoiceLivePreviewContext.Provider value={!!setup?.voice_ready && !!setup?.voice_live_preview}>
+      <VisionReadyContext.Provider value={setup === null ? null : (setup.vision_ready ?? false)}>
       <VoiceReadyContext.Provider value={setup === null ? null : (setup.voice_ready ?? false)}>
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ borderBottom: `1px solid ${LINE}` }}>
@@ -470,6 +472,7 @@ export function CrmLayout() {
       <AssistantLauncher aiReady={aiReady} />
     </div>
       </VoiceReadyContext.Provider>
+      </VisionReadyContext.Provider>
       </VoiceLivePreviewContext.Provider>
       </VoiceLivePreviewSetterContext.Provider>
     </ActiveRecordProvider>

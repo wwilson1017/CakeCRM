@@ -31,7 +31,8 @@ You can also just type. Press Enter to send, Shift+Enter for a new line.
 | Conversations | Your past chats with Baker. Pick one to reopen it, or delete it. |
 | New chat | Starts a fresh conversation. |
 | Assistant settings | Shows Baker's name and personality. Only an admin can edit the personality. |
-| Attach a file | Adds files to your message for Baker to read. |
+| Attach a file | Adds files — and, when the model can see images, photos — to your message for Baker to read. |
+| Take photo | On a phone, opens the camera. The browser normally shrinks the photo and drops location data before sending. Shown only when the model can see images. |
 | Read / Ask / Auto | How much Baker may change without asking. See [Approvals](03-approvals.md). |
 | Stop | Ends a reply Baker is still working on. |
 

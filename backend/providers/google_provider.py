@@ -9,6 +9,7 @@ missing package or absent key never breaks import or startup.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 from collections.abc import AsyncGenerator
@@ -58,6 +59,10 @@ _GOOGLE_NON_CHAT = ("tts", "image", "audio", "embedding", "aqa", "-exp", "previe
 
 
 class GoogleProvider(AIProvider):
+    @property
+    def supports_images(self) -> bool:
+        return self.model.startswith("gemini-")
+
     def __init__(self, api_key: str = "", model: str = "gemini-2.5-flash"):
         super().__init__(model=model)
         self.api_key = api_key
@@ -135,6 +140,9 @@ class GoogleProvider(AIProvider):
                                 response=part_data.get("response", {}),
                             )
                         ))
+                    elif part_data.get("type") == "image":
+                        parts.append(protos.Part(inline_data=protos.Blob(
+                            mime_type=part_data["media_type"], data=base64.b64decode(part_data["data"]))))
                     elif part_data.get("type") == "text" and part_data.get("text"):
                         parts.append(protos.Part(text=part_data["text"]))
                 if parts:
@@ -174,6 +182,9 @@ class GoogleProvider(AIProvider):
                             response=part_data.get("response", {}),
                         )
                     ))
+                elif part_data.get("type") == "image":
+                    parts.append(protos.Part(inline_data=protos.Blob(
+                        mime_type=part_data["media_type"], data=base64.b64decode(part_data["data"]))))
                 elif part_data.get("type") == "text" and part_data.get("text"):
                     parts.append(protos.Part(text=part_data["text"]))
             send_msg = protos.Content(role="user", parts=parts) if parts else ""
