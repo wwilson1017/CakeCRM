@@ -1546,9 +1546,9 @@ def crm_delete_contact(contact_id: int) -> dict:
 _DEAL_SUMMARY_FIELDS = (
     "id", "title", "stage", "value", "currency", "probability",
     "expected_close_date", "closed_on", "contact_id", "contact_name", "company_id",
-    "company_name", "last_activity_at", "archived_at",
+    "company_name", "last_contact_at", "archived_at",
     # lost_reason is THE field a quarter review reads (SALES_GUIDE says so), and
-    # updated_at is the only recency signal a search row carries — last_activity_at
+    # updated_at is the only recency signal a search row carries — last_contact_at
     # is computed by get_pipeline only. Dropping either made the projection lossy for
     # the exact queries these tools exist to answer.
     "lost_reason", "updated_at",

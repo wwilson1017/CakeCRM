@@ -28,6 +28,7 @@ from crm import (
     chatter_service,
     field_service,
     gtd_common,
+    last_contact,
     scoring_service,
     touch_count_service,
 )
@@ -267,13 +268,9 @@ _TAGS_NORMALIZED_SQL = "(',' || REPLACE(REPLACE(tags, ', ', ','), ' ,', ',') || 
 
 # Per-contact last touch (#77), for the Contacts list's "Last contact" column and facet.
 #
-# Contacts have no last_contacted_at column, so recency is DERIVED from the same two signals
-# analytics_service.get_contact_staleness reads — the contact's own activity_log rows and its
-# un-archived chatter, minus provenance housekeeping notes — and exposed under the same alias.
-# One definition, so the list and the assistant's staleness tool cannot disagree about what
-# counts as talking to someone. GREATEST ignores NULLs and returns NULL only when every
-# argument is NULL, so a contact with notes but no logged activity still gets a real date and
-# one with neither correctly comes out NULL = never contacted.
+# Recency comes from last_contact.last_contact_sql, shared with contact staleness,
+# the pipeline and Weekly Touches: logged customer contact or live non-housekeeping notes.
+# GREATEST ignores NULLs, so either source can supply the date; neither means never.
 #
 # A LATERAL, deliberately, and NOT get_pipeline's grouped subquery: that one aggregates the
 # whole activity/chatter tables once per query, which it can afford because it runs once for
@@ -284,13 +281,7 @@ _TAGS_NORMALIZED_SQL = "(',' || REPLACE(REPLACE(tags, ', ', ','), ' ,', ',') || 
 # Carries no placeholder: the housekeeping exclusion is a rendered, `%`-free predicate (#239).
 _CONTACT_LAST_TOUCH_JOIN = f"""
     LEFT JOIN LATERAL (
-        SELECT GREATEST(
-            (SELECT MAX(a.created_at) FROM activity_log a WHERE a.contact_id = ct.id),
-            (SELECT MAX(ch.created_at) FROM crm_chatter ch
-              WHERE ch.entity_type = 'contact' AND ch.entity_id = ct.id
-                AND ch.archived = 0
-                AND {scoring_service.not_housekeeping_sql('ch.message')})
-        ) AS last_at
+        SELECT {last_contact.last_contact_sql('contact', 'ct.id')} AS last_at
     ) lt ON TRUE
 """
 
@@ -1118,22 +1109,19 @@ def get_deal_detail(deal_id: int) -> dict | None:
 # One SELECT list and one FROM/JOIN block, so the unbounded board, a keyset page and
 # the assistant tool's per-stage window cannot drift about which columns a deal has.
 _PIPELINE_DEAL_COLS = """d.*, c.name AS contact_name, co.name AS company_name,
-                   la.last_at AS last_activity_at"""
+                   la.last_at AS last_contact_at"""
 
 _PIPELINE_JOINS = """FROM deals d
             LEFT JOIN contacts c ON d.contact_id = c.id
             LEFT JOIN companies co ON d.company_id = co.id"""
 
-# Issue #21's last-touch blend, WHOLE-CORPUS form: aggregates all of activity_log +
-# un-archived deal chatter once, then joins. Affordable exactly when the statement reads
+# Customer contact (#333), WHOLE-CORPUS form: aggregates qualifying activity_log +
+# live non-housekeeping deal chatter once, then joins. Affordable exactly when the statement reads
 # the whole corpus in one pass (the unbounded board, the tool's window) — never once per
 # page of a sweep; see the LATERAL twin below and _CONTACT_LAST_TOUCH_JOIN.
-_PIPELINE_LAST_ACTIVITY_GROUPED = """LEFT JOIN (
+_PIPELINE_LAST_CONTACT_GROUPED = f"""LEFT JOIN (
                 SELECT deal_id, MAX(created_at) AS last_at FROM (
-                    SELECT deal_id, created_at FROM activity_log WHERE deal_id IS NOT NULL
-                    UNION ALL
-                    SELECT entity_id AS deal_id, created_at FROM crm_chatter
-                    WHERE entity_type = 'deal' AND archived = 0
+                    {last_contact.DEAL_CONTACTS_UNION_SQL}
                 ) events GROUP BY deal_id
             ) la ON la.deal_id = d.id"""
 
@@ -1146,14 +1134,9 @@ _PIPELINE_LAST_ACTIVITY_GROUPED = """LEFT JOIN (
 # improvement if it ever measures, and is purely additive.
 #
 # ANY semantic edit to one twin must be made to the other; the integration suite pins
-# that they return identical last_activity_at for the same deals.
-_PIPELINE_LAST_ACTIVITY_LATERAL = """LEFT JOIN LATERAL (
-                SELECT MAX(e.created_at) AS last_at FROM (
-                    SELECT created_at FROM activity_log WHERE deal_id = d.id
-                    UNION ALL
-                    SELECT created_at FROM crm_chatter
-                    WHERE entity_type = 'deal' AND entity_id = d.id AND archived = 0
-                ) e
+# that they return identical last_contact_at for the same deals.
+_PIPELINE_LAST_CONTACT_LATERAL = f"""LEFT JOIN LATERAL (
+                SELECT {last_contact.last_contact_sql('deal', 'd.id')} AS last_at
             ) la ON TRUE"""
 
 # The board's PRESENTATION recency order — one definition for the unbounded board's
@@ -1172,16 +1155,15 @@ def get_pipeline(
 ) -> dict:
     # Single query (optional stage WHERE) so the two branches can't drift. Beyond the
     # contact-name join, the board payload carries `company_name` (mirrors get_deal) for
-    # keyword search, and a derived `last_activity_at` (issue #21) = the most recent of the
-    # deal's genuine activity signals: explicit activity_log rows (calls/emails logged via
-    # POST /api/crm/activity — never written by edits/stage-moves) blended with un-archived
-    # deal chatter notes. The UNION-ALL/GROUP BY yields one row per deal; the LEFT JOIN
-    # leaves `last_at` NULL when a deal has neither → the client's "no activity" bucket.
+    # keyword search, and a derived `last_contact_at` (#333): newest customer contact —
+    # logged call/email/meeting/note activity or a live non-housekeeping note.
+    # The GROUP BY yields one row per deal; the LEFT JOIN leaves `last_at` NULL
+    # when a deal has neither → the client's "Never" bucket.
     # Scale note: the GROUPED join aggregates the whole activity_log + chatter before the
     # join (the stage WHERE can't push into it). That is the right plan for a statement
     # that reads the whole corpus in one pass, and the wrong one for a page of a sweep —
     # which is why issue #59 gave it a LATERAL twin and the keyset mode below uses that
-    # instead. See _PIPELINE_LAST_ACTIVITY_GROUPED / _PIPELINE_LAST_ACTIVITY_LATERAL.
+    # instead. See _PIPELINE_LAST_CONTACT_GROUPED / _PIPELINE_LAST_CONTACT_LATERAL.
     #
     # Issue #59 added three bounding modes over ONE condition list, so the HTTP board and
     # the assistant's crm_get_pipeline share one implementation rather than each capping
@@ -1266,7 +1248,7 @@ def get_pipeline(
         deals = pg_fetchall(
             f"""SELECT {_PIPELINE_DEAL_COLS}
             {_PIPELINE_JOINS}
-            {_PIPELINE_LAST_ACTIVITY_LATERAL}
+            {_PIPELINE_LAST_CONTACT_LATERAL}
             {row_where}
             ORDER BY d.id ASC
             LIMIT %s""",
@@ -1285,7 +1267,7 @@ def get_pipeline(
                        ROW_NUMBER() OVER (PARTITION BY d.stage
                                           ORDER BY {_PIPELINE_RECENCY_ORDER}) AS rn
                 {_PIPELINE_JOINS}
-                {_PIPELINE_LAST_ACTIVITY_GROUPED}
+                {_PIPELINE_LAST_CONTACT_GROUPED}
                 {where}
             ) d
             WHERE d.rn <= %s
@@ -1302,7 +1284,7 @@ def get_pipeline(
         deals = pg_fetchall(
             f"""SELECT {_PIPELINE_DEAL_COLS}
             {_PIPELINE_JOINS}
-            {_PIPELINE_LAST_ACTIVITY_GROUPED}
+            {_PIPELINE_LAST_CONTACT_GROUPED}
             {where}
             -- This tiebreaker makes the recency order total (issue #58). It steadies the
             -- within-stage card order across refreshes here; #59's keyset pages order by
@@ -1340,7 +1322,15 @@ def get_pipeline(
     return result
 
 
-def list_deals(stage: str | None = None, contact_id: int | None = None, limit: int = 50) -> list[dict]:
+def list_deals(
+    stage: str | None = None, contact_id: int | None = None, limit: int = 50,
+    sort_by: str = "updated_at",
+) -> list[dict]:
+    # The `d.id DESC` tie-breaker stays literal in the SQL so test_query_determinism can read it.
+    orders = {"updated_at": "d.updated_at DESC", "closed_on": "d.closed_on DESC NULLS LAST"}
+    if sort_by not in orders:
+        raise ValueError("sort_by must be updated_at or closed_on")
+    order = orders[sort_by]
     conditions = [LIVE_PREDICATE_D]
     params: list = []
     if stage:
@@ -1358,7 +1348,7 @@ def list_deals(stage: str | None = None, contact_id: int | None = None, limit: i
     return pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name
             FROM deals d LEFT JOIN contacts c ON d.contact_id = c.id
-            {where} ORDER BY d.updated_at DESC, d.id DESC LIMIT %s""",
+            {where} ORDER BY {order}, d.id DESC LIMIT %s""",
         params,
     )
 
@@ -1541,6 +1531,76 @@ def _classify_deal_update(
     return dict(filtered), (old_stage, new_stage) if new_stage != old_stage else None
 
 
+def _write_deal_update_cur(
+    cur, deal_id: int, filtered: dict, *, closed_on_day, today, actor_id: int | None,
+) -> tuple[bool, int | None, dict] | None:
+    """Apply the locked deal transition on the caller's transaction; no post-commit work."""
+    cur.execute(
+        "SELECT stage, archived_at, contact_id, closed_on FROM deals WHERE id = %s FOR UPDATE",
+        (deal_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    old_stage, archived_at, old_contact_id, old_closed_on = row[0], row[1], row[2], row[3]
+    filtered, stage_event = _classify_deal_update(
+        deal_id, old_stage, archived_at, filtered,
+        old_closed_on=old_closed_on, closed_on_day=closed_on_day, today=today,
+    )
+    # Rule 5. Postgres decides whether anything would actually change, not Python:
+    # the row is already locked, so `IS DISTINCT FROM` over the very columns being SET
+    # is an exact statement of "this write is a no-op", evaluated with each column's
+    # own type semantics (see _DEAL_COLUMN_TYPES for why the cast is mandatory) and
+    # handling NULL — an unlinked contact_id — the way `=` would not. Comparing a
+    # pre-image in Python instead would be subtly wrong on types the tool layer can
+    # reach: the assistant's arguments are not runtime schema-validated, and
+    # `1.0 == True` is True in Python where Postgres REFUSES to assign a boolean to a
+    # DOUBLE PRECISION column, which would turn an invalid write into a silent no-op.
+    # `updated_at` is set but deliberately NOT part of the test: the question is
+    # whether anything ELSE changed. Values bind twice — once to SET, once to compare.
+    #
+    # Checked HERE, not on the way in: _classify_deal_update can ADD columns
+    # (lost_reason, probability), so this is the first point the final written map
+    # exists. Named explicitly rather than left to a bare KeyError on the cast lookup.
+    undeclared = set(filtered) - _DEAL_COLUMN_TYPES.keys()
+    if undeclared:
+        raise ValueError(
+            f"_write_deal_update: no declared type for {sorted(undeclared)} — "
+            "add it to _DEAL_COLUMN_TYPES"
+        )
+    set_clause = ", ".join(f"{k} = %s" for k in filtered)
+    distinct_clause = " OR ".join(
+        f"{k} IS DISTINCT FROM %s::{_DEAL_COLUMN_TYPES[k]}" for k in filtered
+    )
+    values = list(filtered.values())
+    now = _now()
+    cur.execute(
+        f"UPDATE deals SET {set_clause}, updated_at = %s "
+        f"WHERE id = %s AND ({distinct_clause})",
+        values + [now, deal_id] + values,
+    )
+    # 0 means "the row exists (we hold its lock) and no column would change".
+    changed = cur.rowcount > 0
+    # A stage event exists only when _classify_deal_update saw new_stage != old_stage,
+    # so `stage` differs, so the row IS distinct and the UPDATE fired — gating on
+    # `changed` too makes "no write, no history" structural instead of inferred.
+    if stage_event and changed:
+        cur.execute(
+            "INSERT INTO deal_stage_events (deal_id, old_stage, new_stage) "
+            "VALUES (%s, %s, %s)",
+            (deal_id, stage_event[0], stage_event[1]),
+        )
+    # Rule 6: only when the stored day really changed (an edit to the same day writes
+    # nothing; an undated won deal leaving won never had a closed_on to change).
+    if (changed and "closed_on" in filtered
+            and _iso_day(filtered["closed_on"]) != _iso_day(old_closed_on)):
+        _insert_housekeeping_note_cur(
+            cur, "deal", deal_id, _closed_on_note(old_closed_on, filtered["closed_on"]),
+            actor_id, now,
+        )
+    return changed, old_contact_id, filtered
+
+
 def _write_deal_update(
     deal_id: int, filtered: dict, *, closed_on=None, actor_id: int | None = None,
 ) -> bool:
@@ -1606,72 +1666,18 @@ def _write_deal_update(
     closed_on_day = resolve_closed_on(closed_on, today) if explicit_closed_on else None
     with get_connection() as conn:
         cur = conn.cursor()
+        # Gate before the deal row lock in _write_deal_update_cur; merge/delete hold it
+        # exclusively (#334). Kept here, not in the _cur helper, whose callers already hold
+        # the deal lock.
         if filtered.get("company_id") is not None:
             cur.execute("SELECT company_follow_merge(%s)", (filtered["company_id"],))
             filtered["company_id"] = cur.fetchone()[0]
-        cur.execute(
-            "SELECT stage, archived_at, contact_id, closed_on FROM deals WHERE id = %s FOR UPDATE",
-            (deal_id,),
+        result = _write_deal_update_cur(
+            cur, deal_id, filtered, closed_on_day=closed_on_day, today=today, actor_id=actor_id,
         )
-        row = cur.fetchone()
-        if row is None:
+        if result is None:
             return False
-        old_stage, archived_at, old_contact_id, old_closed_on = row[0], row[1], row[2], row[3]
-        filtered, stage_event = _classify_deal_update(
-            deal_id, old_stage, archived_at, filtered,
-            old_closed_on=old_closed_on, closed_on_day=closed_on_day, today=today,
-        )
-        # Rule 5. Postgres decides whether anything would actually change, not Python:
-        # the row is already locked, so `IS DISTINCT FROM` over the very columns being SET
-        # is an exact statement of "this write is a no-op", evaluated with each column's
-        # own type semantics (see _DEAL_COLUMN_TYPES for why the cast is mandatory) and
-        # handling NULL — an unlinked contact_id — the way `=` would not. Comparing a
-        # pre-image in Python instead would be subtly wrong on types the tool layer can
-        # reach: the assistant's arguments are not runtime schema-validated, and
-        # `1.0 == True` is True in Python where Postgres REFUSES to assign a boolean to a
-        # DOUBLE PRECISION column, which would turn an invalid write into a silent no-op.
-        # `updated_at` is set but deliberately NOT part of the test: the question is
-        # whether anything ELSE changed. Values bind twice — once to SET, once to compare.
-        #
-        # Checked HERE, not on the way in: _classify_deal_update can ADD columns
-        # (lost_reason, probability), so this is the first point the final written map
-        # exists. Named explicitly rather than left to a bare KeyError on the cast lookup.
-        undeclared = set(filtered) - _DEAL_COLUMN_TYPES.keys()
-        if undeclared:
-            raise ValueError(
-                f"_write_deal_update: no declared type for {sorted(undeclared)} — "
-                "add it to _DEAL_COLUMN_TYPES"
-            )
-        set_clause = ", ".join(f"{k} = %s" for k in filtered)
-        distinct_clause = " OR ".join(
-            f"{k} IS DISTINCT FROM %s::{_DEAL_COLUMN_TYPES[k]}" for k in filtered
-        )
-        values = list(filtered.values())
-        now = _now()
-        cur.execute(
-            f"UPDATE deals SET {set_clause}, updated_at = %s "
-            f"WHERE id = %s AND ({distinct_clause})",
-            values + [now, deal_id] + values,
-        )
-        # 0 means "the row exists (we hold its lock) and no column would change".
-        changed = cur.rowcount > 0
-        # A stage event exists only when _classify_deal_update saw new_stage != old_stage,
-        # so `stage` differs, so the row IS distinct and the UPDATE fired — gating on
-        # `changed` too makes "no write, no history" structural instead of inferred.
-        if stage_event and changed:
-            cur.execute(
-                "INSERT INTO deal_stage_events (deal_id, old_stage, new_stage) "
-                "VALUES (%s, %s, %s)",
-                (deal_id, stage_event[0], stage_event[1]),
-            )
-        # Rule 6: only when the stored day really changed (an edit to the same day writes
-        # nothing; an undated won deal leaving won never had a closed_on to change).
-        if (changed and "closed_on" in filtered
-                and _iso_day(filtered["closed_on"]) != _iso_day(old_closed_on)):
-            _insert_housekeeping_note_cur(
-                cur, "deal", deal_id, _closed_on_note(old_closed_on, filtered["closed_on"]),
-                actor_id, now,
-            )
+        _, old_contact_id, filtered = result
     # After commit, on purpose: a scoring read inside the transaction would see (and
     # lengthen) the FOR UPDATE window. Dedup/None-filtering is score_on_event's job.
     # Deliberately NOT gated on `changed`, unlike the stage event above — that is the one
@@ -1717,7 +1723,7 @@ def _embed_custom_fields(rows: list[dict]) -> list[dict]:
 def search_deals(
     search: str = "", stage: str | None = None, sort_by: str = "updated_at",
     sort_dir: str = "desc", custom_field_filters: dict | None = None, limit: int = 25,
-    include_archived: bool = False,
+    include_archived: bool = False, open_first: bool = False,
 ) -> list[dict]:
     """Keyword + facet search over live deals, with custom-field values embedded.
 
@@ -1779,6 +1785,9 @@ def search_deals(
         # advertises boolean filter values).
         params.extend([str(key), field_service.normalize_value(value)])
     params.append(limit)
+
+    if open_first:
+        sort_expr = f"({OPEN_PREDICATE_D}) DESC, {sort_expr}"
 
     rows = pg_fetchall(
         f"""SELECT d.*, c.name AS contact_name, co.name AS company_name
@@ -3030,10 +3039,10 @@ def _touch_rep_rows(
     This query alone defines the rep universe AND every total the payload reports. The
     universe is every owner of a live OPEN deal — a rep who touched nothing still gets a
     row, because seeing who did nothing is the point of a weekly accountability pull — plus
-    every owner of a deal WON inside the window (issue #179), so a rep whose only deal
-    closed this week is credited rather than erased. The ``w.in_window`` on the won branch
-    is load-bearing: without it, a win outside the window — last month, or next week while
-    you view this week — would keep its owner on the roster as a permanent zero row. The
+    every owner of a WON deal whose last pre-win contact falls inside the window (#333).
+    Closing a worked deal therefore keeps its credit in the contact's window.
+    The ``w.in_window`` on the won branch is load-bearing: without it, a contact outside
+    the window would keep its owner on the roster as a permanent zero row. The
     NULL owner is a bucket rather than an exclusion, which is what makes the totals the sums
     of the buckets.
 
@@ -3073,8 +3082,7 @@ def _touch_rep_rows(
                    COUNT(*) FILTER (WHERE w.in_window) AS touched_deals
             FROM deals d
             JOIN LATERAL (SELECT {TOUCH_AT_SQL} AS touch_at) t ON TRUE
-            JOIN LATERAL (SELECT t.touch_at >= %s AND t.touch_at < %s
-                             AND t.touch_at <> d.created_at AS in_window) w ON TRUE
+            JOIN LATERAL (SELECT t.touch_at >= %s AND t.touch_at < %s AS in_window) w ON TRUE
             LEFT JOIN users u ON u.id = d.owner_id
             WHERE {LIVE_PREDICATE_D}
               AND ({OPEN_PREDICATE_D} OR (d.stage = 'won' AND w.in_window)){owner_sql}
@@ -3099,12 +3107,11 @@ def _touched_deal_rows(
     than the limit. ``PARTITION BY d.owner_id`` puts every unowned deal in one partition,
     which is exactly the Unassigned bucket.
 
-    A won deal is a member iff its WIN falls in the window — the same ``TOUCH_AT_SQL``
-    instant the rep query counts by (issue #179), so a rep's number and the rows beneath it
-    are one definition rather than two. ``touched_at`` is that instant, so the drill-down
-    dates a won deal by its close rather than by a note typed on it afterwards. Unlike the
-    rep query this one reads the window predicate ONCE, so it stays in the WHERE clause and
-    needs no second LATERAL.
+    A won deal is a member iff its last contact at or before the win falls in the window:
+    the same ``TOUCH_AT_SQL`` instant the rep query counts by. ``touched_at`` is that
+    instant, so the drill-down dates a won deal by its last contact before the close,
+    not by a note typed on it afterwards. Unlike the rep query this one reads the window
+    predicate ONCE, so it stays in the WHERE clause and needs no second LATERAL.
 
     A global ``LIMIT`` (what #76 had, when the card had one implicit rep) would leave rep
     rows showing a count with no rows beneath them and make the truncation line lie. Both
@@ -3133,8 +3140,7 @@ def _touched_deal_rows(
                 LEFT JOIN contacts c ON d.contact_id = c.id
                 LEFT JOIN companies co ON d.company_id = co.id
                 WHERE {LIVE_PREDICATE_D} AND ({OPEN_PREDICATE_D} OR d.stage = 'won')
-                  AND t.touch_at >= %s AND t.touch_at < %s
-                  AND t.touch_at <> d.created_at{owner_sql}
+                  AND t.touch_at >= %s AND t.touch_at < %s{owner_sql}
             ) ranked
             WHERE rn <= %s
             ORDER BY owner_id NULLS LAST, rn""",
@@ -3250,34 +3256,25 @@ def get_weekly_touches(start: str | None = None, end: str | None = None) -> dict
     had it, each rep carrying their own capped deal rows so the #56 evidence drill-down
     still works straight from the card.
 
-    Two different signals, deliberately — and the re-grouping changes neither:
+    Two different signals, deliberately:
 
-    * **Window membership** is ``LAST_TOUCH_SQL`` — the same keyless GREATEST(edit, newest
-      activity, newest live note) expression the "Needs a touch" panel uses via
-      ``analytics_service.get_stale_deals``. It is exact, event-grained, and needs no
-      provider. It is emphatically NOT ``deals.ai_touch_count_at``: that column is #16's
-      stale-write-guard key (an evidence watermark that falls back to the deal's
-      ``created_at`` and only advances when a provider answered and the CAS accepted), so
-      using it here made every provider timeout silently delete a deal from a weekly
-      accountability number — and disagreed with the stale-deal panel 200px below it.
-
-      Creation is NOT a touch: ``create_deal`` leaves ``updated_at == created_at``, so
-      without the ``last_touch <> created_at`` guard a fresh import or a sample-data load
-      would report every new deal as worked. Note this makes ``LAST_TOUCH_SQL``'s floor on
-      ``d.updated_at`` load-bearing: any future writer that bumps ``updated_at`` on a
-      schedule (rather than on a real edit) would silently read as a touch — which is why
-      ``archive_deal`` deliberately does not bump it.
+    * **Window membership** is the latest customer contact from
+      ``last_contact.last_contact_sql``: a logged call/email/meeting/note or a live,
+      non-housekeeping note. It is keyless and event-grained; it never depends on
+      ``deals.ai_touch_count_at`` or whether a provider answered. Edits, creation and
+      stage moves are not contact, so no creation-time guard is needed. A genuine
+      contact counts even when its timestamp equals the deal's creation.
     * **The number shown per deal** is #16's ``ai_touch_count``, and it is what supplies the
       zero-keys gate: with no provider the worker never runs, every count stays NULL,
       ``computed_deals`` is 0, and the card hides itself rather than rendering an empty or
       erroring panel (product rule: hidden affordance, never an error).
-    * **A touch counts while the deal is open, up to and including the move into Won, and
-      never after** (issue #179). ``TOUCH_AT_SQL`` freezes a won deal's instant at its
-      journaled win, so the week a rep worked a deal and closed it credits every touch on
-      it — including the close, the touch most worth crediting — instead of erasing the deal
-      from the numbers on Friday. Consequently ``open_deals`` keeps meaning "currently open"
-      and is NOT a denominator: a won deal is touched but not open, so ``touches`` can
-      exceed it, and both surfaces render the two as separate facts rather than "N of M".
+    * **A won deal is dated by its latest contact at or before the latest journaled
+      win** (#333). ``TOUCH_AT_SQL`` freezes that date, so post-win notes move nothing
+      and the move itself earns no credit. A win without a prior contact or a journal
+      entry contributes nothing. Membership still means the LATEST qualifying contact
+      falls in the window, not any contact in the window. ``open_deals`` keeps meaning
+      "currently open" and is NOT a denominator: touches can exceed it, and both
+      surfaces render the two as separate facts rather than "N of M".
       Lost and archived deals stay excluded outright — ``bulk_move_deals`` can mark hundreds
       of deals Lost in one click, and a symmetric rule would mint that many touches.
 
@@ -3324,7 +3321,7 @@ def get_weekly_touch_detail(
 
     Returns ``None`` for a user id that does not exist, which the router turns into a 404.
     The Unassigned bucket always resolves, and so does a real rep with nothing open and
-    nothing won this window — they get a zero row, because "this rep touched nothing" is an
+    no qualifying pre-win contact this window — they get a zero row, because "this rep touched nothing" is an
     answer, not a missing page.
 
     Shares both query builders AND the window resolver with the card, so there is exactly
@@ -3333,7 +3330,7 @@ def get_weekly_touch_detail(
     **The window is RE-RESOLVED here, not forwarded as frozen instants, and that is the
     correction Stage 4 forced.** Freezing the card's exact bounds looks like it guarantees
     the page lists what the clicked number counted. It cannot, because membership under
-    ``LAST_TOUCH_SQL`` is "this deal's CURRENT most recent touch falls in the window" — a
+    the contact definition is "this deal's CURRENT most recent touch falls in the window" — a
     statement about now, not a historical fact. So a touch made after the card rendered
     moves that deal's ``last_touch`` past a frozen upper bound and DELETES it from the page,
     including a touch the user makes from the page itself: log a call and the deal you just
@@ -3405,7 +3402,8 @@ OPEN_PREDICATE_D = "d.stage NOT IN ('won', 'lost')"
 #
 # Shared by get_analytics (below) and analytics_service.get_stale_deals (issue #22), so
 # the dashboard's stale count and the assistant's stale-deal list can never disagree
-# about what "touched" means. Change it here and both move together.
+# about staleness. Today and deal health use this clock too. Weekly Touches instead
+# reads customer contact through TOUCH_AT_SQL below (#333).
 #
 # Housekeeping notes are not touches (#239): the archive/restore audit notes and the
 # provenance confirmations are state changes, so an archive→restore round trip must leave
@@ -3423,12 +3421,10 @@ LAST_TOUCH_SQL = f"""GREATEST(
                  AND {scoring_service.not_housekeeping_sql('ch.message')}), d.updated_at)
 )"""
 
-# "When did this deal earn its accountability touch" (issue #179). The rule, stated once:
-# a deal currently in 'won' is dated by its recorded win; anything else is dated by its
-# last touch. So a rep who works a deal Monday through Wednesday and closes it Thursday
-# keeps that whole week — including the close, which is the touch most worth crediting —
-# and a note typed on a deal that is already won moves nothing, because the deal's instant
-# has frozen at the win.
+# "When did this deal earn its accountability touch" (#179, redefined #333): a won
+# deal is dated by its latest customer contact at or before the latest journaled win;
+# otherwise by its latest customer contact. The move itself earns nothing. A note
+# typed after that win moves nothing, because the contact search is capped at the win.
 #
 # The win instant is read from the `deal_stage_events` journal (#22), which has recorded
 # every stage transition — in both directions, in the same transaction as the stage write —
@@ -3442,14 +3438,12 @@ LAST_TOUCH_SQL = f"""GREATEST(
 # choice when the value is then compared against a time window, and stage writes are
 # serialized by _write_deal_update's SELECT ... FOR UPDATE.)
 #
-# A CASE, deliberately NOT LEAST(last_touch, won_at): Postgres LEAST ignores NULL operands,
-# so LEAST would fall back to `updated_at` for a deal in 'won' with no journaled win — the
-# one deal that must count for nothing. Those deals are real and enumerable: created
-# straight into 'won' (create_deal writes no event — it has no old stage to leave), the
-# demo seed's won/lost rows, and anything won before the journal existed. NULL here fails
-# every window comparison, so they contribute nothing, exactly as they do today. That is
-# the issue's own forward-only rule, and it agrees with the existing "creation is not a
-# touch" guard.
+# A CASE, deliberately NOT LEAST(last_contact, won_at): Postgres LEAST ignores NULL
+# operands, so LEAST would credit a won deal with no journaled win. Those deals are
+# real: created straight into won, demo seed rows, or won before the journal existed.
+# With no journaled win the cutoff is NULL and neither contact lane admits a row.
+# With no contact before a real win both lanes also yield NULL. Either contributes
+# nothing to a window. A genuine contact at the win instant counts (inclusive cutoff).
 #
 # 'lost' is deliberately NOT mirrored: bulk_move_deals can mark a whole column lost in one
 # click, and a symmetric rule would mint that many touches. Lost and archived deals stay
@@ -3458,9 +3452,10 @@ LAST_TOUCH_SQL = f"""GREATEST(
 # Requires the deals table aliased as `d`. Shared by BOTH Weekly Touches builders, so the
 # card and the drill-down cannot disagree about when a deal was touched.
 TOUCH_AT_SQL = f"""CASE WHEN d.stage = 'won'
-    THEN (SELECT MAX(e.changed_at) FROM deal_stage_events e
-           WHERE e.deal_id = d.id AND e.new_stage = 'won')
-    ELSE {LAST_TOUCH_SQL} END"""
+    THEN (SELECT {last_contact.last_contact_sql('deal', 'd.id', before='win.won_at')}
+            FROM (SELECT MAX(e.changed_at) AS won_at FROM deal_stage_events e
+                   WHERE e.deal_id = d.id AND e.new_stage = 'won') win)
+    ELSE {last_contact.last_contact_sql('deal', 'd.id')} END"""
 
 # The assistant tool trims activity_by_type to the top-N by count: the activity
 # vocabulary is free text (no CHECK), so an unbounded tail of one-off kinds would
@@ -4135,20 +4130,22 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # reminders (#283) trail both variants: user-authored data like todos. Its only FKs are
     # to users (not truncated) and to itself, and its writers lock only reminders rows, so
     # the last position can't invert. It stays out of is_crm_empty, like todo_projects.
+    # Deal ids restart: stale finds must not license writes to reused ids. The finds
+    # writer touches only its own table, so taking its lock last cannot invert.
     if include_definitions:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
             "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_definitions, "
             "crm_field_values, "
             "crm_field_provenance, deal_stage_events, proactive_nudges, "
-            "deal_ai_touch_evidence, crm_stage_criteria, reminders RESTART IDENTITY"
+            "deal_ai_touch_evidence, crm_stage_criteria, reminders, assistant_deal_finds RESTART IDENTITY"
         )
     else:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
             "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_values, "
             "crm_field_provenance, deal_stage_events, proactive_nudges, deal_ai_touch_evidence, "
-            "crm_stage_criteria, reminders RESTART IDENTITY"
+            "crm_stage_criteria, reminders, assistant_deal_finds RESTART IDENTITY"
         )
 
 

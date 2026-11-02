@@ -39,6 +39,22 @@ You can also just type. Press Enter to send, Shift+Enter for a new line.
 
 Closing the tab, locking your phone or switching to another conversation does not stop a reply. It keeps running on the server, and when you come back the drawer shows what Baker is doing and how long it has been at it. Press **Stop** to end it; Baker stops at its next step, and a step already running may still finish.
 
+## When a reply doesn't finish
+
+If the AI service stops after starting a reply or completing a step, Baker saves a
+short note explaining why no complete reply arrived. This also covers an empty answer,
+a response cut off by its length limit, or too many tool rounds. Any partial reply is
+kept with the note. If steps already ran, check their results before asking again:
+a missing reply does not mean that no changes were made.
+
+For Anthropic, OpenAI and OpenAI-compatible providers, Baker waits briefly and retries
+the same model once per turn when a rate limit arrives before any output from that
+attempt. It uses the service's retry delay, capped at 10 seconds, or waits 2 seconds
+when no delay is supplied. If the rate limit persists, the error names the model.
+
+Stopping a reply yourself or a server restart does not add this note. A failure before
+any reply or completed step still shows an error without adding an assistant message.
+
 ## Yours, and the team's
 
 Your conversations with Baker are yours alone. Nobody else can read them, admins included.
@@ -48,3 +64,9 @@ Baker's memory is different: the facts it records and the files it keeps are sha
 ## On your phone
 
 Each person can link their own Telegram account and chat with Baker from there. See [Telegram](../09-integrations/02-telegram.md).
+
+## Talk to Baker and hear replies
+
+When an OpenAI key is connected and your browser can record audio, a mic appears beside Send. Hold to speak and let go to send, slide left to cancel, or tap or swipe up for hands-free recording. Stop in hands-free mode puts the words in the box to review. Text arrives after recording ends; a timer and wave show progress while you speak. Recordings stop after three minutes. The mic needs a secure page and browser permission. An OpenAI key can handle speech even when another provider handles chat.
+
+The speaker toggle in the header reads new replies once they finish. It starts off and is remembered on this device. Sending a message arms that thread for automatic reading, including replies after approvals; opening history alone does not. Each finished reply also has a Read aloud button. The browser's speech engine needs no additional key; some voices use a network service from your browser vendor. Starting the mic stops playback. Recordings go through your install to the transcribing provider and are never stored by CakeCRM.

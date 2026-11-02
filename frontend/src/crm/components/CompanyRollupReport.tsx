@@ -37,6 +37,7 @@ import { btnSmall, cardStyle, sectionHeading } from '../styles';
 import { PriorityBadge, ScorePill, StatusBadge, TouchCountPill } from './badges';
 import { displayValue } from './CustomFieldsSection';
 import { OwnerName } from './OwnerName';
+import { money } from '../money';
 import { CompanyTimeline } from './CompanyTimeline';
 
 interface Props {
@@ -53,22 +54,6 @@ interface RollupState {
 }
 
 const EMPTY: ReadonlySet<number> = new Set();
-/**
- * Money in the currency it is actually denominated in.
- *
- * `deals.currency` is user-writable free text, so this must not assume USD and must not
- * assume the code is even valid — `Intl` throws a RangeError on an unknown one, and a
- * report is not allowed to blank itself over a typo in a currency field.
- */
-const money = (n: number, currency: string): string => {
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency', currency, maximumFractionDigits: 0,
-    }).format(n);
-  } catch {
-    return `${currency} ${Math.round(n).toLocaleString()}`;
-  }
-};
 const dash = '—';
 
 const toggle = (set: ReadonlySet<number>, id: number): ReadonlySet<number> => {

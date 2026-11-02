@@ -18,12 +18,14 @@ See [Notifications](../01-getting-started/06-notifications.md) for how notificat
 
 ## Attaching files
 
-Press **Attach** in the note composer to add files to a note:
+Press **Attach** in the note composer to add files to a note, or **Take photo** to open your phone camera and attach a shot:
 
-- Up to **10 MB** per file.
+- Up to **10 MB** per original file, before shrinking.
 - Up to **10 files** per note.
 
 Images that the app can preview show as a small tile. Click it to see a larger view. Other files show as a chip that downloads when you click it. You can remove an attachment from its note.
+
+Photos are shrunk in your browser to about **300 KB** before they upload, which also removes the location your phone stored in them. If your browser can't shrink a photo, it uploads as it is, location included. GIFs, animated images and other files upload unchanged.
 
 Attachments work with no AI provider connected.
 
@@ -34,3 +36,7 @@ Each note has **Edit** and **Archive**. An edited note is marked "· edited". An
 ## Notes field versus Chatter
 
 A contact or company also has a single **Notes** field on its form. It shows in a card near the top of the page. Use it for a standing summary, such as "Weekly bread and pastry buyer." Use Chatter for the running story.
+
+## Dictate a note
+
+With a transcribing provider connected (today OpenAI) and a browser that supports recording, use the mic after Attach and Take photo on a contact, company or deal. Hold to speak and release, or tap for hands-free recording and press Stop. The transcript is appended to your draft, with a best-effort tidy of filler words and false starts. Nothing is saved until you press Post. Review names, numbers and meaning: a conservative word check falls back to the raw transcript for some changes, but cannot catch every mistake. The audio goes through your install to the transcribing provider and is never stored by CakeCRM; the text also goes to the active chat provider for the tidy pass.

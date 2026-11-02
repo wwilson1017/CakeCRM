@@ -38,7 +38,7 @@ configured — AI features hide themselves rather than showing errors.
 - **Pipeline** — the deal board, by stage, with a list view and filters. See
   `pipeline/stages`.
 - **Contacts** and **Companies** — searchable lists with detail pages that roll up linked
-  records, notes and activity.
+  records, notes and activity. Use **Take photo** in the note composer to attach a camera shot; supported photos are shrunk in the browser before upload.
 - **Todos** — your follow-ups. See `todos/modes`.
 - **Reminders** — a note delivered to chosen teammates at a date and time, once or on
   repeat. See `reminders/overview`.

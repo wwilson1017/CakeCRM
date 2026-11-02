@@ -61,6 +61,10 @@ stored credentials. Every AI affordance keys off it:
 - Not ready — those affordances are hidden, and a dismissible banner offers to add a key.
   Nothing errors and nothing is blocked.
 
+## Voice
+
+Talking to Baker and dictating notes need a provider that can transcribe speech, today OpenAI. With an OpenAI key connected, the microphone appears even when another provider is active for chat. Without a transcribing provider it stays hidden. Reading replies aloud uses the browser's speech engine and needs no additional key.
+
 ## Disconnecting
 
 Disconnecting a provider deletes its stored key. If it was the active provider, the active

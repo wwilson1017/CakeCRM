@@ -29,10 +29,11 @@ def _create(user=SEAT, **args):
     return tools.get_reminder_tools(user)[1]["reminder_create"](**args)
 
 
-def test_the_four_tools_and_their_write_flags():
+def test_the_six_tools_and_their_write_flags():
     defs = {d["name"]: d["writes"] for d in tools.REMINDER_TOOL_DEFS}
     assert defs == {"reminder_create": True, "reminder_list": False,
-                    "reminder_update": True, "reminder_void": True}
+                    "reminder_update": True, "reminder_void": True,
+                    "reminder_pause": True, "reminder_resume": True}
     assert not any("confirm_tier" in d for d in tools.REMINDER_TOOL_DEFS)
 
 
@@ -110,3 +111,27 @@ def test_the_update_schema_can_clear_the_time_and_the_repeat():
     assert "" in props["reminder_update"]["repeat"]["enum"]
     assert "" not in props["reminder_create"]["repeat"]["enum"]
     assert recurrence.validate_repeat("") is None and recurrence.parse_time("") is None
+
+
+@pytest.mark.parametrize("action", ["pause", "resume"])
+def test_pause_resume_call_the_service_and_name_the_target(monkeypatch, action):
+    seen = []
+    row = {"id": 9, "note": "Follow up", "owner_id": 3}
+    monkeypatch.setattr(service, f"{action}_reminder", lambda rid: seen.append(rid) or row)
+    out = tools.get_reminder_tools(SEAT)[1][f"reminder_{action}"](reminder_id=9)
+    assert seen == [9] and out["reminder"] == row
+    assert out["target"] == {"entity_type": "reminder", "id": 9,
+                              "title": "Follow up", "owner_id": 3}
+
+
+@pytest.mark.parametrize("action", ["pause", "resume"])
+def test_pause_resume_errors_are_tool_results(monkeypatch, action):
+    from crm.gtd_common import NotFoundError, ValidationError
+
+    executor = tools.get_reminder_tools(SEAT)[1][f"reminder_{action}"]
+    for error, message in [(NotFoundError("missing"), "Not found"),
+                           (ValidationError("Wrong status"), "Wrong status")]:
+        def fail(rid):
+            raise error
+        monkeypatch.setattr(service, f"{action}_reminder", fail)
+        assert executor(reminder_id=9) == {"error": message}

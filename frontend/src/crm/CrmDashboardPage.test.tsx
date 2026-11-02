@@ -91,6 +91,9 @@ interface ApiCallOptions { method?: string; body?: string }
 function routeApi(path: string, options?: ApiCallOptions) {
   const method = options?.method ?? 'GET';
   if (path === '/api/crm/dashboard') return Promise.resolve(DASHBOARD);
+  if (path === '/api/crm/deals?stage=won&sort_by=closed_on&limit=1000') {
+    return Promise.resolve({ deals: [deal(12, { title: 'Recent sale', stage: 'won', closed_on: new Date().toLocaleDateString('en-CA') })] });
+  }
   if (path === '/api/crm/analytics') return Promise.resolve(ANALYTICS);
   if (path.startsWith('/api/crm/dashboard/weekly-touches')) {
     // computed_deals 0 is the zero-AI-keys state: the card renders nothing, which keeps this
@@ -196,6 +199,14 @@ const callsWithMethod = (method: string) =>
 // ── Opening a deal ───────────────────────────────────────────────────────────────────────────
 
 describe('opening a deal', () => {
+  it('opens a closed sale outside top_deals through loadById', async () => {
+    render();
+    await settle();
+    click([...container.querySelectorAll('button')].find(b => b.textContent?.includes('Recent sale'))!);
+    await settle();
+    expect(dialogTitle()).toBe('Fetched 12');
+  });
+
   it('opens a top-deals row from the row the page already holds', async () => {
     render();
     await settle();

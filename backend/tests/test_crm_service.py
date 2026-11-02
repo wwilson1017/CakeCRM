@@ -8,7 +8,7 @@ writes go through ``get_connection`` and use the shared ``fake_conn`` fixture.
 
 import pytest
 
-from crm import gtd_common, scoring_service, service
+from crm import gtd_common, last_contact, scoring_service, service
 
 
 class Recorder:
@@ -378,7 +378,7 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
         "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
         "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_values, "
         "crm_field_provenance, deal_stage_events, proactive_nudges, deal_ai_touch_evidence, "
-        "crm_stage_criteria, reminders RESTART IDENTITY"
+        "crm_stage_criteria, reminders, assistant_deal_finds RESTART IDENTITY"
         in s for s in stmts
     )
     assert not any("crm_field_definitions" in s for s in stmts)
@@ -416,7 +416,7 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
         "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
         "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_definitions, "
         "crm_field_values, crm_field_provenance, deal_stage_events, proactive_nudges, "
-        "deal_ai_touch_evidence, crm_stage_criteria, reminders RESTART IDENTITY"
+        "deal_ai_touch_evidence, crm_stage_criteria, reminders, assistant_deal_finds RESTART IDENTITY"
         in s for s in stmts
     )
     assert any("sample_data_loaded = FALSE" in s for s in stmts)
@@ -782,29 +782,29 @@ def test_get_deal_joins_company_name(rec):
     assert "co.name AS company_name" in sql and "LEFT JOIN companies co" in sql
 
 
-# ── Pipeline board payload: company_name + derived last_activity_at (issue #21) ─
+# ── Pipeline board payload: company_name + derived last_contact_at (issue #21) ─
 
-def test_get_pipeline_includes_company_and_last_activity(rec):
+def test_get_pipeline_includes_company_and_last_contact(rec):
     # deals query, then the stage_summary aggregate query.
     rec.fetchall_queue = [
         [{"id": 1, "stage": "lead", "contact_name": "Ann",
-          "company_name": "Acme", "last_activity_at": "2026-07-20T10:00:00+00:00"}],
+          "company_name": "Acme", "last_contact_at": "2026-07-20T10:00:00+00:00"}],
         [{"stage": "lead", "count": 1, "total_value": 100.0}],
     ]
     out = service.get_pipeline()
-    sql = rec.sql_containing("last_activity_at")
+    sql = rec.sql_containing("last_contact_at")
     # company join mirrors get_deal; new derived field is aliased.
     assert "co.name AS company_name" in sql and "LEFT JOIN companies co" in sql
-    assert "la.last_at AS last_activity_at" in sql
-    # last_activity blends BOTH genuine activity lanes via UNION ALL → one row per deal.
+    assert "la.last_at AS last_contact_at" in sql
+    # last_contact blends BOTH customer-contact lanes via UNION ALL → one row per deal.
     assert "UNION ALL" in sql and "GROUP BY deal_id" in sql
-    assert "FROM activity_log WHERE deal_id IS NOT NULL" in sql
+    assert " ".join(last_contact.DEAL_CONTACTS_UNION_SQL.split()) in sql
     assert "FROM crm_chatter" in sql and "entity_type = 'deal'" in sql and "archived = 0" in sql
     # unfiltered board load carries no stage WHERE.
     assert "WHERE d.stage" not in sql
     # new fields pass straight through the payload.
     assert out["deals"][0]["company_name"] == "Acme"
-    assert out["deals"][0]["last_activity_at"] == "2026-07-20T10:00:00+00:00"
+    assert out["deals"][0]["last_contact_at"] == "2026-07-20T10:00:00+00:00"
     assert out["total_pipeline_value"] == 100.0
 
 
@@ -812,14 +812,14 @@ def test_get_pipeline_stage_branch_carries_new_fields(rec):
     # The stage-filtered branch (used by the assistant's crm_get_pipeline tool) must
     # carry the same new fields — the unified query guarantees the branches can't drift.
     rec.fetchall_queue = [
-        [{"id": 2, "stage": "lead", "company_name": None, "last_activity_at": None}],
+        [{"id": 2, "stage": "lead", "company_name": None, "last_contact_at": None}],
         [],
     ]
     service.get_pipeline(stage="lead")
-    sql = rec.sql_containing("last_activity_at")
+    sql = rec.sql_containing("last_contact_at")
     assert "WHERE d.archived_at IS NULL AND d.stage = %s" in sql
-    assert "la.last_at AS last_activity_at" in sql and "co.name AS company_name" in sql
-    assert rec.params_for("last_activity_at") == ["lead"]
+    assert "la.last_at AS last_contact_at" in sql and "co.name AS company_name" in sql
+    assert rec.params_for("last_contact_at") == ["lead"]
 
 
 # ── Pipeline board: the three bounding modes (issue #59) ──────────────────────
@@ -833,8 +833,9 @@ def test_get_pipeline_keyset_first_page(rec):
     # A page must use the per-deal LATERAL, never the whole-table grouped aggregate:
     # the grouped form would scan all of activity_log on every page of a sweep.
     assert "LEFT JOIN LATERAL" in sql and "GROUP BY deal_id" not in sql
+    assert " ".join(last_contact.last_contact_sql("deal", "d.id").split()) in sql
     # ...while still carrying every column the unbounded board carries.
-    assert "la.last_at AS last_activity_at" in sql and "co.name AS company_name" in sql
+    assert "la.last_at AS last_contact_at" in sql and "co.name AS company_name" in sql
     assert "d.id > %s" not in sql, "a first page has no cursor"
     assert rec.params_for("ORDER BY d.id ASC") == [501]
     # A FIRST page still pays for — and returns — the envelope.
@@ -1232,6 +1233,7 @@ def test_contact_list_search_and_detail_all_derive_last_contact_at(rec):
         call()
         sql = rec.sql_containing("last_contact_at")
         assert "lt.last_at AS last_contact_at" in sql
+        assert " ".join(last_contact.last_contact_sql("contact", "ct.id").split()) in sql
         # Both signals, and the archived + housekeeping exclusions.
         assert "FROM activity_log a WHERE a.contact_id = ct.id" in sql
         assert "ch.entity_type = 'contact'" in sql
@@ -1386,14 +1388,34 @@ def test_every_housekeeping_writer_matches_the_family_and_renders_without_a_perc
 
 
 def test_last_touch_excludes_housekeeping_notes_so_archiving_moves_no_clock():
-    """Today panel, stale deals, the nudges and Weekly Touches (via TOUCH_AT_SQL) all
-    read LAST_TOUCH_SQL, so all of them now agree an audit note is not a touch."""
+    """Staleness and customer contact share the housekeeping exclusion."""
     predicate = scoring_service.not_housekeeping_sql("ch.message")
     assert predicate in service.LAST_TOUCH_SQL
-    assert service.LAST_TOUCH_SQL in service.TOUCH_AT_SQL
+    assert " ".join(last_contact.last_contact_sql("deal", "d.id").split()) in " ".join(
+        service.TOUCH_AT_SQL.split()
+    )
+    assert "d.updated_at" not in service.TOUCH_AT_SQL
+    assert "%" not in service.TOUCH_AT_SQL
     assert "%" not in service.LAST_TOUCH_SQL
 
 
 def test_resolver_follows_company_merge_chain(rec):
     service.resolve_or_create_company_ids(["Duplicate"])
     assert "company_follow_merge(co.id) AS id" in rec.sql_containing("SELECT t.n AS raw")
+
+
+@pytest.mark.parametrize("sort_by, order", [
+    ("updated_at", "d.updated_at DESC, d.id DESC"),
+    ("closed_on", "d.closed_on DESC NULLS LAST, d.id DESC"),
+])
+def test_list_deals_sort(rec, sort_by, order):
+    kwargs = {} if sort_by == "updated_at" else {"sort_by": sort_by}
+    service.list_deals(stage="won", limit=1000, **kwargs)
+    assert f"ORDER BY {order} LIMIT %s" in rec.sql_containing("FROM deals")
+    assert rec.params_for("FROM deals") == ["won", 1000]
+
+
+def test_list_deals_unknown_sort_refused_before_io(rec):
+    with pytest.raises(ValueError, match="sort_by"):
+        service.list_deals(sort_by="bogus")
+    assert rec.calls == []

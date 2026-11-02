@@ -365,9 +365,10 @@ def _help_topic_texts() -> list[tuple[str, str]]:
 def model_facing(monkeypatch):
     """(label, text) pairs for everything that actually reaches the AI provider."""
     from assistant import compaction, identity
-    from crm import touch_count_service
+    from crm import quick_update, touch_count_service
     from heartbeat import service as heartbeat_service
     from memory import observer
+    from voice import service as voice_service
 
     monkeypatch.setattr(
         identity, "get_identity",
@@ -413,12 +414,15 @@ def model_facing(monkeypatch):
         # The touch-count worker (#16) is a second provider caller with its own system
         # prompt, and it was never scanned here until #56 rewrote it for per-line verdicts.
         ("touch count prompt", touch_count_service.TOUCH_COUNT_SYSTEM_PROMPT),
+        # Fifth provider caller with its own system prompt.
+        ("quick update prompt", quick_update.QUICK_UPDATE_SYSTEM_PROMPT),
         # Conversation compaction (#72 Phase 3) is the third provider caller with a
         # system prompt of its own — same reason the touch-count one is scanned here.
         ("compaction summary prompt", compaction._SUMMARY_SYSTEM_PROMPT),
         # The observer (#72 Phase 4) is the fourth provider caller with a system prompt
         # of its own — same reason as the two above.
         ("observer prompt", observer.OBSERVER_SYSTEM_PROMPT),
+        ("voice tidy prompt", voice_service.TIDY_SYSTEM_PROMPT),
         ("assistant system prompt (static, GTD mode)", gtd_static),
         ("heartbeat prompt (GTD mode)", gtd_hb_static),
         ("assistant system prompt (volatile, with a seat)", seat_volatile),

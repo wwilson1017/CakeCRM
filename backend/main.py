@@ -36,6 +36,7 @@ from core.config import settings
 from core.storage import atomic_write
 from crm import attachment_service
 from crm.gtd_router import router as gtd_router
+from crm.quick_update_router import router as quick_update_router
 from crm.router import MAX_UPLOAD_BYTES as crm_upload_max_bytes, router as crm_router
 from crm.todo_capture import router as todo_capture_router
 from crm.todo_web import (
@@ -52,6 +53,8 @@ from saved_views.router import router as saved_views_router
 from telegram import poller as telegram_poller
 from telegram.router import router as telegram_router
 from users.router import router as users_router
+from voice.router import router as voice_router
+from voice.service import MAX_AUDIO_BYTES as voice_max_audio_bytes
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -272,6 +275,7 @@ _ROUTE_REQUEST_LIMIT_SPECS: tuple[tuple[str, int], ...] = (
     ("/api/crm/import", crm_upload_max_bytes + MULTIPART_ENVELOPE_BYTES),
     ("/api/crm/smart-import/parse", crm_upload_max_bytes + MULTIPART_ENVELOPE_BYTES),
     ("/api/branding/logo", MAX_LOGO_BYTES + MULTIPART_ENVELOPE_BYTES),
+    ("/api/voice/transcribe", voice_max_audio_bytes + MULTIPART_ENVELOPE_BYTES),
 )
 
 # First match wins, falling back to MAX_REQUEST_BYTES.
@@ -353,6 +357,8 @@ app.include_router(context_files_router, prefix="/api/context-files", tags=["con
 app.include_router(memory_router, prefix="/api/memory", tags=["memory"])
 app.include_router(gtd_router, prefix="/api/crm/gtd", tags=["todo-gtd"])
 app.include_router(reminders_router, prefix="/api/crm/reminders", tags=["reminders"])
+app.include_router(quick_update_router, prefix="/api/crm/quick-update", tags=["quick-update"])
+app.include_router(voice_router, prefix="/api/voice", tags=["voice"])
 
 # ── No-login todo surfaces (#70) ──────────────────────────────────────────────
 # All three mounts MUST come before the SPA catch-all at the bottom of this file, or

@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from 'react';
 import { useAuth } from '../core/auth/AuthContext';
-import { IconChart, IconUsers, IconBuilding, IconFunnel, IconCheck, IconCalendar, IconFile, IconSettings, IconSparkle, IconLock, IconHelp } from './icons';
+import { IconZap, IconChart, IconUsers, IconBuilding, IconFunnel, IconCheck, IconCalendar, IconFile, IconSettings, IconSparkle, IconLock, IconHelp } from './icons';
 import { BG_CARD, INK, INK_MUTE, LINE, ACCENT_TEXT, FONT_DISPLAY } from './styles';
 
 interface MobileMenuDrawerProps {
@@ -22,6 +22,7 @@ export function MobileMenuDrawer({ onClose, navigate, onSignOut, children }: Mob
   const items: NavItem[] = [
     { icon: IconChart, label: 'Dashboard', action: go('/crm') },
     { icon: IconFunnel, label: 'Pipeline', action: go('/crm/pipeline') },
+    { icon: IconZap, label: 'Quick update', action: go('/crm/quick-update') },
     { icon: IconUsers, label: 'Contacts', action: go('/crm/contacts') },
     { icon: IconBuilding, label: 'Companies', action: go('/crm/companies') },
     { icon: IconCheck, label: 'Todos', action: go('/crm/todos') },

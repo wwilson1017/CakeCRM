@@ -119,6 +119,15 @@ It returns nothing.
   conversation). Gmail bodies and threads are size-capped before they enter that
   context. Treat email content the assistant reads as data shared with your chosen
   AI provider.
+- **Voice and the AI provider.** A recording made with the mic is sent through the install
+  to the provider that transcribes it, which may be OpenAI even when another provider is
+  active for chat. CakeCRM never stores audio in a file, row or log. For a dictated chatter
+  note, the transcript also goes to the active provider's light-tier model for a best-effort
+  tidy. A conservative token guard rejects some changed names and numbers, but does not
+  guarantee unchanged meaning; the result is shown for review before saving. Reading replies
+  aloud uses the browser's speech engine: CakeCRM sends no speech request, though some browser
+  voices use a network service supplied by the browser vendor.
+
 - **Message bodies only, never your files.** Gmail stores an unusually large *text
   body* outside the message and behind an attachment id. Reading a thread will pull
   such a body back in, under a hard byte cap, so a long email doesn't silently

@@ -75,6 +75,8 @@ Moving the deal out of Won clears it, and winning it again asks again. Every cha
 real day; `crm_mark_deal_won` with the corrected day fixes it. Pipeline velocity reports date a
 win by its Closed on day when there is one.
 
+The dashboard **Closed sales · last 7 days** card uses the same window as Pipeline’s **Closed on → Last 7 days**, lists title, value and owner newest first, and opens each deal when clicked. Counts and totals (separate for each currency) are marked `+` and "at least" if the 1000-row cap may omit sales. It works without an AI provider.
+
 ## Capturing a lost reason
 
 In the interface, the Mark Lost action opens a dialog for the reason. **Only that action
@@ -100,14 +102,16 @@ gone quiet".
 Value and a currency code, a forecasted close date (the rep's guess), a Closed on date once
 won, a probability, notes, and links to a
 contact and a company. Currency is free text and everything else in the app sums as though
-one currency is in use — the company report is the one place that declines to add different
-currencies together.
+one currency is in use — the company report and Closed sales card keep different currencies separate.
 
 ## Filtering the board
 
 Facets include **stage**, **owner** (including an Unassigned bucket), **value** range,
 **forecasted close date** (overdue, next 7 days, this month, no date), **closed on** (last 7
-days, this month, last month, or Won deals with no date yet), **deal activity** (active within 7 or 30
-days, silent 30+ days, nothing logged) and **archived**. Filters are remembered per browser
+days, this month, last month, or Won deals with no date yet), **last contact** (last 7 days, last 30 days, not in 30 days, never),
+a last-contact date range, and **archived**. Filters are remembered per browser
 tab. Dragging still works while a filter is on, because a drop only assigns a stage and never
 a position.
+
+A deal's last contact is its newest note (automatic archive and restore notices aside) or logged call, email or
+meeting; edits and stage moves do not count, and the list column and sort read the same date.

@@ -14,14 +14,14 @@ import { ownerParamOf, touchDetailPath } from '../weeklyTouches';
 
 /**
  * Weekly Touches KPI (issue #76) — how many deals got touched in a window, counting a
- * deal while it is open and up to and including its move to Won (#179).
+ * deal while it is open and, once won, by its last contact at or before the win (#179, #333).
  *
  * Grouped per DEAL OWNER since #146. #76 shipped it per deal because CakeCRM was
  * single-user and there were no owner columns; #60 landed `deals.owner_id`, so the rows
  * are now the reps the blueprint always had, each expanding to their own top deals. Every
  * owner of an open deal gets a row — including the ones who touched nothing, which is the
- * point of a weekly accountability pull — and so does anyone who won a deal inside the
- * window, so a rep whose only deal closed this week is credited rather than erased. The
+ * point of a weekly accountability pull — and so does anyone whose won deal's last
+ * pre-win contact falls inside the window, so closing a worked deal keeps its credit. The
  * unowned deals are a bucket named "Unassigned" rather than an exclusion, which is what
  * makes the headline the sum of the rows beneath it.
  *
@@ -34,7 +34,7 @@ import { ownerParamOf, touchDetailPath } from '../weeklyTouches';
  * TouchCountPill via crm/constants.ts, so one number never renders in two colours).
  *
  * Two distinct signals, per the server: window MEMBERSHIP is keyless and event-grained
- * (edits, activities, live notes), while the per-deal NUMBER is #16's AI estimate — and a
+ * (customer contacts: live notes and logged call/email/meeting/note activity), while the per-deal NUMBER is #16's AI estimate — and a
  * lifetime-ish one, which the body copy says out loud so a "12" isn't read as twelve
  * touches this week.
  *
@@ -155,10 +155,11 @@ export function WeeklyTouchesCard(
         <span style={mono(10, INK_DIM)}>{data.window.label}</span>
       </div>
       <p style={{ fontSize: 12, color: INK_MUTE, margin: '8px 0 14px', maxWidth: 560 }}>
-        Deals edited, noted, or logged against in this window while open — through the
-        move to Won, and never after. However many times, each deal counts once. Creating
-        a deal doesn't count. The number beside each deal is its AI-estimated<em> lifetime</em>
-        {' '}touch count, not this window's.
+        Deals whose latest customer contact — a note, or a logged call, email or meeting —
+        falls in this window while open, up to the move to Won and never after. Edits,
+        stage moves and creating a deal don't count. However many times, each deal counts once.
+        The number beside each deal is its AI-estimated<em> lifetime</em>{' '}
+        touch count, not this window's.
         {!single && ' Grouped by deal owner.'}
       </p>
 

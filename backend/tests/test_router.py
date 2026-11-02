@@ -70,6 +70,7 @@ def test_setup_status_zero_config(client, monkeypatch):
     _use_store(monkeypatch, FakeStore(is_configured=False, configured=[]))
     monkeypatch.setattr("providers.get_ai_provider", lambda *a, **k: None)
     body = client.get("/api/setup/status").json()
+    assert body["voice_ready"] is False
     assert body["ai_ready"] is False
     assert body["credentials_present"] is False
     assert body["configured_providers"] == []
@@ -407,3 +408,19 @@ def test_active_ollama_unreachable_rejects_without_blanking(client, monkeypatch)
     r = client.put("/api/providers/active", json={"provider": "ollama", "model": ""})
     assert r.status_code == 400
     assert "Cannot reach Ollama" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("ai, voice, expected", [(True, True, True), (True, False, False), (False, True, False), (True, "error", False)])
+def test_setup_status_voice_ready_follows_the_transcriber(client, monkeypatch, ai, voice, expected):
+    store = FakeStore()
+    _use_store(monkeypatch, store)
+    monkeypatch.setattr("providers.get_ai_provider", lambda **kw: object() if ai else None)
+
+    def transcriber(**kw):
+        assert kw["store"] is store
+        if voice == "error":
+            raise RuntimeError("unavailable")
+        return object() if voice else None
+
+    monkeypatch.setattr("providers.get_transcriber", transcriber)
+    assert client.get("/api/setup/status").json()["voice_ready"] is expected

@@ -17,6 +17,7 @@ import { dueLabel, parseUTC } from './gtd/util';
 
 export const REMINDER_STATUS_OPTIONS: FacetOption[] = [
   { value: 'upcoming', label: 'Upcoming' },
+  { value: 'paused', label: 'Paused' },
   { value: 'fired', label: 'Sent' },
   { value: 'voided', label: 'Voided' },
 ];
