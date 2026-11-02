@@ -12,7 +12,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator
 
-from providers.base import AIProvider
+from providers.base import AIProvider, rate_limit_event
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +138,11 @@ class OpenAIProvider(AIProvider):
                 kwargs["tools"] = openai_tools
 
             stream = await client.chat.completions.create(**kwargs)
+            finish_reason = None
 
             async for chunk in stream:
+                if chunk.choices and chunk.choices[0].finish_reason:
+                    finish_reason = chunk.choices[0].finish_reason
                 delta = chunk.choices[0].delta if chunk.choices else None
                 if not delta:
                     continue
@@ -181,10 +184,11 @@ class OpenAIProvider(AIProvider):
                     except Exception:
                         tc["args"] = {}
 
-            stop_reason = "tool_use" if tool_calls else "stop"
+            # "length" = cut off at the output cap; the engine notes it as unfinished (#340).
+            stop_reason = "tool_use" if tool_calls else ("max_tokens" if finish_reason == "length" else "stop")
 
-        except openai.RateLimitError:
-            yield {"type": "error", "error": "OpenAI is rate-limited. Please try again in a moment."}
+        except openai.RateLimitError as e:
+            yield rate_limit_event(self.model, e)
             yield {"type": "_turn_complete", "tool_calls": [], "stop_reason": "error"}
             return
 

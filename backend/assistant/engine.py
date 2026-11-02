@@ -33,6 +33,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 
 from assistant import assembly, compaction, confirm_tier, delimiters, history, identity
 from assistant.write_budget import WRITE_BUDGET_PER_TURN, BudgetAction, BudgetState
@@ -44,6 +45,9 @@ from providers.windows import cache_inclusive_input_tokens, context_usage_event
 logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 20
+RATE_LIMIT_RETRY_S = 2.0
+RATE_LIMIT_RETRY_CAP_S = 10.0
+_sleep = asyncio.sleep  # Test seam: backoff tests never really sleep.
 _VALID_MODES = {"read-only", "normal", "power"}
 _UNTRUSTED_MARKER = delimiters.UNTRUSTED_FILE_MARKER
 # Tool results from untrusted EXTERNAL sources (e.g. Gmail — issue #8) are wrapped
@@ -76,6 +80,60 @@ _UNTRUSTED_SOURCE_TOOLS = delimiters.UNTRUSTED_SOURCE_TOOLS
 
 # Transient user turn appended on resume to keep a trailing-assistant sequence valid.
 _CONTINUATION_ACK = "Please continue based on the results shown above."
+
+
+async def _stream_turn(provider, messages, tools, system_prompt, rate_limit: dict):
+    """Retry one early 429 per turn, on the same provider and model."""
+    while True:
+        retry = False
+        first = True
+        async with aclosing(provider.stream_turn(messages, tools, system_prompt)) as stream:
+            async for event in stream:
+                if first and event.get("type") == "error" and event.get("rate_limited") and not rate_limit["retried"]:
+                    rate_limit["retried"] = True
+                    retry_after = event.get("retry_after")
+                    delay = RATE_LIMIT_RETRY_S if retry_after is None else min(max(retry_after, 0), RATE_LIMIT_RETRY_CAP_S)
+                    retry = True
+                    break
+                first = False
+                yield event
+        if not retry:
+            return
+        logger.warning("assistant.chat: %s rate-limited; retrying in %s seconds", provider.model, delay)
+        await _sleep(delay)
+
+
+def _unfinished_reason(stop_reason, text) -> str | None:
+    if stop_reason == "max_tokens":
+        return "it hit the length limit for a single response"
+    if not text.strip():
+        return "the model declined to answer" if stop_reason == "refusal" else "the model ended without writing a reply"
+    return None
+
+
+def _unfinished_note(partial, reason, tool_count, last_tool) -> str:
+    # After a tool ran, never just say "resend": a write may already have happened.
+    steps = (
+        f", after {tool_count} tool call(s) (last: {last_tool}). "
+        "Some steps may already have run; check the results above before asking again"
+        if tool_count else ""
+    )
+    if partial.strip():
+        return f"\n\n*(This reply is incomplete: {reason}{steps}.)*"
+    return f"*(No complete reply: {reason}{steps or '. Please send your message again'}.)*"
+
+
+async def _save_unfinished(conversation_id, model, reason, *, unsaved, tool_count, last_tool):
+    note = _unfinished_note(unsaved, reason, tool_count, last_tool)
+    logger.warning("assistant.chat: unfinished turn: %s", reason)
+    yield _sse({"type": "text", "text": note})
+    try:
+        await asyncio.to_thread(
+            history.save_message, conversation_id, str(uuid.uuid4()),
+            "assistant", unsaved + note, None, model,
+        )
+    except Exception as e:
+        logger.warning("assistant.chat: failed to persist unfinished reply: %s", e)
 
 
 def _last_user_text(messages: list[dict]) -> str | None:
@@ -378,6 +436,10 @@ async def _chat_impl(
 
     # ── Main tool-execution loop ───────────────────────────────────────────────
     iteration = 0
+    rounds_done = 0
+    tool_count = 0
+    last_tool = None
+    rate_limit = {"retried": False}
     # Set once a read returns THIRD-PARTY text during THIS turn — an external read
     # (Gmail, #8) or any result carrying a public-capture row (#204). From then on EVERY
     # write routes through confirmation, in every mode and routine tier included (#180).
@@ -391,7 +453,7 @@ async def _chat_impl(
         usage: dict = {}
         completed = False
 
-        async for event in provider.stream_turn(current_messages, provider_tools, system_prompt):
+        async for event in _stream_turn(provider, current_messages, provider_tools, system_prompt, rate_limit):
             etype = event.get("type")
             if etype == "text":
                 turn_text += event.get("text", "")
@@ -407,18 +469,32 @@ async def _chat_impl(
                     "description": registry.descriptions.get(event.get("tool"), ""),
                 })
             elif etype == "error":
+                if rounds_done or turn_text.strip():
+                    reason = "the AI model is rate-limited right now" if event.get("rate_limited") else "the AI service returned an error"
+                    async for line in _save_unfinished(
+                        conversation_id, provider.model, reason, unsaved=turn_text,
+                        tool_count=tool_count, last_tool=last_tool,
+                    ):
+                        yield line
                 yield _sse({"type": "error", "error": str(event.get("error") or "Provider error")[:500]})
                 return
             elif etype == "_turn_complete":
                 tool_calls = event.get("tool_calls", []) or []
                 stop_reason = event.get("stop_reason")
                 usage = event.get("usage") or {}
+                rounds_done += 1
                 completed = True
                 break
 
         # A stream that ended without _turn_complete died mid-turn — never report it
         # as a clean `done`.
         if not completed:
+            if rounds_done or turn_text.strip():
+                async for line in _save_unfinished(
+                    conversation_id, provider.model, "the model response ended unexpectedly",
+                    unsaved=turn_text, tool_count=tool_count, last_tool=last_tool,
+                ):
+                    yield line
             yield _sse({"type": "error", "error": "The model response ended unexpectedly."})
             return
 
@@ -428,6 +504,14 @@ async def _chat_impl(
         # Read independently of `ue`, which is None whenever the window is unknown:
         # compaction wants the NUMBER even when the meter cannot render a percentage.
         context_tokens = cache_inclusive_input_tokens(usage)
+
+        if stop_reason != "tool_use" or not tool_calls:
+            reason = _unfinished_reason(stop_reason, turn_text)
+            if reason:
+                logger.warning("assistant.chat: unfinished turn: %s", reason)
+                note = _unfinished_note(turn_text, reason, tool_count, last_tool)
+                yield _sse({"type": "text", "text": note})
+                turn_text += note
 
         # Persist this iteration. Fail CLOSED when it carries tool calls — never
         # execute or confirm a tool we couldn't record (the confirm flow keys off
@@ -557,6 +641,8 @@ async def _chat_impl(
 
             # Execute (reads in any mode; writes in power mode).
             t0 = time.monotonic()
+            tool_count += 1
+            last_tool = name
             result = await registry.execute_tool(name, args)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             # ONE call decides what the model is shown and whether this result carried
@@ -629,7 +715,7 @@ async def _chat_impl(
             wrap_text = ""
             wrap_completed = False
             wrap_context_tokens = None
-            async for event in provider.stream_turn(current_messages, provider_tools, system_prompt):
+            async for event in _stream_turn(provider, current_messages, provider_tools, system_prompt, rate_limit):
                 etype = event.get("type")
                 if etype == "text":
                     wrap_text += event.get("text", "")
@@ -667,6 +753,11 @@ async def _chat_impl(
 
         # else: loop again with the tool results in context.
 
+    async for line in _save_unfinished(
+        conversation_id, provider.model, f"it reached the limit of {MAX_ITERATIONS} tool rounds",
+        unsaved="", tool_count=tool_count, last_tool=last_tool,
+    ):
+        yield line
     yield _sse({"type": "error", "error": "Tool loop exceeded maximum iterations."})
 
 

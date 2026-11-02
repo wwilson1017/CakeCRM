@@ -28,13 +28,14 @@ class _Delta:
 
 
 class _Choice:
-    def __init__(self, delta):
+    def __init__(self, delta, finish_reason=None):
         self.delta = delta
+        self.finish_reason = finish_reason
 
 
 class _Chunk:
-    def __init__(self, delta):
-        self.choices = [_Choice(delta)]
+    def __init__(self, delta, finish_reason=None):
+        self.choices = [_Choice(delta, finish_reason)]
 
 
 class _FakeStream:
@@ -68,6 +69,24 @@ async def test_openai_compat_text_only():
     events = [e async for e in stream_openai_turn(FakeOpenAIClient(chunks), "m", [], [], "sys")]
     assert "".join(e["text"] for e in events if e["type"] == "text") == "Hi there"
     assert events[-1] == {"type": "_turn_complete", "tool_calls": [], "stop_reason": "stop"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('provider_kind', ['openai', 'compat'])
+async def test_openai_length_finish_is_max_tokens(monkeypatch, provider_kind):
+    """A reply cut at the output cap reaches the engine as max_tokens (#340)."""
+    import openai
+
+    from providers import openai_provider as op
+    from providers.openai_compat import stream_openai_turn
+    client = FakeOpenAIClient([_Chunk(_Delta(content="Half")), _Chunk(_Delta(), finish_reason="length")])
+    if provider_kind == 'compat':
+        stream = stream_openai_turn(client, "m", [], [], "sys")
+    else:
+        monkeypatch.setattr(openai, 'AsyncOpenAI', lambda **kw: client)
+        stream = op.OpenAIProvider(access_token='k', model='m').stream_turn([], [], 'sys')
+    events = [e async for e in stream]
+    assert events[-1]["stop_reason"] == "max_tokens"
 
 
 @pytest.mark.asyncio
@@ -184,3 +203,58 @@ async def test_anthropic_stream_tool_call(monkeypatch):
     types = [e["type"] for e in out]
     assert "tool_start" in types and "tool_args" in types
     assert next(e for e in out if e["type"] == "tool_args")["args"] == {"q": "hi"}
+
+
+@pytest.mark.parametrize('header', ['7', None, 'invalid'])
+def test_rate_limit_event(header):
+    from types import SimpleNamespace
+
+    from providers.base import rate_limit_event
+
+    err = Exception('limited')
+    err.response = SimpleNamespace(headers={'retry-after': header})
+    assert rate_limit_event('Qwen/Qwen3.5-7B', err) == {
+        'type': 'error', 'error': 'Qwen3.5-7B is rate-limited. Please try again in a minute.',
+        'rate_limited': True, 'retry_after': 7.0 if header == '7' else None,
+    }
+    assert rate_limit_event('model', Exception())['retry_after'] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('provider_kind', ['anthropic', 'openai', 'compat'])
+async def test_provider_rate_limit_names_model(monkeypatch, provider_kind):
+    from types import SimpleNamespace
+
+    import anthropic
+    import httpx
+    import openai
+
+    from providers import anthropic_provider as ap, openai_provider as op
+    from providers.openai_compat import stream_openai_turn
+
+    sdk = anthropic if provider_kind == 'anthropic' else openai
+    response = httpx.Response(429, headers={'retry-after': '7'}, request=httpx.Request('POST', 'https://example.com'))
+    error = sdk.RateLimitError('limited', response=response, body=None)
+
+    def fail(**kwargs):
+        raise error
+
+    async def async_fail(**kwargs):
+        raise error
+
+    if provider_kind == 'anthropic':
+        monkeypatch.setattr(ap, '_get_client', lambda api_key="": SimpleNamespace(messages=SimpleNamespace(stream=fail)))
+        stream = ap.AnthropicProvider(api_key='k', model='Qwen/Qwen3.5-7B').stream_turn([], [], 'sys')
+    else:
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=async_fail)))
+        if provider_kind == 'compat':
+            stream = stream_openai_turn(client, 'Qwen/Qwen3.5-7B', [], [], 'sys')
+        else:
+            monkeypatch.setattr(openai, 'AsyncOpenAI', lambda **kw: client)
+            stream = op.OpenAIProvider(access_token='k', model='Qwen/Qwen3.5-7B').stream_turn([], [], 'sys')
+    events = [event async for event in stream]
+    assert events[0] == {
+        'type': 'error', 'error': 'Qwen3.5-7B is rate-limited. Please try again in a minute.',
+        'rate_limited': True, 'retry_after': 7.0,
+    }
+    assert events[1]['stop_reason'] == 'error'

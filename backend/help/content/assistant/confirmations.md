@@ -70,3 +70,19 @@ you approve a change. After a CRM reset, Baker must look it up again.
 
 If the deal is lost or archived, the change can still go through, but Baker receives a
 warning to tell you which deal it changed and check that it is the one you meant.
+
+## When a reply doesn't finish
+
+If the AI service stops after starting a reply or completing a step, Baker saves a
+short note explaining why no complete reply arrived. This also covers an empty answer,
+a response cut off by its length limit, or too many tool rounds. Any partial reply is
+kept with the note. If steps already ran, check their results before asking again:
+a missing reply does not mean that no changes were made.
+
+For Anthropic, OpenAI and OpenAI-compatible providers, Baker waits briefly and retries
+the same model once per turn when a rate limit arrives before any output from that
+attempt. It uses the service's retry delay, capped at 10 seconds, or waits 2 seconds
+when no delay is supplied. If the rate limit persists, the error names the model.
+
+Stopping a reply yourself or a server restart does not add this note. A failure before
+any reply or completed step still shows an error without adding an assistant message.
