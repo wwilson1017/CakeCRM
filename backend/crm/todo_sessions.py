@@ -12,7 +12,6 @@ What is stored
   * `todo_web_sessions` — one row per signed-in browser. The cookie holds a random
     token; the table holds only its SHA-256 hash, the seat, and two timestamps.
   * `todo_web_signin_tokens` — unspent sign-in codes, hashes only.
-  `crm_meta.todo_web_token` (the old link) is no longer read; its drop is a follow-up.
 
 Lifetimes
   * The cookie is a fixed year from sign-in. Only a sign-in sets it and nothing clears
