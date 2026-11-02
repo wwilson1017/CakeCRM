@@ -709,3 +709,38 @@ the user check intent. This is an assistant guard, not record access control.
 Tests: `test_deal_write_guard.py`, the pre-card case in `test_assistant_engine.py`, and
 `test_integration_deal_write_guard_pg.py` (persistence, isolation, cascade and reset).
 Future MCP dispatch (#323) must retain this guard and advance tool batches too.
+
+## Honest endings and 429 backoff (#340, port of cake_os #3831/#3855)
+
+Attended turns treat at least one completed provider round or streamed nonblank text
+as billed for the unfinished-reply note. Errors and cut streams then save unsaved text
+plus a note; exhausted tool rounds save a note on their own. Completed empty/refused
+answers and max_tokens replies fold the note into the existing iteration row (OpenAI and
+OpenAI-compatible `length` and Gemini `MAX_TOKENS` finishes are reported as `max_tokens`). Only
+executed tool calls count as progress; after tools ran the note, partial reply or not,
+asks the user to check the results rather than blindly resend. Persistence is best-effort, with warnings.
+The detached runner's stop/dead-turn endings, confirmation narration's honest note,
+and deliberate budget termination are unchanged.
+
+Anthropic, OpenAI and OpenAI-compatible 429 events name the actual model via the tier
+label rule and carry retry_after seconds. The engine retries only an attempt whose
+first event is that error, once per entire turn (including confirmation narration),
+on the same model: 2 seconds by default, supplied delays clamped to 0–10 seconds.
+The provider stream closes before the cancellable wait; tests patch _sleep.
+Not ported: fallback-model switching, background runner changes, or Google 429 handling.
+
+## Quick update's Baker preview is not a tool (#337)
+
+`quick_update.preview` is a member
+REST read using `get_ai_provider(agent_model_tier="light")` and `stream_turn` with
+`QUICK_UPDATE_SYSTEM_PROMPT` (covered by `test_prompt_genericization`). It never enters
+tool dispatch or the registry and writes nothing. Confirm posts the ordinary human
+write at `POST /api/crm/quick-update/deals/{id}`; a dispatch-level deal-write guard does
+not cover it and is not meant to. Note and lost reason must be whitespace-normalized,
+case-insensitive spans of the sentence; a missing note yields `needs: ["note"]`.
+Conflicting instructions return MIXED_UP, no changes return NO_CHANGE, provider/parse
+failures return UNAVAILABLE. Plain JSON with optional fence stripping, no structured
+output SDK; 20-second timeout and touch-count-style strict stream completion plus a
+4,000-character cap. Won carries the explicit local day shown in the preview; already
+won/lost flags are dropped with a warning. No provider hides the box, keeping the screen
+fully keyless. A confirmed preview is a member edit with no assistant provenance.

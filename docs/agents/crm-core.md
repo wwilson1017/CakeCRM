@@ -1263,3 +1263,20 @@
   the snapshot back (pinned in `test_crm_export_integration.py`). Cells a spreadsheet would
   run as a formula (`= + - @`, tab, CR) get a leading apostrophe; JSON columns are written
   as JSON.
+
+- **Quick update (#337)** — `backend/crm/quick_update.py` + `quick_update_router.py`
+  mounted at `/api/crm/quick-update`; `frontend/src/crm/{QuickUpdatePage.tsx,quickUpdate.ts}`.
+  One transaction locks the live deal and composes `_write_deal_update_cur`,
+  `chatter_service.insert_note_cur` and `_create_todo_cur`. The first two are mechanical
+  extractions of the existing deal writer and note inserter; existing wrappers keep their
+  behavior. Lost uses the lifecycle verb's restricted field map and reason note on that
+  same cursor. Every write refuses an archived deal, including note-only writes. After
+  commit only the never-raising scoring and touch-count hooks run; the response is
+  `{deal_id, saved}`, with no post-commit read. A refused save saves nothing; a network or
+  server failure leaves the outcome uncertain, so the page asks the user to check the deal
+  before retrying. Search is re-fetched on returning to the picker. `search_deals(open_first=True)`
+  sorts open deals before the LIMIT 25; the existing unescaped LIKE behavior is retained.
+  Any member can edit any live deal. Lost reason is optional, following the existing CRM
+  rule rather than the source's required reason. Confirmed previews are human writes with
+  no assistant provenance, like smart import. No recent-notes thread, public phone link,
+  token table, owner restriction or migration is ported.
