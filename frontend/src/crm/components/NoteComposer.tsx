@@ -330,7 +330,7 @@ export function NoteComposer({
           }}
         >Take photo</button>
         <VoiceMicButton mode="review" tidy disabled={disabled} onTranscript={transcript => {
-          setText(prev => joinDraft(prev, transcript));
+          setText(prev => joinDraft(prev, transcript).slice(0, MAX_NOTE_LEN));
           textareaRef.current?.focus();
         }} />
         <span style={{ ...mono(10), color: INK_DIM, flex: 1 }}>

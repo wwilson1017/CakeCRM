@@ -166,6 +166,9 @@ export function useAudioRecorder({
     if (withLevel) {
       try {
         ctx = new AudioContext();
+        // Held in the ref while the permission prompt is open, so cancel and unmount close it
+        // even if getUserMedia never settles.
+        audioCtxRef.current = ctx;
         void ctx.resume().catch(() => undefined);
       } catch {
         ctx = null;

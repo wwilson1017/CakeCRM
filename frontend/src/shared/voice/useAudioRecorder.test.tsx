@@ -68,6 +68,13 @@ it('releases a stream whose permission resolves after cancellation', async () =>
   await act(async () => { resolve(stream); await pending; });
   expect(stopTrack).toHaveBeenCalledTimes(1); expect(onClip).not.toHaveBeenCalled(); expect(value.recording).toBe(false);
 });
+it('closes the level context when cancelled while permission is still pending', () => {
+  const close = vi.fn(async () => {});
+  vi.stubGlobal('AudioContext', class { resume = async () => {}; close = close; });
+  getUserMedia.mockImplementationOnce(() => new Promise<MediaStream>(() => {}));
+  render(); act(() => { void value.start(); }); act(() => value.cancel());
+  expect(close).toHaveBeenCalledTimes(1);
+});
 it('releases tracks on unmount and drops any late stop event', async () => {
   render(); await act(async () => { await value.start(); }); act(() => root.render(null));
   expect(stopTrack).toHaveBeenCalledTimes(1); expect(onClip).not.toHaveBeenCalled();

@@ -12,6 +12,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NoteComposer } from './NoteComposer';
+import { MAX_NOTE_LEN } from '../chatterComposer';
 import type { VoiceMicButtonProps } from '../../shared/voice/VoiceMicButton';
 const voice = vi.hoisted(() => ({ props: null as VoiceMicButtonProps | null }));
 vi.mock('../../shared/voice/VoiceMicButton', () => ({ VoiceMicButton: (props: VoiceMicButtonProps) => { voice.props = props; return null; } }));
@@ -211,6 +212,13 @@ it('appends reviewed dictation without posting a note', () => {
   expect(voice.props!.mode).toBe('review');
   expect(voice.props!.tidy).toBe(true);
   expect(onSubmit).not.toHaveBeenCalled();
+});
+
+it('clamps dictation appended to a full draft to the note limit', () => {
+  render(async () => {});
+  type('x'.repeat(MAX_NOTE_LEN - 3));
+  act(() => voice.props!.onTranscript('follow up Monday', 'review'));
+  expect(textarea().value).toHaveLength(MAX_NOTE_LEN);
 });
 
 describe('NoteComposer — camera', () => {
