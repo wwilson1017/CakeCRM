@@ -242,14 +242,15 @@ def test_nothing_found_is_a_400_message():
         qu.validate(DEAL, {}, SENTENCE)
 
 
-@pytest.mark.parametrize("text,value", [("2,500", 2500.0), ("$12.50", 12.5), ("abc", None), ("-5", None), ("inf", None)])
+@pytest.mark.parametrize("text,value", [("2,500", 2500.0), ("$12.50", 12.5), ("abc", None), ("-5", None), ("inf", None),
+                                        (2500, 2500.0), (12.5, 12.5), (-5, None)])
 def test_the_value_is_reparsed_never_trusted(text, value):
     result = qu.validate(DEAL, {"value": text, "note": "called"}, "called")
     assert result["body"].get("value") == value
     assert bool(result["warnings"]) == (value is None)
 
 
-@pytest.mark.parametrize("raw", [[], {"stage": 3}, {"won": "yes"}, {"note": None}, {"note": "x" * 4001}])
+@pytest.mark.parametrize("raw", [[], {"stage": 3}, {"value": True}, {"won": "yes"}, {"note": None}, {"note": "x" * 4001}])
 def test_malformed_output_is_unavailable_not_the_reps_fault(raw):
     with pytest.raises(qu.BakerUnavailable):
         qu.validate(DEAL, raw, SENTENCE)

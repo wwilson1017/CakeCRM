@@ -204,6 +204,10 @@ def validate(deal: dict, raw: object, sentence: str) -> dict:
     reason = _str(raw, "lost_reason", service.MAX_LOST_REASON)
     followup = _str(raw, "followup", FOLLOWUP_MAX)
     stage = _str(raw, "stage", 100).casefold()
+    # The prompt asks for "a plain number", so a JSON number is as valid as a string.
+    raw_value = raw.get("value", "")
+    if isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool):
+        raw = {**raw, "value": str(raw_value)}
     value_text = _str(raw, "value", 100)
     won, lost = _bool(raw, "won"), _bool(raw, "lost")
     if note and _norm_ws(note) not in _norm_ws(sentence):
