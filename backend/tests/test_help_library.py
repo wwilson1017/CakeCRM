@@ -357,6 +357,9 @@ def test_search_order_does_not_depend_on_the_order_topics_were_read():
 
 
 @pytest.mark.parametrize("query, expected", [
+    ("dictate a note", "assistant/voice"),
+    ("hold to talk to Baker", "assistant/voice"),
+    ("read replies aloud", "assistant/voice"),
     ("connect gmail", "settings/gmail"),
     ("why can't Baker send email", "settings/gmail"),
     ("restore an archived deal", "pipeline/archived-deals"),

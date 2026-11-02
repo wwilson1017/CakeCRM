@@ -32,6 +32,10 @@ def _ensure_array_items(schema: dict) -> dict:
         result["items"] = _ensure_array_items(result["items"])
     return result
 
+# Audio models stay out of chat tier pickers. No language or prompt hint: auto-detect speech.
+TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
+
+
 # Fallback list only — list_models() fetches live from the OpenAI Models API
 # and this is used when that call fails. Kept current against the official
 # OpenAI model list (see PRICING.md).
@@ -60,6 +64,24 @@ def _is_openai_chat_model(model_id: str) -> bool:
 
 
 class OpenAIProvider(AIProvider):
+    @property
+    def can_transcribe(self) -> bool:
+        return True
+
+    async def transcribe(self, audio: bytes, mime: str, filename: str) -> str:
+        import openai
+
+        client = openai.AsyncOpenAI(api_key=self.access_token)
+        try:
+            result = await client.audio.transcriptions.create(
+                model=TRANSCRIBE_MODEL,
+                file=(filename, audio, mime),
+                response_format="json",
+            )
+            return (getattr(result, "text", "") or "").strip()
+        finally:
+            await client.close()
+
     # `access_token` is the chatty contract name for the credential; for CakeCRM
     # (key-based only) it is always the OpenAI API key.
     def __init__(self, access_token: str, model: str = "gpt-5.4"):

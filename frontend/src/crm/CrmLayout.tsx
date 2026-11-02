@@ -16,6 +16,7 @@ import { AssistantLauncher } from './components/AssistantLauncher';
 import { BrandLogo } from './components/BrandLogo';
 import { NotificationsBell } from './components/NotificationsBell';
 import { ThemeToggle } from './components/ThemeToggle';
+import { VoiceReadyContext } from '../shared/voice/VoiceReadyContext';
 import { ActiveRecordProvider } from './RecordContext';
 import { resyncPushSubscription } from '../core/notifications/pushSubscription';
 import { TodoModeContext, TodoModeSetterContext } from './gtd/TodoModeContext';
@@ -175,7 +176,7 @@ const DEMO_STATUS_UNKNOWN: DemoStatus = {
   todo_mode: 'gtd',
 };
 
-interface SetupStatus { ai_ready: boolean; credentials_present: boolean; }
+interface SetupStatus { ai_ready: boolean; credentials_present: boolean; voice_ready?: boolean; }
 
 export function CrmLayout() {
   const isMobile = useIsMobile();
@@ -287,6 +288,7 @@ export function CrmLayout() {
 
   return (
     <ActiveRecordProvider>
+      <VoiceReadyContext.Provider value={setup === null ? null : (setup.voice_ready ?? false)}>
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ borderBottom: `1px solid ${LINE}` }}>
         {/* Row 1: wordmark + nav tabs (desktop) / hamburger (mobile) + account actions */}
@@ -461,6 +463,7 @@ export function CrmLayout() {
       {/* Persistent assistant affordance — always present, degrades gracefully. */}
       <AssistantLauncher aiReady={aiReady} />
     </div>
+      </VoiceReadyContext.Provider>
     </ActiveRecordProvider>
   );
 }

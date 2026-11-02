@@ -338,8 +338,10 @@ def test_each_ceiling_is_exactly_its_feature_cap_plus_the_envelope():
     """
     from branding.router import MAX_LOGO_BYTES
     from crm.router import MAX_UPLOAD_BYTES
+    from voice import service as voice_service
 
     expected = {
+        "/api/voice/transcribe": voice_service.MAX_AUDIO_BYTES,
         "/api/crm/chatter/note/{note_id}/attachments": attachment_service.MAX_ATTACHMENT_BYTES,
         "/api/crm/import": MAX_UPLOAD_BYTES,
         "/api/crm/smart-import/parse": MAX_UPLOAD_BYTES,

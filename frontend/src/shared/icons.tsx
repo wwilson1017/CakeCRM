@@ -82,3 +82,7 @@ export function IconCircle(p: IconProps) { return <Ico {...p}><circle cx="12" cy
 export function IconTarget(p: IconProps) { return <Ico {...p}><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1" fill="currentColor" /></Ico>; }
 export function IconBuilding(p: IconProps) { return <Ico {...p}><rect x="4" y="3" width="16" height="18" rx="1" /><path d="M9 21v-4h6v4M8 7h2M14 7h2M8 11h2M14 11h2M8 15h2M14 15h2" /></Ico>; }
 export function IconRefresh(p: IconProps) { return <Ico d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6" {...p} />; }
+
+export function IconMic(p: IconProps) { return <Ico {...p}><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" /></Ico>; }
+export function IconVolume(p: IconProps) { return <Ico {...p}><path d="M11 5 6 9H3v6h3l5 4V5z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" /></Ico>; }
+export function IconVolumeOff(p: IconProps) { return <Ico {...p}><path d="M11 5 6 9H3v6h3l5 4V5z" /><path d="m22 9-6 6M16 9l6 6" /></Ico>; }
