@@ -27,6 +27,17 @@ export function VoiceMicButton({ mode, tidy = false, onTranscript, disabled }: V
   const clipRef = useRef<RecordedClip | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
+  const micRef = useRef<HTMLButtonElement>(null);
+  // The overlay takes the wider side of the caller's row beside the mic, so the mic (holding
+  // the pointer capture) and the Stop button that replaces it never cover the timer or hint.
+  const [overlaySide, setOverlaySide] = useState({ left: 0, right: 0 });
+  const measure = () => {
+    const el = micRef.current;
+    const rowWidth = (el?.offsetParent as HTMLElement | null)?.clientWidth;
+    if (!el || !rowWidth) return;
+    const start = el.offsetLeft, end = start + el.offsetWidth;
+    setOverlaySide(rowWidth - end > start ? { left: end + 4, right: 0 } : { left: 0, right: rowWidth - start + 4 });
+  };
   const performRef = useRef<(effect: DictationEffect, next: DictationState) => void>(() => undefined);
   const dispatch = useCallback((event: DictationEvent) => {
     if (!mountedRef.current) return;
@@ -83,12 +94,12 @@ export function VoiceMicButton({ mode, tidy = false, onTranscript, disabled }: V
   if (!ready || !recorder.supported || disabled) return null;
   const tap = (t: number) => {
     if (stateRef.current.phase !== 'idle') return;
-    setNotice(''); dispatch({ type: 'press', x: 0, y: 0, t });
+    measure(); setNotice(''); dispatch({ type: 'press', x: 0, y: 0, t });
     dispatch({ type: 'release', x: 0, y: 0, t, recording: false });
   };
   const buttonStyle = { width: 30, height: 30, flexShrink: 0, borderRadius: 7, border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: INK_MUTE, background: 'none' } as const;
   return <>
-    {state.phase !== 'idle' && <div style={{ position: 'absolute', inset: 0, zIndex: 5, display: 'flex', alignItems: 'center', gap: 8, background: BG_CARD, borderRadius: 'inherit', padding: '0 8px', paddingRight: 40 }}>
+    {state.phase !== 'idle' && <div style={{ position: 'absolute', top: 0, bottom: 0, ...overlaySide, zIndex: 5, display: 'flex', alignItems: 'center', gap: 8, background: BG_CARD, borderRadius: 'inherit', padding: '0 8px' }}>
       {(state.phase === 'holding' || state.phase === 'locked') && <>
         {state.phase === 'locked'
           ? <button type="button" aria-label="Cancel recording" onClick={() => dispatch({ type: 'cancel' })} style={buttonStyle}><IconX size={16} /></button>
@@ -106,15 +117,15 @@ export function VoiceMicButton({ mode, tidy = false, onTranscript, disabled }: V
         <button type="button" onClick={() => { clipRef.current = null; dispatch({ type: 'discard' }); }}>Discard</button>
       </div>}
     </div>}
-    {state.phase === 'locked' ? <button key="stop" type="button" aria-label="Stop recording and review the text"
-      style={{ ...buttonStyle, position: 'absolute', right: 4, bottom: 0, zIndex: 6, background: CORAL_FILL, color: ACCENT_INK }}
+    {state.phase === 'locked' ? <button key="stop" ref={micRef} type="button" aria-label="Stop recording and review the text"
+      style={{ ...buttonStyle, background: CORAL_FILL, color: ACCENT_INK }}
       onClick={() => dispatch({ type: recorder.requesting ? 'cancel' : 'stop' })}>■</button>
-      : (state.phase === 'idle' || state.phase === 'holding') && <button key="mic" type="button"
+      : (state.phase === 'idle' || state.phase === 'holding') && <button key="mic" ref={micRef} type="button"
         style={{ ...buttonStyle, position: 'relative', zIndex: 6, touchAction: 'none', userSelect: 'none', WebkitTouchCallout: 'none', ...(state.phase === 'holding' ? { background: CORAL_FILL, color: ACCENT_INK } : {}) }}
         aria-label={mode === 'send' ? 'Voice input: hold to talk and release to send, or tap for hands-free' : 'Voice input: hold to talk, or tap for hands-free — the text lands in the box to check'}
         onPointerDown={e => {
           if (e.button !== 0) return;
-          e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); setNotice('');
+          e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); measure(); setNotice('');
           dispatch({ type: 'press', x: e.clientX, y: e.clientY, t: e.timeStamp });
         }}
         onPointerMove={e => { if (stateRef.current.phase === 'holding') dispatch({ type: 'move', x: e.clientX, y: e.clientY }); }}
