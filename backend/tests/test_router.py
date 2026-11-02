@@ -423,4 +423,9 @@ def test_setup_status_voice_ready_follows_the_transcriber(client, monkeypatch, a
         return object() if voice else None
 
     monkeypatch.setattr("providers.get_transcriber", transcriber)
-    assert client.get("/api/setup/status").json()["voice_ready"] is expected
+    monkeypatch.setattr("voice.service.get_live_preview", lambda: True)
+    body = client.get("/api/setup/status").json()
+    assert body["voice_ready"] is expected
+    assert body["voice_live_preview"] is expected
+    monkeypatch.setattr("voice.service.get_live_preview", lambda: False)
+    assert client.get("/api/setup/status").json()["voice_live_preview"] is False

@@ -8,6 +8,7 @@ import re
 from collections import Counter
 
 from assistant.delimiters import wrap_untrusted_external
+from core.postgres import pg_execute, pg_fetchone
 
 logger = logging.getLogger(__name__)
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
@@ -144,3 +145,19 @@ async def tidy_transcript(raw: str, provider) -> tuple[str, bool]:
     if not tidy or not facts_preserved(raw, tidy):
         return raw, False
     return tidy, True
+
+
+def get_live_preview() -> bool:
+    """Unreadable settings never opt an install into browser speech services."""
+    try:
+        row = pg_fetchone("SELECT voice_live_preview FROM crm_meta WHERE id = 1")
+        return bool(row and row.get("voice_live_preview") is True)
+    except Exception:
+        return False
+
+
+def set_live_preview(enabled: bool) -> None:
+    pg_execute(
+        "UPDATE crm_meta SET voice_live_preview = %s, updated_at = NOW() WHERE id = 1",
+        (enabled,),
+    )

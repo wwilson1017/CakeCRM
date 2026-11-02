@@ -375,9 +375,15 @@ def setup_status(user=Depends(get_current_user)):
         gmail_connected = _gmail_connected()
     except Exception:
         gmail_connected = False
+    try:
+        from voice.service import get_live_preview
+        voice_live_preview = voice_ready and get_live_preview()
+    except Exception:
+        voice_live_preview = False
     return {
         "ai_ready": ai_ready,
         "voice_ready": voice_ready,
+        "voice_live_preview": voice_live_preview,
         "credentials_present": store.is_configured(),
         "active_provider": store.data.get("active_provider", ""),
         "active_model": store.data.get("active_model", ""),
