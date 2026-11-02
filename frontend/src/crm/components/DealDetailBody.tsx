@@ -290,7 +290,7 @@ function DealEditForm({
         onBusyChange={onContactBusy}
       />
       {showContactDetails && <NewContactFields
-        {...newContactDetails} idPrefix="deal-edit-new-contact" onChange={onContactDetailsChange}
+        {...newContactDetails} idPrefix="deal-edit-new-contact" disabled={saving} onChange={onContactDetailsChange}
       />}
       <RecordCombobox<CrmCompany>
         label="Company"

@@ -193,7 +193,7 @@ export function DealForm({ contactId, onClose, onSaved }: Props) {
             onBusyChange={setContactBusy}
           />
           {showContactDetails && <NewContactFields
-            {...newContactDetails} idPrefix="deal-new-contact"
+            {...newContactDetails} idPrefix="deal-new-contact" disabled={saving}
             onChange={details => { setNewContactDetails(details); setDetailsTouched(true); }}
           />}
           <RecordCombobox<CrmCompany>

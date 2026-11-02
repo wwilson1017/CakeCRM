@@ -600,6 +600,21 @@ describe('DealForm — new contact details', () => {
     expect(dealPost()).toMatchObject({ contact_id: 12 });
   });
 
+  it('locks the details while the save is in flight', async () => {
+    mockApi();
+    const defaults = api.getMockImplementation()!;
+    let releasePut!: () => void;
+    api.mockImplementation((p: string, i?: RequestInit) => i?.method === 'PUT'
+      ? new Promise(r => { releasePut = () => r(contact({ id: 11 })); }) : defaults(p, i));
+    await createNew();
+    await fillDetails();
+    await submit();
+    expect(detailsInput('email').disabled).toBe(true);
+    expect(detailsInput('phone').disabled).toBe(true);
+    await act(async () => { releasePut(); });
+    expect(dealPost()).toMatchObject({ contact_id: 11 });
+  });
+
   it('does not write hidden details after switching to an existing contact', async () => {
     mockApi([contact()]);
     await createNew();
