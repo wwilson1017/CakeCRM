@@ -25,6 +25,13 @@ it('has no switch without a transcriber and discloses the direct audio path', as
   expect(container.textContent).toContain('not through this install');
   expect(container.textContent).toContain('cancelling a recording cannot take back audio');
 });
+it('keeps the switch to turn it off when the transcriber went away', async () => {
+  await render(false, true); expect(toggle().checked).toBe(true);
+  vi.mocked(api).mockResolvedValueOnce({ enabled: false });
+  await act(async () => toggle().click());
+  expect(vi.mocked(api)).toHaveBeenLastCalledWith('/api/voice/live-preview', expect.objectContaining({ body: JSON.stringify({ enabled: false }) }));
+  expect(toggle()).toBeNull(); expect(setLive).toHaveBeenLastCalledWith(false);
+});
 it('updates the current page after successful enable and disable', async () => {
   await render(); expect(toggle().checked).toBe(false);
   for (const enabled of [true, false]) {

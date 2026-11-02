@@ -31,7 +31,8 @@ export function VoiceLiveCard({ isMobile }: { isMobile: boolean }) {
   }
   return <SettingsCard id="voice_live" title="Live transcription" isMobile={isMobile}
     description="Live transcription shows your words while you speak. To do that, your browser hands the microphone audio to its own speech recognition service, which is usually run online by the browser maker (for example Google for Chrome, Apple for Safari). That audio goes straight from the browser, not through this install, under that company's terms, and cancelling a recording cannot take back audio it has already heard. The text that is sent or saved still comes from the normal transcription after you let go. When the switch is off (the default), audio goes only through this install to your transcribing provider.">
-    {settings?.voice_ready ? <label>
+    {/* An enabled switch stays visible after the transcriber goes away, so it can still be turned off. */}
+    {settings?.voice_ready || settings?.enabled ? <label>
       <input type="checkbox" role="switch" checked={settings.enabled} disabled={busy}
         onChange={event => void toggle(event.target.checked)} /> Enable live transcription
     </label> : <p>{settings ? 'Needs an AI provider that can transcribe (today, an OpenAI key).'
