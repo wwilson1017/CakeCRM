@@ -44,6 +44,18 @@ export const searchCompanies = (query: string) =>
 export const createContact = (name: string) =>
   api<CrmContact>('/api/crm/contacts', { method: 'POST', body: JSON.stringify({ name }) });
 
+export interface NewContactDetails {
+  email: string;
+  phone: string;
+}
+
+// Include blanks so a retry can clear details saved before a failed deal write.
+export const saveNewContactDetails = (id: number, details: NewContactDetails) =>
+  api<CrmContact>(`/api/crm/contacts/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ email: details.email.trim(), phone: details.phone.trim() }),
+  });
+
 // Not POST /companies: that route INSERTs unconditionally and 400s on a name that already exists
 // case/whitespace-insensitively. /resolve is the #35 get-or-create primitive, so typing an
 // existing company's name here links to it instead of failing (issue #123).

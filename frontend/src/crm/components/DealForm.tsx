@@ -8,10 +8,11 @@ import { STAGE_ORDER } from '../constants';
 import type { CrmDeal, CrmContact, CrmCompany } from '../../core/types';
 import { CustomFieldInputs } from './CustomFieldInputs';
 import { useCustomFieldsForm, putCustomFields } from './useCustomFieldsForm';
+import { NewContactFields } from './NewContactFields';
 import { RecordCombobox } from './RecordCombobox';
 import {
   companyLabelOf, companyNameOf, companySublabelOf, contactLabelOf, contactSublabelOf,
-  createCompany, createContact, recordId, searchCompanies, searchContacts,
+  createCompany, createContact, recordId, searchCompanies, searchContacts, saveNewContactDetails,
 } from '../dealLinkPickers';
 
 /**
@@ -36,6 +37,10 @@ export function DealForm({ contactId, onClose, onSaved }: Props) {
   const [expectedClose, setExpectedClose] = useState('');
   const [notes, setNotes] = useState('');
   const [selectedContact, setSelectedContact] = useState<number | null>(contactId ?? null);
+  const [newContactId, setNewContactId] = useState<number | null>(null);
+  const [newContactDetails, setNewContactDetails] = useState({ email: '', phone: '' });
+  const [detailsTouched, setDetailsTouched] = useState(false);
+  const showContactDetails = selectedContact != null && selectedContact === newContactId;
   const [selectedCompany, setSelectedCompany] = useState<number | null>(null);
   // The linked records' display names. Held here rather than looked up from a fetched
   // list, which is what ends the capped-page hazard the two <select>s used to carry: an
@@ -133,6 +138,9 @@ export function DealForm({ contactId, onClose, onSaved }: Props) {
     if (pickerBusy) { setError('Still creating a linked record — one moment.'); return; }
     setSaving(true); setError('');
     try {
+      if (showContactDetails && detailsTouched) {
+        await saveNewContactDetails(selectedContact!, newContactDetails);
+      }
       const body: Record<string, unknown> = {
         title, value: parseFloat(value) || 0,
         probability: parseInt(probability) || 0,
@@ -165,13 +173,23 @@ export function DealForm({ contactId, onClose, onSaved }: Props) {
             valueLabel={contactLabel}
             emptyLabel="No contact"
             search={searchContacts}
-            create={createContact}
+            create={async name => {
+              const c = await createContact(name);
+              setNewContactId(c.id);
+              setNewContactDetails({ email: '', phone: '' });
+              setDetailsTouched(false);
+              return c;
+            }}
             getId={recordId}
             getLabel={contactLabelOf}
             getSublabel={contactSublabelOf}
             onSelect={pickContact}
             onBusyChange={setContactBusy}
           />
+          {showContactDetails && <NewContactFields
+            {...newContactDetails} idPrefix="deal-new-contact"
+            onChange={details => { setNewContactDetails(details); setDetailsTouched(true); }}
+          />}
           <RecordCombobox<CrmCompany>
             label="Company"
             id="deal-company"
