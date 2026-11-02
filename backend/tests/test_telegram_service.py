@@ -29,6 +29,7 @@ class Harness:
         self.answers = []   # (callback_query_id, text)
         self.edits = []     # (chat_id, message_id, reply_markup)
         self.resolve_calls = []
+        self.resolve_results = {}
         self.claim_calls = []
         self.pending_sets = []
         self.cleared = []             # (link_id, expected_msg_id) per conditional clear
@@ -78,7 +79,7 @@ def _install(monkeypatch, h: Harness, *, chat_scripts=None, consume=None, provid
     def fake_resolve(registry, conv, tuid, decision, msg_id=None, *, user):
         h.resolve_calls.append((conv, tuid, decision, msg_id))
         h.resolve_users.append(user)
-        return {"tool": "crm_create_todo", "decision": decision, "result": {"ok": True}}
+        return h.resolve_results.get(tuid, {"tool": "crm_create_todo", "decision": decision, "result": {"ok": True}})
 
     fake_engine = types.SimpleNamespace(chat=fake_chat, resolve_confirmation=fake_resolve)
 
@@ -255,6 +256,10 @@ async def test_confirm_event_sends_keyboard_and_marks_batch(monkeypatch):
     # A confirm prompt with an inline Approve/Deny keyboard was sent.
     kb_sends = [s for s in h.sent if s[0] == "text" and s[3] and "inline_keyboard" in s[3]]
     assert kb_sends, "expected an inline-keyboard confirm message"
+    assert kb_sends[0][2].endswith(
+        "Approve this action? Tap a button, or reply yes to approve every pending change. "
+        "Any other message cancels them."
+    )
     buttons = kb_sends[0][3]["inline_keyboard"][0]
     assert {b["callback_data"] for b in buttons} == {"a:m1:tu1", "d:m1:tu1"}
     assert "Create a todo" in kb_sends[0][2]  # server-derived description, not narration
@@ -638,3 +643,126 @@ async def test_an_unlinked_sender_can_never_capture(monkeypatch):
     monkeypatch.setattr(service.gtd_service, "capture", _never)
     await service.handle_update(_msg("capture something", user_id="stranger"))
     assert any("don't recognize" in t for t in _texts(h))
+
+
+# ── Typed approval (#331) ─────────────────────────────────────────────────────
+
+def test_is_approval_matches_a_whole_message_yes_only():
+    for text in ("yes", "Yes!", "ok 👍", "Yes, please.", "go ahead", "Approve", " OK "):
+        assert service.is_approval(text), text
+    for text in ("no", "yes but change the title", "add a note to the project", "", "yes?? which one"):
+        # "yes?? which one" has more words than a bare yes.
+        assert not service.is_approval(text), text
+
+
+async def test_typed_yes_approves_every_pending_write_and_continues(monkeypatch):
+    h = Harness()
+    h.link["pending_msg_id"] = "m1"
+    h.pending_tool_uses = ["tuA", "tuB"]
+    _install(monkeypatch, h,
+             chat_scripts=[[{"type": "text", "text": "Saved."}, {"type": "done"}]],
+             consume=[True])
+    await service.handle_update(_msg("Yes, please."))
+    # Both writes approved — never denied — as the seat that typed it.
+    assert h.resolve_calls == [("conv1", "tuA", "approve", "m1"), ("conv1", "tuB", "approve", "m1")]
+    assert h.resolve_users == [MEMBER, MEMBER]
+    assert ("text", "chat1", "✅ Approved.", None) in h.sent
+    # The batch is consumed and ONE continuation narrates the outcome; the "yes" itself
+    # is not sent to the model as a new message.
+    assert h.consume_calls == [(7, "m1")]
+    assert h.chat_calls == [[]]
+    assert ("html", "chat1", "Saved.", None) in h.sent
+
+
+async def test_typed_yes_without_a_pending_batch_is_an_ordinary_message(monkeypatch):
+    h = Harness()
+    _install(monkeypatch, h, chat_scripts=[[{"type": "text", "text": "Yes what?"}, {"type": "done"}]])
+    await service.handle_update(_msg("yes"))
+    assert h.resolve_calls == [] and h.consume_calls == []
+    assert h.chat_calls == [[{"role": "user", "content": "yes"}]]
+
+
+async def test_other_text_with_a_pending_batch_still_cancels_it(monkeypatch):
+    h = Harness()
+    h.link["pending_msg_id"] = "m1"
+    h.pending_tool_uses = ["tuA"]
+    _install(monkeypatch, h, chat_scripts=[[{"type": "done"}]])
+    await service.handle_update(_msg("yes but make it a note instead"))
+    assert h.resolve_calls == [("conv1", "tuA", "deny", "m1")]
+    assert h.chat_calls == [[{"role": "user", "content": "yes but make it a note instead"}]]
+
+
+async def test_capture_while_a_batch_is_pending_cancels_the_batch_first(monkeypatch):
+    h = Harness()
+    h.link["pending_msg_id"] = "m1"
+    h.pending_tool_uses = ["tuA"]
+    _install(monkeypatch, h)
+    monkeypatch.setattr(service, "_todo_mode", lambda: "gtd")
+
+    def capture(text, source, owner_id):
+        assert h.resolve_calls == [("conv1", "tuA", "deny", "m1")]
+        assert h.cleared == [(7, "m1")]
+        h.captures.append(text)
+        return {"title": text}
+
+    monkeypatch.setattr(service.gtd_service, "capture", capture)
+    await service.handle_update(_msg("capture buy more candles"))
+    # The stale buttons are dead before the capture is filed; no model turn ran.
+    assert h.resolve_calls == [("conv1", "tuA", "deny", "m1")]
+    assert h.cleared == [(7, "m1")]
+    assert h.chat_calls == []
+    assert h.captures == ["buy more candles"]
+    assert ("text", "chat1", "Captured: buy more candles", None) in h.sent
+
+
+async def test_typed_yes_from_a_different_seat_cannot_approve(monkeypatch):
+    h = Harness()
+    h.link["pending_msg_id"] = "m1"
+    h.pending_tool_uses = ["tuA"]
+    _install(monkeypatch, h)
+    await service.handle_update(_msg("yes", user_id="stranger"))
+    assert h.resolve_calls == [] and h.consume_calls == []
+    assert h.cleared == [] and h.chat_calls == []
+    assert _texts(h) == [service._LINK_HELP]
+
+
+async def test_typed_yes_does_not_continue_unconsumed_batch(monkeypatch):
+    h = Harness()
+    h.link["pending_msg_id"] = "m1"
+    h.pending_tool_uses = ["tuA"]
+    _install(monkeypatch, h, consume=[False])
+    await service.handle_update(_msg("yes"))
+    assert h.resolve_calls == [("conv1", "tuA", "approve", "m1")]
+    assert h.consume_calls == [(7, "m1")]
+    assert h.chat_calls == []
+    assert _texts(h) == ["✅ Approved."]
+
+
+async def test_typed_yes_reports_already_handled_for_resolved_or_empty_batch(monkeypatch):
+    for pending, result in (
+        ([], None),
+        (["tuA"], {"status": "already_resolved", "result": {"error": "old failure"}}),
+        (["tuA"], {"status": "not_found"}),
+    ):
+        h = Harness()
+        h.link["pending_msg_id"] = "m1"
+        h.pending_tool_uses = pending
+        h.resolve_results = {"tuA": result}
+        _install(monkeypatch, h, consume=[True])
+        await service.handle_update(_msg("yes"))
+        assert _texts(h) == ["Already handled."]
+        assert h.consume_calls == [(7, "m1")]
+        assert h.chat_calls == [[]]
+
+
+async def test_typed_yes_reports_mixed_success_and_failure(monkeypatch):
+    h = Harness()
+    h.link["pending_msg_id"] = "m1"
+    h.pending_tool_uses = ["tuA", "tuB"]
+    h.resolve_results = {"tuB": {"result": {"error": "Cannot change this record"}}}
+    _install(monkeypatch, h, consume=[True])
+    await service.handle_update(_msg("yes"))
+    assert h.resolve_calls == [("conv1", "tuA", "approve", "m1"), ("conv1", "tuB", "approve", "m1")]
+    assert _texts(h) == ["⚠️ Action failed."]
+    assert h.consume_calls == [(7, "m1")]
+    assert h.chat_calls == [[]]
