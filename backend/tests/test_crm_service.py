@@ -58,9 +58,14 @@ class _RecCursor:
 
     def execute(self, sql, params=()):
         self._last = sql
+        self._params = params
         self.r.calls.append((" ".join(sql.split()), list(params)))
 
     def fetchone(self):
+        if "SELECT company_follow_merge" in self._last:
+            return (self._params[0],)
+        if "SELECT merged_into_id" in self._last:
+            return (None,)
         if self.r.cursor_fetchone_queue:
             return self.r.cursor_fetchone_queue.pop(0)
         if "SELECT status FROM" in self._last:
@@ -1334,7 +1339,8 @@ def test_archiving_needs_a_reason_and_writes_the_note_with_the_update(
 def test_only_a_move_across_the_archived_line_leaves_a_note(
     monkeypatch, rec, fake_conn, update, old, new, note,
 ):
-    conn = fake_conn(monkeypatch, service, fetchone_results=[(old,)])
+    rows = [(old,)] + ([(None,)] if update is service.update_company and new != "archived" else [])
+    conn = fake_conn(monkeypatch, service, fetchone_results=rows)
     rec.fetchone_queue = [{"id": 1, "status": old}, {"id": 1}]  # contact's peek, getter
     update(1, status=new, actor_id=5)
     notes = [p[2] for s, p in conn.executed if "INSERT INTO crm_chatter" in s]
@@ -1391,6 +1397,11 @@ def test_last_touch_excludes_housekeeping_notes_so_archiving_moves_no_clock():
     assert "d.updated_at" not in service.TOUCH_AT_SQL
     assert "%" not in service.TOUCH_AT_SQL
     assert "%" not in service.LAST_TOUCH_SQL
+
+
+def test_resolver_follows_company_merge_chain(rec):
+    service.resolve_or_create_company_ids(["Duplicate"])
+    assert "company_follow_merge(co.id) AS id" in rec.sql_containing("SELECT t.n AS raw")
 
 
 @pytest.mark.parametrize("sort_by, order", [

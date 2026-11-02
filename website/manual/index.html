@@ -957,7 +957,7 @@ automatically retries a save.</p><nav class="pn"><a href="#/pipeline/adding-a-de
 </ul>
 <h2>Duplicates are not checked</h2>
 <p>Import does not look for people already in the CRM. Every row becomes a new contact, even if someone with that email exists. Tidy your file first. See <a href="#/contacts-and-companies/duplicates">Duplicates</a>.</p><nav class="pn"><a href="#/contacts-and-companies/notes-mentions-attachments"><small>Previous</small>Notes, mentions and attachments</a><a class="next" href="#/contacts-and-companies/duplicates"><small>Next</small>Duplicates</a></nav></article>
-<article data-route="contacts-and-companies/duplicates" data-title="Duplicates" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/contacts-and-companies/contacts-list">Contacts &amp; companies</a></p><h1>Duplicates</h1><p class="lead">How to find duplicate records, and why contacts and companies cannot be merged.</p><p>Duplicate records are the commonest way a CRM goes stale. CakeCRM helps you avoid them, but it cannot merge contacts or companies, so prevention matters most.</p>
+<article data-route="contacts-and-companies/duplicates" data-title="Duplicates" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/contacts-and-companies/contacts-list">Contacts &amp; companies</a></p><h1>Duplicates</h1><p class="lead">How to find duplicate records, and why contacts cannot be merged.</p><p>Duplicate records are the commonest way a CRM goes stale. CakeCRM helps you avoid them, but it cannot merge contacts, so prevention matters most.</p>
 <h2>Preventing duplicates</h2>
 <ul>
 <li><strong>Search before you add.</strong> Type the name or email in the Contacts or Companies search box first.</li>
@@ -990,8 +990,15 @@ automatically retries a save.</p><nav class="pn"><a href="#/pipeline/adding-a-de
 </table></div>
 <p>There is no duplicate screen outside Baker. On an install with no AI provider, search the lists by hand.</p>
 <h2>Merging</h2>
-<p><strong>Only deals can be merged.</strong> There is no contact merge and no company merge. To clean up two contacts for one person, move what matters onto the one you keep, then delete the other.</p>
-<p>Baker can merge two deals for you. In Baker's <strong>Ask</strong> mode, a merge always waits for your approval (see <a href="#/baker/approvals">Approvals</a>), so check which deal it keeps. The deal you keep gets the other's activity, open todos and copied notes. Its own title, value, stage and links stay as they were. The other deal is archived, not deleted.</p><nav class="pn"><a href="#/contacts-and-companies/importing"><small>Previous</small>Importing contacts</a><a class="next" href="#/contacts-and-companies/archiving"><small>Next</small>Archiving</a></nav></article>
+<p><strong>Deals and companies can be merged.</strong> Contacts cannot be merged. To clean up two contacts for one person, move what matters onto the one you keep, then delete the other.</p>
+<p>Baker can merge two deals for you. In Baker's <strong>Ask</strong> mode, a merge always waits for your approval (see <a href="#/baker/approvals">Approvals</a>), so check which deal it keeps. The deal you keep gets the other's activity, open todos and copied notes. Its own title, value, stage and links stay as they were. The other deal is archived, not deleted.</p>
+<p>On a company's page, <strong>Merge into…</strong> lets you pick the company to keep, shows a current estimate
+of what will move (recomputed at merge), and asks why. Contacts and deals, including archived
+deals, move to the survivor; their todos and activity follow. Company notes are copied and
+blank fields are filled without replacing the survivor's own values. The duplicate is archived,
+with who merged it and why recorded. Its spelling resolves to the survivor on future imports.
+There is no undo, and a merged duplicate cannot be restored. Baker can do this too; in
+<strong>Ask</strong> mode the merge always waits for your approval.</p><nav class="pn"><a href="#/contacts-and-companies/importing"><small>Previous</small>Importing contacts</a><a class="next" href="#/contacts-and-companies/archiving"><small>Next</small>Archiving</a></nav></article>
 <article data-route="contacts-and-companies/archiving" data-title="Archiving" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/contacts-and-companies/contacts-list">Contacts &amp; companies</a></p><h1>Archiving</h1><p class="lead">Hide a contact or company you no longer work with, without losing its history.</p><p>Archiving keeps a record and everything on it, while marking it as no longer current. For contacts and companies, <strong>Archived</strong> is a status, alongside Active (and Inactive, for contacts).</p>
 <p>Deals are archived differently. See <a href="#/pipeline/archived-deals">Archived deals</a>.</p>
 <h2>How to archive</h2>

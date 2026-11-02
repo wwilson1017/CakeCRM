@@ -233,7 +233,7 @@
   (`test_archive_route_writes_the_same_audit_as_the_assistant_tool`). `DealDetailBody` offers
   **Archive** on any live deal, open or closed, through `LostReasonModal variant="archive"`
   (reason required); the server row goes up via `onArchived` like Restore, and a failed archive
-  re-reads the deal since the write may have committed. Still no merge UI and no
+  re-reads the deal since the write may have committed. Still no deal merge UI and no
   archived-deals page. Note restoring a **merge source** is not an undo: the
   merge already repointed activity/todos, copied notes and gap-filled custom fields onto the
   target; restore only makes the source visible again.
@@ -1264,6 +1264,33 @@
   run as a formula (`= + - @`, tab, CR) get a leading apostrophe; JSON columns are written
   as JSON.
 
+- **Company merge (#334)** — `backend/crm/company_merge_service.py` provides an unlocked,
+  read-only `plan_merge` estimate and a gated, locked `merge_companies` transaction.
+  Contacts/deals (including archived deals) move; their todos/activity follow implicitly.
+  Company notes are copied with a source marker, without attachments/mentions; custom fields
+  and blank domain/industry/phone/address/source are gap-filled, and differing notes appended.
+  One survivor UPDATE applies the planned fields. Relinks use RETURNING ids for post-commit
+  rescoring without bumping contact/deal updated_at (a documented `_write_deal_update` exception).
+  The duplicate is archived with the #239 actor/reason housekeeping note; the survivor also
+  records the event. Archived absorbed rows are allowed; archived survivors are refused.
+  `merged_into_id` retains duplicate spellings; `company_follow_merge` resolves immutable,
+  acyclic chains (no compression) in the name resolver and every contact/deal assignment.
+  A merged company cannot be restored (locked service refusal plus DB CHECK), but may be
+  renamed. Deleting a survivor uses ON DELETE SET NULL: direct absorbed rows stay archived
+  and regain their own spelling. Earlier aliases then end at those archived rows.
+  **Concurrency gate:** `company_merge_gate()` is the FIRST statement for merge/delete,
+  taking the transaction advisory lock exclusively. `company_follow_merge` takes it shared,
+  then walks without row locks; update_contact/_write_status_audited and _write_deal_update
+  call it before any row lock, and create_contact/create_deal use it in INSERT VALUES.
+  A new writer of contacts.company_id / deals.company_id calls company_follow_merge as its
+  first statement, before row locks. The key is defined only by company_merge_gate_key().
+  Preview takes neither the gate nor row locks: current estimate, recomputed at merge.
+  Member routes: GET `/api/crm/companies/{id}/merge-preview?survivor_id=` and POST
+  `/api/crm/companies/{id}/merge` (path id is absorbed). `CompanyMergeDialog` picks an active
+  survivor, previews, requires a reason, guards stale responses/double submits, traps focus,
+  and refreshes the host after uncertain writes. The page shows a direct-successor link.
+  Baker gets read `crm_preview_company_merge` and never-routine write `crm_merge_companies`
+  with a server-bound actor. No undo, contact merge, or chain-end re-run sweep.
 - **Quick update (#337)** — `backend/crm/quick_update.py` + `quick_update_router.py`
   mounted at `/api/crm/quick-update`; `frontend/src/crm/{QuickUpdatePage.tsx,quickUpdate.ts}`.
   One transaction locks the live deal and composes `_write_deal_update_cur`,

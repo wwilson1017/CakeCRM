@@ -31,7 +31,8 @@ export type WarmTab = 'pipeline' | 'contacts' | 'companies';
  */
 // 2: #279 added `closed_on` to the board's `CrmDeal`.
 // 3: #333 renamed the board's last_activity_at to last_contact_at.
-export const WARM_SCHEMA_VERSION = 3;
+// 4: #334 CrmCompany now carries merged_into_id.
+export const WARM_SCHEMA_VERSION = 4;
 export const WARM_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**

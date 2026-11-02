@@ -13,6 +13,8 @@ Contacts:
   DELETE /api/crm/contacts/:id          — delete
 
 Companies:
+  GET    /api/crm/companies/:id/merge-preview
+  POST   /api/crm/companies/:id/merge
   GET    /api/crm/companies             — paginated list / search (?q=)
   GET    /api/crm/companies/:id         — full detail (rolled-up contacts/deals/activity)
   POST   /api/crm/companies             — create (400s on a case/whitespace duplicate)
@@ -116,6 +118,7 @@ from core.auth import get_current_user, require_admin
 from crm import (
     attachment_service,
     chatter_service,
+    company_merge_service,
     export,
     field_service,
     gtd_common,
@@ -285,6 +288,12 @@ class CompanyUpdate(BaseModel):
     status: str | None = None
     owner_id: int | None = None
     archive_reason: str | None = Field(None, max_length=crm.MAX_ARCHIVE_REASON)  # #239, see ContactUpdate
+
+
+class CompanyMerge(BaseModel):
+    survivor_id: StrictInt
+    reason: str = Field(..., max_length=crm.MAX_ARCHIVE_REASON)
+    rename_to: str | None = Field(None, max_length=200)
 
 
 class TodoCreate(BaseModel):
@@ -1728,6 +1737,34 @@ async def delete_company(company_id: int, user=Depends(get_current_user)):
     if not crm.delete_company(company_id):
         raise HTTPException(status_code=404, detail="Company not found")
     return {"deleted": True, "company_id": company_id}
+
+
+# The path names the absorbed company: the page the user is folding into another.
+# Member-accessible record CRUD; blocking Postgres work stays on the sync threadpool.
+@router.get("/companies/{company_id}/merge-preview")
+def company_merge_preview(company_id: int, survivor_id: int, rename_to: str | None = None,
+                          user=Depends(get_current_user)):
+    try:
+        return company_merge_service.plan_merge(survivor_id, company_id, rename_to=rename_to)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+@router.post("/companies/{company_id}/merge")
+def merge_company(company_id: int, body: CompanyMerge, user=Depends(get_current_user)):
+    try:
+        return company_merge_service.merge_companies(
+            body.survivor_id, company_id, actor_id=user["id"], reason=body.reason,
+            rename_to=body.rename_to,
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    except psycopg2.errors.UniqueViolation:
+        raise HTTPException(status_code=409, detail="Another company already has that name") from None
 
 
 # ── Custom fields ─────────────────────────────────────────────────────────────
