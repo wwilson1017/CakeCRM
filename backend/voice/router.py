@@ -3,8 +3,9 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 
-from core.auth import get_current_user
+from core.auth import get_current_user, require_admin
 from core.ratelimit import IPRateLimiter
 from providers import get_ai_provider, get_transcriber
 from voice import service
@@ -57,3 +58,27 @@ async def transcribe(request: Request, tidy: bool = False, user=Depends(get_curr
         except Exception:
             logger.warning("voice: tidy unavailable; returning the raw transcript")
     return {"text": text, "tidied": tidied}
+
+
+def _voice_ready() -> bool:
+    try:
+        return get_ai_provider() is not None and get_transcriber() is not None
+    except Exception:
+        return False
+
+
+class LivePreviewBody(BaseModel):
+    enabled: bool
+
+
+@router.get("/live-preview")
+def live_preview(user=Depends(require_admin)):
+    return {"enabled": service.get_live_preview(), "voice_ready": _voice_ready()}
+
+
+@router.post("/live-preview")
+def update_live_preview(body: LivePreviewBody, user=Depends(require_admin)):
+    if body.enabled and not _voice_ready():
+        raise HTTPException(400, "No AI provider that can transcribe is configured.")
+    service.set_live_preview(body.enabled)
+    return {"enabled": body.enabled}

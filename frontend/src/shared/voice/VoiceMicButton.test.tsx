@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { RecordedClip } from './useAudioRecorder';
 import { ApiError } from '../../core/api/client';
 import { VoiceMicButton, type VoiceMicButtonProps } from './VoiceMicButton';
-import { VoiceReadyContext } from './VoiceReadyContext';
+import { VoiceReadyContext, VoiceLivePreviewContext } from './VoiceReadyContext';
 import { transcribeClip } from './transcribe';
 import { stopSpeech } from './speechPlayer';
 import { CANCEL_DX } from './dictationGesture';
@@ -25,9 +25,9 @@ beforeEach(() => {
   vi.mocked(transcribeClip).mockResolvedValue({ text: 'hello', tidied: false });
   container = document.createElement('div'); root = createRoot(container);
 });
-afterEach(() => act(() => root.unmount()));
-function render(ready: boolean | null = true, props: Partial<VoiceMicButtonProps> = {}) {
-  act(() => root.render(<VoiceReadyContext.Provider value={ready}><VoiceMicButton mode="send" onTranscript={transcript} {...props} /></VoiceReadyContext.Provider>));
+afterEach(() => { act(() => root.unmount()); vi.unstubAllGlobals(); });
+function render(ready: boolean | null = true, props: Partial<VoiceMicButtonProps> = {}, live = false) {
+  act(() => root.render(<VoiceLivePreviewContext.Provider value={live}><VoiceReadyContext.Provider value={ready}><VoiceMicButton mode="send" onTranscript={transcript} {...props} /></VoiceReadyContext.Provider></VoiceLivePreviewContext.Provider>));
 }
 const mic = () => container.querySelector<HTMLButtonElement>('[aria-label^="Voice input"]')!;
 function pointer(type: string, t: number, x = 100, y = 100) {
@@ -97,4 +97,35 @@ it('aborts upload and ignores completion after unmount', async () => {
   act(() => root.render(null));
   await act(async () => resolve({ text: 'late', tidied: false }));
   expect(signal.aborted).toBe(true); expect(transcript).not.toHaveBeenCalled();
+});
+
+it.each(['send', 'review'] as const)('shows preview but delivers only batch text in %s mode', async mode => {
+  const recognitions: { onresult?: (event: { results: { transcript: string }[][] }) => void }[] = [];
+  const start = vi.fn(), abort = vi.fn();
+  vi.stubGlobal('SpeechRecognition', class {
+    constructor() { recognitions.push(this); }
+    onresult = undefined;
+    start = start; abort = abort;
+  });
+  render(true, { mode }, true); pointer('pointerdown', 0);
+  render(true, { mode }, true);
+  act(() => recognitions[0].onresult?.({ results: [[{ transcript: 'preview words' }]] }));
+  expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe('preview words');
+  expect(transcript).not.toHaveBeenCalled();
+  pointer('pointerup', 1500); await clip();
+  expect(transcript).toHaveBeenCalledExactlyOnceWith('hello', mode);
+  expect(abort).toHaveBeenCalledOnce();
+});
+it('never constructs recognition with preview off', () => {
+  const constructor = vi.fn(); vi.stubGlobal('SpeechRecognition', constructor);
+  render(); pointer('pointerdown', 0); render();
+  expect(constructor).not.toHaveBeenCalled();
+});
+
+it.each(['readiness', 'disabled'] as const)('retires preview when %s is lost', gate => {
+  const abort = vi.fn();
+  vi.stubGlobal('SpeechRecognition', class { start() {} abort = abort; });
+  render(true, {}, true); pointer('pointerdown', 0); render(true, {}, true);
+  render(gate !== 'readiness', { disabled: gate === 'disabled' }, true);
+  expect(abort).toHaveBeenCalledOnce(); expect(mic()).toBeNull();
 });

@@ -673,9 +673,15 @@
   and later approval continuations; `disarm` on thread changes keeps history silent.
   New sends, disable, unmount and recording cancel playback. No voice key gate for
   playback itself. SDK clients opened for transcription are closed after each request.
-  Deliberately not ported: live transcription (upstream's direct browser Realtime
-  websocket bypasses the install; server-routed preview needs a follow-up), hold-key,
-  Voice words, ElevenLabs, speed, usage/cost rows. No schema or dependency changes.
+  #348 adds an admin-only, default-off `crm_meta.voice_live_preview` switch and a
+  Web Speech display-only preview. The shared disclosure names the browser speech
+  service and its direct audio path. Batch remains the sole sent/saved transcript.
+  Setup gates preview on voice readiness; settings updates the current page's context.
+  Recognition is generation-guarded and stops without restart on error/end; Android
+  is excluded to protect MediaRecorder. Real-device coexistence is unverified in CI.
+  Realtime was not chosen because it needs key minting, websocket and PCM plumbing
+  for the same preview benefit. Still not ported: hold-key, Voice words, ElevenLabs,
+  speed, usage/cost rows. No new dependency.
   Tests: backend `test_voice_provider`, `test_voice_router`, `test_voice_tidy`, setup
   status in `test_router`, request limits, genericization, help and manual; frontend
   shared voice tests cover gestures, recorder teardown, mic availability/upload races,

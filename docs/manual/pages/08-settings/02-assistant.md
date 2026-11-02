@@ -4,7 +4,7 @@ summary: Open Baker's memory, choose the todo mode, and manage the no-login todo
 shots: [settings-assistant]
 ---
 
-The **Assistant** tab has two cards. Everyone sees **Assistant memory**. **Todo mode** is for admins only.
+The **Assistant** tab has three cards. Everyone sees **Assistant memory**. **Todo mode** and **Live transcription** are for admins only.
 
 {{shot:settings-assistant}}
 
@@ -36,3 +36,7 @@ The same card controls two links that work without signing in. They show in both
 ## AI provider keys
 
 Connecting an AI provider is not on this tab. Admins use **AI Setup** in the top bar. See [AI setup](../07-baker/06-ai-setup.md).
+
+## Live transcription (admins)
+
+Off by default. With a transcribing provider configured, this switch enables a display-only preview while speaking. Audio goes directly to the browser maker’s speech recognition service, bypassing the install; cancelling cannot recall audio already heard. Sent or saved words still come from batch transcription after release. Read the full disclosure in [Meet Baker](../07-baker/01-meet-baker.md). Changes apply immediately on this page; other open tabs need a reload.
