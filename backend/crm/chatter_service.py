@@ -203,6 +203,20 @@ def add_note(entity_type: str, entity_id: int, message: str,
     return note
 
 
+def insert_note_cur(cur, entity_type: str, entity_id: int, text: str,
+                    author_id: int | None, now) -> dict:
+    """Insert already-cleaned text on the caller's cursor, without scheduling work."""
+    cur.execute(
+        """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id)
+           VALUES (%s, %s, %s, %s, %s) RETURNING *""",
+        (entity_type, entity_id, text, now, author_id),
+    )
+    # Hydrate from the INSERT's own row, inside the transaction — a post-commit
+    # re-select could return None if a concurrent delete removes the row first.
+    note = row_to_dict(cur, cur.fetchone())
+    return note
+
+
 def post_note(entity_type: str, entity_id: int, message: str,
               author_id: int | None = None,
               mentions: list[int] | None = None) -> tuple[dict, list[int]]:
@@ -221,14 +235,7 @@ def post_note(entity_type: str, entity_id: int, message: str,
         cur.execute(f"SELECT 1 FROM {table} WHERE id = %s FOR UPDATE", (entity_id,))
         if cur.fetchone() is None:
             raise ValueError(f"No {entity_type} with id {entity_id}")
-        cur.execute(
-            """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id)
-               VALUES (%s, %s, %s, %s, %s) RETURNING *""",
-            (entity_type, entity_id, text, now, author_id),
-        )
-        # Hydrate from the INSERT's own row, inside the transaction — a post-commit
-        # re-select could return None if a concurrent delete removes the row first.
-        note = row_to_dict(cur, cur.fetchone())
+        note = insert_note_cur(cur, entity_type, entity_id, text, author_id, now)
         newly: list[int] = []
         note["mentions"] = []
         if wanted:  # the common, mention-free post costs no extra query

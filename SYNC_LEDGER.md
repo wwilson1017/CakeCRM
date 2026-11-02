@@ -71,6 +71,7 @@ Populated by port PRs from here on.
 
 | Feature | Source | CakeCRM PR / issue | Date |
 |---|---|---|---|
+| Quick update: search-first deal update screen plus a one-sentence Baker preview that saves through the same path | PR #4615 (`7f9d7e98b`), PR #4626 (`98c5fb8af`) | #337 | — |
 | Todo-GTD undo pill — a 7s undo block for marking a todo done anywhere and for filing an inbox item under a context | PR #2904 (`77a3337ff`), PR #2939 (`3b262b0d0`) | #231 | — |
 | Todo GTD Someday, Done and Projects on the shared collection layer (per-page configs, a stretched-link project card, the public todo app's boot-split deny entry retired) | PR #1840 (`2a639f836`), GTD half only | #234 | — |
 | Todo-GTD copy buttons + long-title wrapping | `e00e05cde` | #151 | — |

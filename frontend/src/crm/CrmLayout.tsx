@@ -24,6 +24,7 @@ import type { TodoMode } from './gtd/TodoModeContext';
 const NAV_ITEMS = [
   { to: '/crm', label: 'Dashboard', end: true },
   { to: '/crm/pipeline', label: 'Pipeline' },
+  { to: '/crm/quick-update', label: 'Quick update' },
   { to: '/crm/contacts', label: 'Contacts' },
   { to: '/crm/companies', label: 'Companies' },
   { to: '/crm/todos', label: 'Todos' },
