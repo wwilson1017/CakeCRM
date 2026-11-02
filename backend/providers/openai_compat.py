@@ -55,6 +55,20 @@ def format_openai_tools(tools: list[dict]) -> list[dict]:
     ]
 
 
+def openai_user_content(content):
+    """Neutral image parts become data URLs; strings and other parts pass through."""
+    if not isinstance(content, list):
+        return content
+    out = []
+    for part in content:
+        if isinstance(part, dict) and part.get("type") == "image":
+            out.append({"type": "image_url", "image_url": {
+                "url": f"data:{part['media_type']};base64,{part['data']}"}})
+        else:
+            out.append(part)
+    return out
+
+
 def build_openai_messages(
     messages: list[dict],
     system_prompt: str,
@@ -64,7 +78,7 @@ def build_openai_messages(
     for m in messages:
         role = m.get("role")
         if role == "user":
-            api_messages.append({"role": "user", "content": m.get("content", "")})
+            api_messages.append({"role": "user", "content": openai_user_content(m.get("content", ""))})
         elif role == "assistant":
             msg: dict = {"role": "assistant"}
             if m.get("content") is not None:

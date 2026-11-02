@@ -336,9 +336,12 @@ def save_message(
     model: str = "",
     context_tokens: int | None = None,
     context_boundary_seq: int | None = None,
+    images: list[dict] | None = None,
 ) -> None:
     """Insert one message, allocating ``seq`` atomically under the conversation lock.
 
+    Images are inserted under the same conversation lock and transaction, so a
+    user row never exists without its photos or vice versa.
     Raises if the conversation does not exist (fail-loud — never silently create).
 
     ``context_tokens`` is the cache-inclusive input count the model read for THIS
@@ -407,6 +410,13 @@ def save_message(
                 model,
             ),
         )
+        for ordinal, img in enumerate(images or []):
+            cur.execute(
+                "INSERT INTO assistant_message_images "
+                "(message_id, ordinal, filename, mime_type, byte_size, data) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (msg_id, ordinal, img["filename"], img["mime"], len(img["data"]), img["data"]),
+            )
         cur.execute(
             "UPDATE assistant_conversations "
             "SET updated_at = now(), "
@@ -417,6 +427,18 @@ def save_message(
             "WHERE id = %s",
             (context_tokens, context_boundary_seq, context_tokens, conversation_id),
         )
+
+
+def get_message_images(msg_id: str) -> list[dict]:
+    """Photos in upload order, with BYTEA memoryviews converted to bytes."""
+    rows = pg_fetchall(
+        "SELECT id, ordinal, filename, mime_type, data FROM assistant_message_images "
+        "WHERE message_id = %s ORDER BY ordinal, id",
+        (msg_id,),
+    )
+    for row in rows:
+        row["data"] = bytes(row["data"])
+    return rows
 
 
 def merge_tool_result(msg_id: str, tool_use_id: str, tool_name: str, content: str) -> None:

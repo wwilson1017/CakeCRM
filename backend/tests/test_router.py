@@ -429,3 +429,20 @@ def test_setup_status_voice_ready_follows_the_transcriber(client, monkeypatch, a
     assert body["voice_live_preview"] is expected
     monkeypatch.setattr("voice.service.get_live_preview", lambda: False)
     assert client.get("/api/setup/status").json()["voice_live_preview"] is False
+
+
+@pytest.mark.parametrize("mode, expected", [("vision", True), ("plain", False), ("absent", False), ("error", False)])
+def test_setup_status_vision_readiness(client, monkeypatch, mode, expected):
+    from types import SimpleNamespace
+
+    _use_store(monkeypatch, FakeStore())
+
+    def provider():
+        if mode == "error":
+            raise RuntimeError("unavailable")
+        return {"vision": SimpleNamespace(supports_images=True), "plain": object(), "absent": None}[mode]
+
+    monkeypatch.setattr("providers.get_ai_provider", provider)
+    monkeypatch.setattr("providers.get_transcriber", lambda **kw: None)
+    body = client.get("/api/setup/status").json()
+    assert body["vision_ready"] is expected

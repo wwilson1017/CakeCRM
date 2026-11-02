@@ -35,7 +35,7 @@ Deleting, archiving, merging, bulk moves and bulk todo updates, recomputing lead
 ## What asks even in Auto
 
 - **Writing Baker's protected files**, soul.md and MEMORY.md. These always ask, in every mode, and only an admin can change them. See [Memory](04-memory.md).
-- **A conversation that has read outside content.** Once Baker has read an email or an uploaded file in a conversation, every change it proposes asks for approval for the rest of that conversation, even after that message has scrolled out of view. Text someone else wrote can never quietly steer Baker into changing your data.
+- **A conversation that has read outside content.** Once Baker has read an email, an uploaded file or a photo in a conversation, every change it proposes asks for approval for the rest of that conversation, even after that message has scrolled out of view. Text someone else wrote can never quietly steer Baker into changing your data.
 
 ## Approving a change
 

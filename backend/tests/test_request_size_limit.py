@@ -361,9 +361,9 @@ def test_each_ceiling_is_exactly_its_feature_cap_plus_the_envelope():
         )
 
 
-#: Deliberately unbounded, with the reason. The assistant's legitimate maximum is
-#: MAX_FILES x MAX_FILE_SIZE = 50 MB against the same 64 MB backstop, so the global ceiling
-#: is already the tight one there and a row would only restate it.
+#: Photos (#345) share the assistant upload route and MAX_FILES x MAX_FILE_SIZE cap
+#: (50 MB). The 64 MB backstop remains the tight one for the multipart request,
+#: so no route-specific row is added.
 _EXEMPT_UPLOAD_ROUTES = {"/api/assistant/chat/upload"}
 
 

@@ -485,3 +485,23 @@ def test_the_scoped_argument_is_keyword_only_and_required():
         param = inspect.signature(fn).parameters["user_id"]
         assert param.kind is inspect.Parameter.KEYWORD_ONLY, fn.__name__
         assert param.default is inspect.Parameter.empty, fn.__name__
+
+
+@pytest.mark.parametrize("images", [None, [{"filename": "one.png", "mime": "image/png", "data": b"one"},
+                                         {"filename": "two.jpg", "mime": "image/jpeg", "data": b"two"}]])
+def test_save_message_photos_share_transaction(fake_conn, monkeypatch, images):
+    conn = fake_conn(monkeypatch, history, fetchone_results=[("c1",), (0,)])
+    history.save_message("c1", "m1", "user", "photos", images=images)
+    inserts = [p for s, p in conn.executed if "INSERT INTO assistant_message_images" in s]
+    assert inserts == [("m1", i, img["filename"], img["mime"], len(img["data"]), img["data"])
+                       for i, img in enumerate(images or [])]
+    assert "FOR UPDATE" in conn.executed[0][0]
+    assert sum("INSERT INTO assistant_messages " in s for s, _ in conn.executed) == 1
+
+
+def test_get_message_images_in_order_as_bytes(rec):
+    rec.fetchall_queue = [[{"id": 7, "ordinal": 0, "filename": "a.png", "mime_type": "image/png", "data": memoryview(b"photo")}]]
+    rows = history.get_message_images("m1")
+    assert rows[0]["data"] == b"photo" and isinstance(rows[0]["data"], bytes)
+    assert "ORDER BY ordinal, id" in rec.sql_with("assistant_message_images")
+    assert rec.params_with("assistant_message_images") == ["m1"]

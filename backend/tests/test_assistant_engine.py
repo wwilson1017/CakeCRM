@@ -87,10 +87,10 @@ class Store:
         return (text or "")[:60]
 
     def save_message(self, cid, mid, role, content, tool_calls=None, model="",
-                     context_tokens=None, context_boundary_seq=None):
+                     context_tokens=None, context_boundary_seq=None, images=None):
         self.context_tokens.append(context_tokens)
         self.boundary_stamps.append(context_boundary_seq)
-        self.saved.append({"cid": cid, "mid": mid, "role": role, "content": content, "tool_calls": tool_calls})
+        self.saved.append({"images": images, "cid": cid, "mid": mid, "role": role, "content": content, "tool_calls": tool_calls})
         self.convs.setdefault(cid, {"id": cid, "messages": []})["messages"].append(
             {"id": mid, "role": role, "content": content, "tool_calls": tool_calls, "tool_results": None})
 
@@ -442,10 +442,10 @@ async def test_tool_iteration_persist_failure_fails_closed(store, monkeypatch):
     reg = Registry(writes={"crm_create_contact"})
     prov = FakeProvider([[_complete([_tc("crm_create_contact")], stop="tool_use")]])
 
-    def _save(cid, mid, role, content, tool_calls=None, model=""):
+    def _save(cid, mid, role, content, tool_calls=None, model="", images=None):
         if tool_calls is not None:
             raise RuntimeError("db down")
-        store.save_message(cid, mid, role, content, tool_calls, model)
+        store.save_message(cid, mid, role, content, tool_calls, model, images=images)
 
     monkeypatch.setattr(history, "save_message", _save)
     events = await _run(prov, reg, [{"role": "user", "content": "add"}], tool_mode="power")
@@ -1568,3 +1568,16 @@ async def test_confirmation_wrap_up_can_use_retry(store, sleeps):
     assert reg.calls == []
     assert store.saved[-1]['content'] == 'Please approve'
     assert events[-1]['type'] == 'done'
+
+
+@pytest.mark.parametrize("with_photo", [True, False])
+async def test_uploaded_images_reach_history_and_taint(store, monkeypatch, with_photo):
+    marks = []
+    monkeypatch.setattr(history, "mark_untrusted_seen", marks.append)
+    images = [{"filename": "card.png", "mime": "image/png", "data": b"photo"}] if with_photo else None
+    content = delimiters.wrap_untrusted_image("card.png") if with_photo else "hello"
+    provider = FakeProvider([[{"type": "text", "text": "Hello"}, _complete()]])
+    events = await _run(provider, Registry(), [{"role": "user", "content": content}], images=images)
+    assert "done" in _types(events)
+    assert store.saved[0]["images"] == images
+    assert marks == ([store.saved[0]["cid"]] if with_photo else [])

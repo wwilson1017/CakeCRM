@@ -52,7 +52,14 @@ def _is_together_chat(m: dict) -> bool:
     return not any(token in low for token in _TOGETHER_NON_CHAT)
 
 
+_TOGETHER_VISION = ("vision", "llama-4", "qwen3.5", "qwen2.5-vl", "qwen3-vl", "gemma-3", "-vl-")
+
+
 class TogetherProvider(AIProvider):
+    @property
+    def supports_images(self) -> bool:
+        return any(t in self.model.lower() for t in _TOGETHER_VISION)
+
     def __init__(self, api_key: str, model: str = TOGETHER_DEFAULT_MODEL):
         super().__init__(model=model)
         self.api_key = api_key

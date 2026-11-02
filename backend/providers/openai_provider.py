@@ -13,6 +13,7 @@ import logging
 from collections.abc import AsyncGenerator
 
 from providers.base import AIProvider, rate_limit_event
+from providers.openai_compat import openai_user_content
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,16 @@ def _is_openai_chat_model(model_id: str) -> bool:
     return not any(token in low for token in _OPENAI_EXCLUDE)
 
 
+_VISION_PREFIXES = ("gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4", "chatgpt-")
+_NO_VISION = ("o1-mini", "o1-preview", "o3-mini")
+
+
 class OpenAIProvider(AIProvider):
+    @property
+    def supports_images(self) -> bool:
+        low = self.model.lower()
+        return low.startswith(_VISION_PREFIXES) and not low.startswith(_NO_VISION)
+
     @property
     def can_transcribe(self) -> bool:
         return True
@@ -128,7 +138,7 @@ class OpenAIProvider(AIProvider):
         for m in messages:
             role = m.get("role")
             if role == "user":
-                api_messages.append({"role": "user", "content": m.get("content", "")})
+                api_messages.append({"role": "user", "content": openai_user_content(m.get("content", ""))})
             elif role == "assistant":
                 msg: dict = {"role": "assistant"}
                 if m.get("content") is not None:

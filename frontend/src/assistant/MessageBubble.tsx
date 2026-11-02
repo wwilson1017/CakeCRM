@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 
-import { IconBot, IconCheck, IconChevronRight, IconVolume, IconX } from '../shared/icons';
+import { IconAttach, IconBot, IconCheck, IconChevronRight, IconVolume, IconX } from '../shared/icons';
 import {
   ACCENT, ACCENT_TEXT,
   ACCENT_INK,
@@ -171,7 +171,14 @@ export function MessageBubble({
             color: INK, fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
           }}
         >
-          {message.content}
+          {message.content && <div>{message.content}</div>}
+          {!!message.attachments?.length && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {message.attachments.map((name, i) => (
+              <span key={`${name}-${i}`} data-testid="user-attachment" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, background: BG_RAISED, border: `1px solid ${LINE}`, borderRadius: 6, padding: '2px 6px', color: INK_MUTE }}>
+                <IconAttach size={12} /> {name}
+              </span>
+            ))}
+          </div>}
         </div>
       </div>
     );

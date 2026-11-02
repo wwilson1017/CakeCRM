@@ -357,6 +357,8 @@ def test_search_order_does_not_depend_on_the_order_topics_were_read():
 
 
 @pytest.mark.parametrize("query, expected", [
+    ("take a photo of a business card", "assistant/photos"),
+    ("can Baker see pictures", "assistant/photos"),
     ("dictate a note", "assistant/voice"),
     ("live transcription", "assistant/voice"),
     ("hold to talk to Baker", "assistant/voice"),

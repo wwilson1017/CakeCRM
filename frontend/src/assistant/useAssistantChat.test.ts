@@ -16,6 +16,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useAssistantChat } from './useAssistantChat';
+import { shrinkImage } from '../shared/shrinkImage';
+vi.mock('../shared/shrinkImage', () => ({ shrinkImage: vi.fn(async (file: File) => file) }));
 import type { PageContext } from './types';
 
 type Chat = ReturnType<typeof useAssistantChat>;
@@ -57,6 +59,7 @@ const jsonBodies = () =>
     .map(([, init]) => JSON.parse(String(init.body)));
 
 beforeEach(() => {
+  vi.mocked(shrinkImage).mockReset().mockImplementation(async file => file);
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -110,6 +113,7 @@ describe('the settings page context on the wire', () => {
     expect(String(url)).toContain('/chat/upload');
     const payload = JSON.parse(String((init!.body as FormData).get('payload')));
     expect(payload.page).toEqual({ page: 'settings', section: 'workspace' });
+    expect(chat.messages.find(m => m.role === 'user')?.attachments).toEqual(['notes.txt']);
   });
 
   it('sends the section currently on screen, not the one the hook first saw', async () => {
@@ -171,4 +175,40 @@ describe('the per-turn snapshot', () => {
 
     expect('page' in jsonBodies()[1]).toBe(false);
   });
+});
+
+it('uploads the resized file while preserving the optimistic original name', async () => {
+  const original = new File(['raw'], 'card.png', { type: 'image/png' });
+  const shrunk = new File(['small'], 'card.webp', { type: 'image/webp' });
+  vi.mocked(shrinkImage).mockResolvedValue(shrunk);
+  render(null);
+  await act(async () => { chat.sendMessage('read', [original]); });
+  expect(shrinkImage).toHaveBeenCalledWith(original);
+  const [, init] = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/chat/upload'))!;
+  const sent = (init.body as FormData).get('files') as File;
+  expect(sent.name).toBe('card.webp');
+  expect(sent.type).toBe('image/webp');
+  expect(sent.size).toBe(shrunk.size);
+  expect(chat.messages.find(m => m.role === 'user')?.attachments).toEqual(['card.png']);
+});
+
+it('preserves attachment names loaded from history', () => {
+  render(null);
+  act(() => chat.loadMessages([{ id: 'u', role: 'user', content: '', attachments: ['card.png'] }], 'c1'));
+  expect(chat.messages[0].attachments).toEqual(['card.png']);
+});
+
+it.each(['clear', 'stop', 'unmount'] as const)('does not upload if %s happens during resizing', async action => {
+  let finish!: (file: File) => void;
+  vi.mocked(shrinkImage).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  render(null);
+  const photo = new File(['photo'], 'card.png', { type: 'image/png' });
+  act(() => { chat.sendMessage('read', [photo]); });
+  expect(chat.isStreaming).toBe(true);
+  act(() => {
+    if (action === 'unmount') root.render(null);
+    else chat[action]();
+  });
+  await act(async () => { finish(photo); });
+  expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/chat/upload'))).toHaveLength(0);
 });

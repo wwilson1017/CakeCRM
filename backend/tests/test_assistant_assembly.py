@@ -271,3 +271,54 @@ def test_reclose_appends_nothing_when_the_escaped_fence_is_already_closed():
         "todo_list", {"todos": [{"id": 1, "title": "short", "source": "capture_web"}]}
     )
     assert assembly._reclose_untrusted(content) == ""
+
+
+def test_photos_follow_newest_user_through_continuation_and_compaction(monkeypatch):
+    import base64
+
+    photo = delimiters.wrap_untrusted_image("card.png")
+    rows = [
+        {"id": "u0", "role": "user", "content": "older photo placeholder", "seq": 0},
+        {"id": "a0", "role": "assistant", "content": "old answer", "seq": 1},
+        {"id": "u1", "role": "user", "content": "middle", "seq": 2},
+        {"id": "a1", "role": "assistant", "content": "middle answer", "seq": 3},
+        {"id": "u2", "role": "user", "content": photo, "seq": 4},
+    ]
+    conv = {"messages": rows}
+    lookups = []
+    monkeypatch.setattr(assembly.history, "get_conversation", lambda *a, **k: conv)
+
+    def images(mid):
+        lookups.append(mid)
+        return [{"mime_type": "image/png", "data": b"photo"}] if mid == "u2" else []
+
+    monkeypatch.setattr(assembly.history, "get_message_images", images)
+    provider = _Provider()
+    provider.supports_images = True
+    expected = {"type": "image", "media_type": "image/png", "data": base64.b64encode(b"photo").decode("ascii")}
+    out = assembly.assemble_messages(provider, "c1")
+    assert isinstance(out[0]["content"], str)
+    assert out[-1]["content"] == [expected, {"type": "text", "text": photo}]
+    rows.append({"id": "a2", "role": "assistant", "content": "approve?", "seq": 5})
+    out = assembly.assemble_messages(provider, "c1")
+    assert out[-2]["content"][0] == expected
+    conv.update(compaction_summary="summary", compaction_first_kept_seq=4)
+    out = assembly.assemble_messages(provider, "c1")
+    assert out[-2]["content"] == [expected, {"type": "text", "text": "summary\n\n" + photo}]
+    rows.append({"id": "u3", "role": "user", "content": "next question", "seq": 6})
+    out = assembly.assemble_messages(provider, "c1")
+    assert all(isinstance(m["content"], str) for m in out)
+    assert lookups == ["u2", "u2", "u2", "u3"]
+    provider.supports_images = False
+    lookups.clear()
+    out = assembly.assemble_messages(provider, "c1")
+    assert all(isinstance(m["content"], str) for m in out)
+    assert not lookups
+
+
+def test_image_placeholder_truncation_recloses_fence():
+    block = delimiters.wrap_untrusted_image("card.png")
+    close = block[block.index("</untrusted_file_content"):]
+    cut = assembly._truncate_user_content(block, block.index("(photo") + 3)
+    assert 'kind="image"' in cut
+    assert cut.endswith(close)

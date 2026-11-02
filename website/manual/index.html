@@ -1539,7 +1539,11 @@ There is no undo, and a merged duplicate cannot be restored. Baker can do this t
 </tr>
 <tr>
 <td>Attach a file</td>
-<td>Adds files to your message for Baker to read.</td>
+<td>Adds files — and, when the model can see images, photos — to your message for Baker to read.</td>
+</tr>
+<tr>
+<td>Take photo</td>
+<td>On a phone, opens the camera. The browser normally shrinks the photo and drops location data before sending. Shown only when the model can see images.</td>
 </tr>
 <tr>
 <td>Read / Ask / Auto</td>
@@ -1595,6 +1599,19 @@ any reply or completed step still shows an error without adding an assistant mes
 <li>CSV, XLSX, MD, TXT, PDF or DOCX.</li>
 </ul>
 <p>Only the text is extracted; the file itself is not stored. Uploaded text is treated as untrusted, so for the rest of that conversation every change Baker proposes asks for your approval. Baker cannot attach a file to a record; you add attachments yourself.</p>
+<h2>Photos</h2>
+<p>When the active model can see images, <strong>Attach a file</strong> also accepts JPEG, PNG and WebP,
+and <strong>Take photo</strong> opens the rear camera on a phone. Photos share the 5-file limit and
+10 MB browser pre-check. At send time the browser normally shrinks a photo to about
+1600 px and drops its location data; this is best effort, and a failed resize or an
+animated image can upload the original with its metadata intact. The server's hard
+per-photo limit is <strong>5 MB and 8000 px on either side</strong>. GIF and HEIC are not supported;
+convert them to JPEG, PNG or WebP first. Reload after switching models to refresh the camera.</p>
+<p>Photo bytes stay in your database with the conversation and are deleted with it. They
+accompany requests to your configured AI provider for the attached turn, including its
+tool steps and an approval continuation. Later turns carry only a placeholder; attach
+it again if Baker needs another look. Photos are untrusted: anything written inside
+one is data, and every proposed change asks for approval for the rest of that conversation.</p>
 <h2>When nobody is watching</h2>
 <p>Baker also runs on a schedule, with nobody in the chat, for the daily digest and nudges about deals and leads that have gone quiet. Those unattended turns are much more limited, and the server enforces it:</p>
 <ul>
@@ -1645,7 +1662,7 @@ any reply or completed step still shows an error without adding an assistant mes
 <h2>What asks even in Auto</h2>
 <ul>
 <li><strong>Writing Baker's protected files</strong>, soul.md and MEMORY.md. These always ask, in every mode, and only an admin can change them. See <a href="#/baker/memory">Memory</a>.</li>
-<li><strong>A conversation that has read outside content.</strong> Once Baker has read an email or an uploaded file in a conversation, every change it proposes asks for approval for the rest of that conversation, even after that message has scrolled out of view. Text someone else wrote can never quietly steer Baker into changing your data.</li>
+<li><strong>A conversation that has read outside content.</strong> Once Baker has read an email, an uploaded file or a photo in a conversation, every change it proposes asks for approval for the rest of that conversation, even after that message has scrolled out of view. Text someone else wrote can never quietly steer Baker into changing your data.</li>
 </ul>
 <h2>Approving a change</h2>
 <p>When Baker wants to make a change that needs approval, its message carries a card naming the action and showing exactly what it will do, with <strong>Approve</strong> and <strong>Deny</strong>. Until you answer, nothing has happened.</p>

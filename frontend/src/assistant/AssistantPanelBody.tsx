@@ -7,7 +7,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { IconAttach, IconBot, IconPlus, IconSettings, IconVolume, IconVolumeOff, IconX } from '../shared/icons';
+import { IconAttach, IconBot, IconCamera, IconPlus, IconSettings, IconVolume, IconVolumeOff, IconX } from '../shared/icons';
+import { useVisionReady } from '../shared/VisionReadyContext';
 import { toast } from '../shared/toast';
 import {
   ACCENT, ACCENT_TEXT,
@@ -38,6 +39,8 @@ import { joinDraft, type DictationIntent } from '../shared/voice/dictationGestur
 // / MAX_FILES / MAX_FILE_SIZE). Keep in sync — the backend re-validates and is
 // authoritative, so a drift here only affects the pre-submit UX, never safety.
 const ALLOWED = ['csv', 'json', 'xlsx', 'md', 'txt', 'pdf', 'docx'];
+// Mirrors uploads.IMAGE_EXTENSIONS; GIF and HEIC are not supported.
+const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp'];
 const MAX_FILES = 5;
 const MAX_BYTES = 10 * 1024 * 1024;
 
@@ -62,6 +65,8 @@ export interface AssistantPanelBodyProps {
 export default function AssistantPanelBody({
   recordContext = null, pageContext = null,
 }: AssistantPanelBodyProps = {}) {
+  const visionReady = useVisionReady();
+  const allowed = visionReady ? [...ALLOWED, ...IMAGE_EXTS] : ALLOWED;
   const chat = useAssistantChat(recordContext, pageContext);
   const { conversations, load: loadConversations, openConversation: fetchConversation, remove: removeConversation } = useConversations();
   const readAloud = useReadAloud({ messages: chat.messages, isStreaming: chat.isStreaming });
@@ -73,6 +78,7 @@ export default function AssistantPanelBody({
 
   const endRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -83,13 +89,17 @@ export default function AssistantPanelBody({
     endRef.current?.scrollIntoView({ block: 'end' });
   }, [chat.messages]);
 
-  const stageFiles = (incoming: FileList | null) => {
+  const stageFiles = (incoming: FileList | File[] | null) => {
     if (!incoming) return;
     const next = [...files];
     for (const f of Array.from(incoming)) {
       const ext = f.name.includes('.') ? f.name.split('.').pop()!.toLowerCase() : '';
-      if (!ALLOWED.includes(ext)) {
-        toast.error(`${f.name}: unsupported type. Allowed: ${ALLOWED.join(', ')}.`);
+      if (IMAGE_EXTS.includes(ext) && !visionReady) {
+        toast.error(`${f.name}: this model can't see photos.`);
+        continue;
+      }
+      if (!allowed.includes(ext)) {
+        toast.error(`${f.name}: unsupported type. Allowed: ${allowed.join(', ')}.`);
         continue;
       }
       if (f.size > MAX_BYTES) {
@@ -192,7 +202,7 @@ export default function AssistantPanelBody({
         {chat.messages.length === 0 ? (
           <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: INK_MUTE, textAlign: 'center', gap: 8, padding: 20 }}>
             <IconBot size={28} />
-            <div style={{ fontSize: 14 }}>Ask me about your contacts, deals, and todos — or drop in a file.</div>
+            <div style={{ fontSize: 14 }}>Ask me about your contacts, deals, and todos — or drop in {visionReady ? 'a file or a photo.' : 'a file.'}</div>
           </div>
         ) : (
           chat.messages.map((m) => (
@@ -242,8 +252,21 @@ export default function AssistantPanelBody({
         )}
 
         <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
-          <input ref={fileRef} type="file" multiple accept={ALLOWED.map((e) => `.${e}`).join(',')} onChange={(e) => stageFiles(e.target.files)} style={{ display: 'none' }} />
+          <input ref={fileRef} type="file" multiple accept={allowed.map((e) => `.${e}`).join(',')} onChange={(e) => stageFiles(e.target.files)} style={{ display: 'none' }} />
           <button onClick={() => fileRef.current?.click()} title="Attach a file" style={iconBtn}><IconAttach size={18} /></button>
+          {visionReady && <>
+            <input ref={cameraRef} data-testid="assistant-camera-input" type="file" accept="image/*" capture="environment"
+              onChange={(e) => {
+                const photos = Array.from(e.target.files ?? []).map(file => {
+                  const ext = file.name.split('.').pop() || 'jpg';
+                  return new File([file], `photo-${Date.now()}.${ext}`, { type: file.type, lastModified: file.lastModified });
+                });
+                stageFiles(photos);
+                e.target.value = '';
+              }}
+              style={{ display: 'none' }} />
+            <button onClick={() => cameraRef.current?.click()} title="Take photo" style={iconBtn}><IconCamera size={18} /></button>
+          </>}
           <textarea
             ref={taRef}
             value={input}

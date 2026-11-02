@@ -278,3 +278,47 @@ def test_google_clean_schema_strips_unsupported_fields():
     assert "examples" not in cleaned["properties"]["x"]
     assert "additionalProperties" not in cleaned["properties"]["y"]["items"]
     assert cleaned["type"] == "object"  # supported fields preserved
+
+
+@pytest.mark.parametrize("provider, expected", [
+    (AnthropicProvider(model="claude-sonnet-4-6"), True),
+    (OpenAIProvider("k", model="gpt-5.4"), True),
+    (OpenAIProvider("k", model="o3-mini"), False),
+    (OpenAIProvider("k", model="o1-mini"), False),
+    (OpenAIProvider("k", model="o1-preview"), False),
+    (OpenAIProvider("k", model="gpt-3.5-turbo"), False),
+    (GoogleProvider(model="gemini-2.5-flash"), True),
+    (OllamaProvider(model="llava:13b"), True),
+    (OllamaProvider(model="llama3.1"), False),
+    (OllamaProvider(model="gemma3:4b"), True),
+    (OllamaProvider(model="gemma3:1b"), False),
+    (OllamaProvider(model="gemma3:270m"), False),
+    (OllamaProvider(model="gemma3:1b-it-qat"), False),
+    (TogetherProvider("k", model="Qwen/Qwen3.5-7B"), True),
+    (TogetherProvider("k", model="deepseek-ai/DeepSeek-V3-0324"), False),
+])
+def test_supports_images_matrix(provider, expected):
+    assert provider.supports_images is expected
+
+
+def test_default_provider_has_no_vision():
+    from test_voice_provider import MinimalProvider
+
+    assert MinimalProvider("unknown").supports_images is False
+
+
+def test_neutral_image_translation():
+    from providers.anthropic_provider import _api_content
+    from providers.openai_compat import build_openai_messages, openai_user_content
+
+    image = {"type": "image", "media_type": "image/png", "data": "cGhvdG8="}
+    text = {"type": "text", "text": "read this"}
+    content = [image, text]
+    translated = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,cGhvdG8="}}, text]
+    assert openai_user_content(content) == translated
+    assert openai_user_content("hello") == "hello"
+    assert build_openai_messages([{"role": "user", "content": content}], "sys")[-1]["content"] == translated
+    assert _api_content(content) == [{"type": "image", "source": {
+        "type": "base64", "media_type": "image/png", "data": "cGhvdG8="}}, text]
+    assert _api_content("hello") == "hello"
+    assert content == [image, text]

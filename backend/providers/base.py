@@ -17,6 +17,12 @@ Internal tool format (used in ToolRegistry):
         }
     }
 
+User content can be a string or a list of neutral image and text parts:
+    [{"type": "image", "media_type": "image/jpeg", "data": "<base64>"},
+     {"type": "text", "text": "..."}]
+Images are the only non-text user input the engine emits. Adapters translate them
+and must advertise supports_images=False if their model cannot carry them.
+
 SSE event types yielded by stream_turn():
     {"type": "text", "text": "chunk"}
     {"type": "tool_start", "tool": "name", "tool_use_id": "id"}
@@ -137,6 +143,11 @@ class AIProvider(ABC):
     @property
     def can_transcribe(self) -> bool:
         """Whether this provider supports speech to text; unsupported mics stay hidden."""
+        return False
+
+    @property
+    def supports_images(self) -> bool:
+        """Whether this model accepts photos; otherwise camera/image uploads hide."""
         return False
 
     async def transcribe(self, audio: bytes, mime: str, filename: str) -> str:

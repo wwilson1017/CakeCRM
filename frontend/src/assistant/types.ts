@@ -31,6 +31,7 @@ export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  attachments?: string[];
   toolCalls?: ToolCallInfo[];
   pendingConfirmations?: PendingConfirmation[]; // one per tool_use_id
   model?: string;
@@ -97,6 +98,7 @@ export interface ServerMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  attachments?: string[];
   tool_calls?: ServerToolCall[] | null;
   model?: string;
   created_at?: string;

@@ -645,6 +645,29 @@
   `test_assistant_turns_pg.py` (integration), `useAssistantChat.reattach.test.tsx`,
   `WorkingIndicator.test.tsx`.
 
+- **Photos (#345).** JPEG/PNG/WebP use the existing `/api/assistant/chat/upload`
+  route and its 5-file / 10 MB per-file cap; magic-byte validation plus header dimensions
+  enforce a hard 5 MB / 8000 px per-photo limit. GIF and HEIC have dedicated refusals.
+  `history.save_message(images=...)` writes BYTEA rows in `assistant_message_images` in
+  the same conversation-locked transaction as the user row. The message FK cascades
+  deletion; assistant history and photos both survive CRM resets. No hash or thumbnails.
+  `wrap_untrusted_image` reuses the nonce upload fence with `kind="image"`, so ingress
+  taint, compaction taint, observer skipping and fence re-closing need no second marker.
+  Assembly loads images only for the newest USER row, scanning past assistant rows on
+  approval continuations. The attached turn's tool steps and continuations retain bytes;
+  later user turns retain only placeholders and ask for re-attachment if needed.
+  Neutral image parts are translated by all five adapters; `supports_images` defaults
+  false and `vision_ready` gates the camera and accepted extensions. Model-name capability
+  heuristics can miss custom models; the server also refuses uploads for unsupported models.
+  Readiness is the mount-time setup snapshot, so switching models needs a reload.
+  Staging stays synchronous; send-time `shrinkImage` normally reduces size and drops EXIF,
+  but failures/animated images can pass through intact. A live-turn check after resizing
+  prevents sending after Stop or switching threads. Bubbles show filenames, including
+  reloaded document uploads, never thumbnails. No engine-local image list is attached to
+  context: assembly reads stored rows, covering continuations. No compaction row-token
+  estimate is added because bytes are not row content and only accompany their attached
+  turn. Telegram photos and a look-again tool are out of scope.
+
 - **Voice (#338, port of cake_os #3832/#3820/#4019/#4020 — `backend/voice/`,
   `frontend/src/shared/voice/`).** `AIProvider.can_transcribe` defaults false and
   `transcribe` defaults to unsupported. Only OpenAI implements it, with a lazy SDK
