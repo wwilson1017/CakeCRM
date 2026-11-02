@@ -9,7 +9,7 @@ admin: false
 
 Use **Attach a file** to choose a JPEG, PNG or WebP photo when the active model can see images. **Take photo** opens the rear camera on a phone. Photos share the limit of 5 files per message and the browser's 10 MB per-file pre-check.
 
-When you submit, the browser normally shrinks each photo to about 1600 px and drops its location data. This is best effort: if resizing fails, or the image is animated, the original can be uploaded with its metadata intact. The server enforces a hard limit of **5 MB and 8000 px on either side per photo**. If a photo exceeds it, shrink it and attach it again.
+When you submit, the browser normally shrinks each photo to about 1600 px and drops its location data. This is best effort: if resizing fails, or the image is animated, the original can be uploaded with its metadata intact. The server enforces a hard limit of **3.75 MB and 8000 px on either side per photo**. If a photo exceeds it, shrink it and attach it again.
 
 ## What Baker does with it
 

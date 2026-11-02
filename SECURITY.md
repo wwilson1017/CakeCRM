@@ -134,7 +134,7 @@ It returns nothing.
   `assistant_message_images` with the conversation and deleted through its message FK
   cascade. The browser normally shrinks photos and drops location metadata, but this
   is best effort: a failed resize or animated image may retain original metadata.
-  The server verifies type by magic bytes and enforces 5 MB / 8000 px per side per photo.
+  The server verifies type by magic bytes and enforces 3.75 MB / 8000 px per side per photo.
   Photos are untrusted content and tighten confirmation rules like uploaded documents.
 
 - **Live transcription (off by default, admin switch).** Live transcription shows your words

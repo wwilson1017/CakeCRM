@@ -42,7 +42,7 @@ and **Take photo** opens the rear camera on a phone. Photos share the 5-file lim
 10 MB browser pre-check. At send time the browser normally shrinks a photo to about
 1600 px and drops its location data; this is best effort, and a failed resize or an
 animated image can upload the original with its metadata intact. The server's hard
-per-photo limit is **5 MB and 8000 px on either side**. GIF and HEIC are not supported;
+per-photo limit is **3.75 MB and 8000 px on either side**. GIF and HEIC are not supported;
 convert them to JPEG, PNG or WebP first. Reload after switching models to refresh the camera.
 
 Photo bytes stay in your database with the conversation and are deleted with it. They

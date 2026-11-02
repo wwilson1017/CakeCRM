@@ -647,7 +647,7 @@
 
 - **Photos (#345).** JPEG/PNG/WebP use the existing `/api/assistant/chat/upload`
   route and its 5-file / 10 MB per-file cap; magic-byte validation plus header dimensions
-  enforce a hard 5 MB / 8000 px per-photo limit. GIF and HEIC have dedicated refusals.
+  enforce a hard 3.75 MB / 8000 px per-photo limit (Anthropic caps the base64 image at 5 MB). GIF and HEIC have dedicated refusals.
   `history.save_message(images=...)` writes BYTEA rows in `assistant_message_images` in
   the same conversation-locked transaction as the user row. The message FK cascades
   deletion; assistant history and photos both survive CRM resets. No hash or thumbnails.

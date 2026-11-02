@@ -184,7 +184,7 @@ def test_read_image_refuses_corrupt_header():
 
 def test_read_image_byte_limit(monkeypatch):
     monkeypatch.setattr(uploads, "MAX_IMAGE_BYTES", 8)
-    with pytest.raises(UploadError, match="5 MB photo limit"):
+    with pytest.raises(UploadError, match="3.75 MB photo limit"):
         uploads.read_image("card.png", _photo())
 
 

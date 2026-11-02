@@ -21,7 +21,7 @@ from assistant import delimiters
 ALLOWED_EXTENSIONS = {"csv", "json", "xlsx", "md", "txt", "pdf", "docx"}
 IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 IMAGE_MIMES = ("image/jpeg", "image/png", "image/webp")
-MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_IMAGE_BYTES = 5 * 1024 * 1024 * 3 // 4  # Anthropic caps the base64 image at 5 MB; base64 adds a third
 MAX_IMAGE_EDGE = 8000
 MAX_FILES = 5
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
@@ -51,7 +51,7 @@ def read_image(filename: str, data: bytes) -> dict:
     if mime not in IMAGE_MIMES:
         raise UploadError(f"'{filename}' is not a JPEG, PNG or WebP image.")
     if len(data) > MAX_IMAGE_BYTES:
-        raise UploadError(f"'{filename}' exceeds the 5 MB photo limit.")
+        raise UploadError(f"'{filename}' exceeds the 3.75 MB photo limit.")
     try:
         from PIL import Image
 
