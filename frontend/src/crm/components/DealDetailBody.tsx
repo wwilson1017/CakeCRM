@@ -78,6 +78,7 @@ import { ymd } from '../pipelineFilters';
 import {
   companyLabelOf, companyNameOf, companySublabelOf, contactLabelOf, contactSublabelOf,
   createCompany, createContact, recordId, searchCompanies, searchContacts,
+  saveNewContactDetails, type NewContactDetails,
 } from '../dealLinkPickers';
 import { btnDanger, btnPrimary, btnSecondary } from '../styles';
 import { usePublishActiveRecord } from '../RecordContext';
@@ -89,6 +90,7 @@ import { ScorePill } from './badges';
 import { CustomFieldsSection } from './CustomFieldsSection';
 import { ClosedOnModal } from './ClosedOnModal';
 import { LostReasonModal } from './LostReasonModal';
+import { NewContactFields } from './NewContactFields';
 import { RecordCombobox } from './RecordCombobox';
 import { NotesThread } from './NotesThread';
 import DealTemperatureIcon from './DealTemperatureIcon';
@@ -227,7 +229,12 @@ const actionButtonStyle = {
 function DealEditForm({
   form, onChange, onPickContact, onPickCompany, stageWritable, onContactBusy, onCompanyBusy,
   saving, exiting, error, onSave, onCancel,
+  onCreateContact, showContactDetails, newContactDetails, onContactDetailsChange,
 }: {
+  onCreateContact: (name: string) => Promise<CrmContact>;
+  showContactDetails: boolean;
+  newContactDetails: NewContactDetails;
+  onContactDetailsChange: (details: NewContactDetails) => void;
   form: DealFormState;
   onChange: (patch: Partial<DealFormState>) => void;
   onPickContact: (record: CrmContact | null) => void;
@@ -275,13 +282,16 @@ function DealEditForm({
         valueLabel={form.contact_label}
         emptyLabel="No contact"
         search={searchContacts}
-        create={createContact}
+        create={onCreateContact}
         getId={recordId}
         getLabel={contactLabelOf}
         getSublabel={contactSublabelOf}
         onSelect={onPickContact}
         onBusyChange={onContactBusy}
       />
+      {showContactDetails && <NewContactFields
+        {...newContactDetails} idPrefix="deal-edit-new-contact" disabled={saving} onChange={onContactDetailsChange}
+      />}
       <RecordCombobox<CrmCompany>
         label="Company"
         id="deal-company"
@@ -484,6 +494,14 @@ export function DealDetailBody({
   const [fetched, setFetched] = useState<CrmDeal | null>(() => (deal.activity !== undefined ? deal : null));
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<DealFormState>(() => toDealForm(deal));
+  const [newContactId, setNewContactId] = useState<number | null>(null);
+  const [newContactDetails, setNewContactDetails] = useState({ email: '', phone: '' });
+  const [detailsTouched, setDetailsTouched] = useState(false);
+  const showContactDetails = form.contact_id != null && form.contact_id === newContactId;
+  // Ids this edit session quick-created. The details follow the SELECTION, not the create's
+  // resolution: a superseded create still resolves, and must not re-point the fields.
+  const createdContactIds = useRef(new Set<number>());
+  const contactDetailsDirty = editing && showContactDetails && detailsTouched;
   const [baseline, setBaseline] = useState<DealFormState>(() => toDealForm(deal));
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
@@ -643,7 +661,7 @@ export function DealDetailBody({
 
   const formDirty = editing && JSON.stringify(formFields(form)) !== JSON.stringify(formFields(baseline));
   const logDirty = logActivity !== '' || logNote.trim() !== '';
-  const dirty = formDirty || logDirty;
+  const dirty = formDirty || logDirty || contactDetailsDirty;
 
   // ONE guard over EVERY dirty source, used by the shell and by this body's own exits alike.
   // Re-created when `dirty` flips (registration REPLACES, so re-registering is the contract, not
@@ -687,6 +705,11 @@ export function DealDetailBody({
   // company links are independent, so neither a company already on the deal nor one the user
   // just cleared is overwritten by a contact change.
   function pickContact(c: CrmContact | null) {
+    if (c && c.id !== newContactId && createdContactIds.current.has(c.id)) {
+      setNewContactId(c.id);
+      setNewContactDetails({ email: '', phone: '' });
+      setDetailsTouched(false);
+    }
     setForm(prev => {
       if (c === null) return { ...prev, contact_id: null, contact_label: '' };
       if (companyTouched.current) {
@@ -729,6 +752,10 @@ export function DealDetailBody({
     const snapshot = toDealForm(record);
     setForm(snapshot);
     setBaseline(snapshot);
+    setNewContactId(null);
+    createdContactIds.current.clear();
+    setNewContactDetails({ email: '', phone: '' });
+    setDetailsTouched(false);
     setFormError('');
     setEditing(true);
   }
@@ -742,10 +769,13 @@ export function DealDetailBody({
     const closedOnError = closedOnEditError(form, baseline, ymd(new Date()));
     if (closedOnError) { setFormError(closedOnError); return; }
     const patch = buildPatch(form, baseline, stageEditable);
-    if (Object.keys(patch).length === 0) { setEditing(false); return; }
     setSaving(true);
     setFormError('');
     try {
+      if (contactDetailsDirty) {
+        await saveNewContactDetails(form.contact_id!, newContactDetails);
+      }
+      if (Object.keys(patch).length === 0) { setEditing(false); return; }
       const updated = await onSaveDeal(record, patch);
       setEditing(false);
       // Fold the SERVER's row into `fetched` before the refetch. `archivedAt`/`closeStage` read
@@ -1015,6 +1045,14 @@ export function DealDetailBody({
       {editing ? (
         <DealEditForm
           form={form}
+          onCreateContact={async name => {
+            const c = await createContact(name);
+            createdContactIds.current.add(c.id);
+            return c;
+          }}
+          showContactDetails={showContactDetails}
+          newContactDetails={newContactDetails}
+          onContactDetailsChange={details => { setNewContactDetails(details); setDetailsTouched(true); }}
           onChange={patch => setForm(prev => ({ ...prev, ...patch }))}
           onPickContact={pickContact}
           onPickCompany={pickCompany}

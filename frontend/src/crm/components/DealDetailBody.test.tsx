@@ -1583,3 +1583,82 @@ describe('the temperature row', () => {
     expect(props.onSaveDeal).not.toHaveBeenCalled();
   });
 });
+
+describe('new contact details in the inline editor', () => {
+  it('writes contact details before saving the deal and resets them on reopening', async () => {
+    const defaults = api.getMockImplementation()!;
+    const order: string[] = [];
+    api.mockImplementation((p: string, i?: RequestInit) => {
+      if (p === '/api/crm/contacts' && i?.method === 'POST') {
+        return Promise.resolve({ id: 101, name: 'New Person', company_id: null });
+      }
+      if (p === '/api/crm/contacts/101' && i?.method === 'PUT') {
+        order.push('contact');
+        return Promise.resolve({});
+      }
+      return defaults(p, i);
+    });
+    const onSaveDeal = vi.fn(async (d: CrmDeal, patch: DealPatch) => {
+      order.push('deal');
+      return { ...d, ...patch };
+    });
+    render({ deal: makeDeal(), onSaveDeal });
+    await settle();
+    click(buttonByText('Edit'));
+    await openPicker('contact');
+    setField('deal-contact', 'New Person');
+    await settleSearch();
+    await clickOption(t => t.startsWith('Create '));
+    setField('deal-edit-new-contact-email', 'person@example.com');
+    setField('deal-edit-new-contact-phone', '555-0100');
+    click(buttonByText('Save'));
+    await settle();
+    expect(order).toEqual(['contact', 'deal']);
+    expect(api).toHaveBeenCalledWith('/api/crm/contacts/101', {
+      method: 'PUT', body: JSON.stringify({ email: 'person@example.com', phone: '555-0100' }),
+    });
+    expect(onSaveDeal).toHaveBeenCalledWith(expect.anything(), { contact_id: 101 });
+    click(buttonByText('Edit'));
+    await settle();
+    expect(container.querySelector('#deal-edit-new-contact-email')).toBeNull();
+  });
+});
+
+
+describe('inline contact detail failure recovery', () => {
+  it('keeps details after a failed write and guards leaving until the replacement contact is chosen', async () => {
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((p: string, i?: RequestInit) => {
+      if (p === '/api/crm/contacts' && i?.method === 'POST') {
+        return Promise.resolve({ id: 101, name: 'New Person', company_id: null });
+      }
+      if (p === '/api/crm/contacts/101' && i?.method === 'PUT') {
+        return Promise.reject(new Error('Contact unavailable'));
+      }
+      return defaults(p, i);
+    });
+    const props = render({ deal: makeDeal() });
+    await settle();
+    click(buttonByText('Edit'));
+    await openPicker('contact');
+    setField('deal-contact', 'New Person');
+    await settleSearch();
+    await clickOption(t => t.startsWith('Create '));
+    setField('deal-edit-new-contact-email', 'person@example.com');
+    click(buttonByText('Save'));
+    await settle();
+    expect(props.onSaveDeal).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Contact unavailable');
+    expect(input('deal-edit-new-contact-email').value).toBe('person@example.com');
+    confirmDialog.mockResolvedValue(false);
+    await act(async () => { await guard!('button'); });
+    expect(confirmDialog).toHaveBeenCalled();
+    await openPicker('contact');
+    await clickOption(t => t.includes('Someone Else'));
+    expect(container.querySelector('#deal-edit-new-contact-email')).toBeNull();
+    click(buttonByText('Save'));
+    await settle();
+    expect(props.onSaveDeal).toHaveBeenCalled();
+    expect(api.mock.calls.filter(([p, i]) => p === '/api/crm/contacts/101' && i?.method === 'PUT')).toHaveLength(1);
+  });
+});
