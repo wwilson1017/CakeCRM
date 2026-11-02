@@ -258,7 +258,9 @@ export default function AssistantPanelBody({
             <input ref={cameraRef} data-testid="assistant-camera-input" type="file" accept="image/*" capture="environment"
               onChange={(e) => {
                 const photos = Array.from(e.target.files ?? []).map(file => {
-                  const ext = file.name.split('.').pop() || 'jpg';
+                  // An extensionless capture ("image", "blob") takes its extension from the MIME type.
+                  const ext = file.name.includes('.') ? file.name.split('.').pop()!.toLowerCase()
+                    : ({ 'image/png': 'png', 'image/webp': 'webp' } as Record<string, string>)[file.type] ?? 'jpg';
                   return new File([file], `photo-${Date.now()}.${ext}`, { type: file.type, lastModified: file.lastModified });
                 });
                 stageFiles(photos);

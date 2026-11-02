@@ -54,6 +54,16 @@ it('offers supported photo types and stages camera files synchronously', () => {
   expect(files[0].name).toBe('photo-1234.jpg');
 });
 
+it('names an extensionless camera capture from its MIME type', () => {
+  render(true);
+  vi.spyOn(Date, 'now').mockReturnValue(1234);
+  const camera = container.querySelector<HTMLInputElement>('[data-testid="assistant-camera-input"]')!;
+  stage(camera, [new File(['a'], 'image', { type: 'image/png' }), new File(['b'], 'blob', { type: 'image/jpeg' })]);
+  expect(mocks.error).not.toHaveBeenCalled();
+  expect(container.textContent).toContain('photo-1234.png');
+  expect(container.textContent).toContain('photo-1234.jpg');
+});
+
 it('passes original staged photos to sendMessage and enforces the raw 10 MB pre-check', () => {
   render(true);
   const file = new File(['photo'], 'card.png', { type: 'image/png' });
