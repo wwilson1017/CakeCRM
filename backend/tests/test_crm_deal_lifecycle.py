@@ -130,7 +130,8 @@ def test_every_written_column_is_compared_and_cast(monkeypatch, rec, fake_conn):
     one gap is enough). A comparison left UNCAST is just as bad: assignment and comparison
     contexts disagree, so an uncast INTEGER silently bumps on a fractional no-op and an
     uncast TEXT raises outright."""
-    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None, None)])
+    # (3,) answers company_follow_merge (#334), which runs before the deal lock.
+    conn = fake_conn(monkeypatch, service, fetchone_results=[(3,), ("lead", None, None, None)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal(1, title="T", value=5, notes="n", probability=20,
                         expected_close_date="2026-09-01", currency="USD",
