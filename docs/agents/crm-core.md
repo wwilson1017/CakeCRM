@@ -1327,3 +1327,12 @@
   rule rather than the source's required reason. Confirmed previews are human writes with
   no assistant provenance, like smart import. No recent-notes thread, public phone link,
   token table, owner restriction or migration is ported.
+
+## New contact details from a deal (#329)
+
+Both DealForm and the inline DealDetailBody editor show shared NewContactFields only for
+this form session's newly created contact. Fields appear after Create, because that row
+commits the contact immediately. Touched details are PUT before the deal write; both trimmed
+values (including blanks) are sent so retries can clear a previously saved value. Untouched
+fields and replacement contacts cause no contact write. Inline details join the close guard,
+and starting a fresh edit resets them. A failed deal write can leave the details saved.

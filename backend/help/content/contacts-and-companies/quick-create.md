@@ -21,6 +21,10 @@ search-as-you-type pickers rather than dropdowns of the first few hundred record
 name, and if nothing matches, the list offers a **Create "…"** row. Choosing it creates the
 record straight away and links it.
 
+On a deal (New Deal, or editing a deal), creating a contact this way also shows optional
+**Email** and **Phone** boxes under the Contact field. What you type there is saved on the new
+contact when you save the deal.
+
 Two consequences worth knowing:
 
 - **Typing a name and pressing Save without choosing Create discards it.** The Create row is

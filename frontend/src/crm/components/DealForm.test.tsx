@@ -484,3 +484,146 @@ describe('DealForm — an auto-filled company follows its contact', () => {
     expect(dealPost()).toMatchObject({ contact_id: 4, company_id: 22 });
   });
 });
+
+// Contact details belong only to the record created in this form session.
+describe('DealForm — new contact details', () => {
+  const detailsInput = (field: string) => container.querySelector<HTMLInputElement>(`#deal-new-contact-${field}`)!;
+  const contactPuts = () => api.mock.calls.filter(([p, i]) => p.startsWith('/api/crm/contacts/') && i?.method === 'PUT');
+  async function createNew() {
+    await render();
+    await act(async () => { typeInto(titleInput(), 'New opportunity'); });
+    await openPicker('contact');
+    await typeInPicker('contact', 'New Person');
+    await clickOption(t => t.startsWith('Create '));
+  }
+  async function fillDetails() {
+    await act(async () => { typeInto(detailsInput('email'), 'person@example.com'); });
+    await act(async () => { typeInto(detailsInput('phone'), ' 555-0100 '); });
+  }
+
+  it('saves trimmed details before creating the deal with the new contact id', async () => {
+    mockApi();
+    await createNew();
+    await fillDetails();
+    await submit();
+    const put = contactPuts()[0];
+    expect(put[0]).toBe('/api/crm/contacts/11');
+    expect(JSON.parse(put[1].body)).toEqual({ email: 'person@example.com', phone: '555-0100' });
+    expect(api.mock.calls.indexOf(put)).toBeLessThan(api.mock.calls.findIndex(([p]) => p === '/api/crm/deals'));
+    expect(dealPost()).toMatchObject({ contact_id: 11 });
+  });
+
+  it('leaves untouched blank details alone', async () => {
+    mockApi();
+    await createNew();
+    await submit();
+    expect(contactPuts()).toEqual([]);
+    expect(dealPost()).toMatchObject({ contact_id: 11 });
+  });
+
+  it('shows no details and writes only the link for an existing contact', async () => {
+    mockApi([contact()]);
+    await render();
+    await act(async () => { typeInto(titleInput(), 'Existing opportunity'); });
+    await openPicker('contact');
+    await clickOption(t => t.includes('Existing Person'));
+    expect(detailsInput('email')).toBeNull();
+    expect(detailsInput('phone')).toBeNull();
+    await submit();
+    expect(contactPuts()).toEqual([]);
+    expect(dealPost()).toMatchObject({ contact_id: 1 });
+    expect(dealPost()).not.toHaveProperty('email');
+    expect(dealPost()).not.toHaveProperty('phone');
+  });
+
+  it('keeps the draft and stops the deal write when contact details fail', async () => {
+    mockApi();
+    const defaults = api.getMockImplementation()!;
+    api.mockImplementation((p: string, i?: RequestInit) => i?.method === 'PUT'
+      ? Promise.reject(new Error('Contact unavailable')) : defaults(p, i));
+    await createNew();
+    await fillDetails();
+    await submit();
+    expect(container.textContent).toContain('Contact unavailable');
+    expect(detailsInput('email').value).toBe('person@example.com');
+    expect(detailsInput('phone').value).toBe(' 555-0100 ');
+    expect(api.mock.calls.some(([p]) => p === '/api/crm/deals')).toBe(false);
+  });
+
+  it('clears a previously saved email on retry without creating another contact', async () => {
+    mockApi();
+    const defaults = api.getMockImplementation()!;
+    let fail = true;
+    api.mockImplementation((p: string, i?: RequestInit) => p === '/api/crm/deals' && fail
+      ? Promise.reject(new Error('Deal unavailable')) : defaults(p, i));
+    await createNew();
+    await fillDetails();
+    await submit();
+    expect(container.textContent).toContain('Deal unavailable');
+    await act(async () => { typeInto(detailsInput('email'), ''); });
+    fail = false;
+    await submit();
+    expect(contactPuts().map(([, i]) => JSON.parse(i.body))).toEqual([
+      { email: 'person@example.com', phone: '555-0100' },
+      { email: '', phone: '555-0100' },
+    ]);
+    expect(api.mock.calls.filter(([p, i]) => p === '/api/crm/contacts' && i?.method === 'POST')).toHaveLength(1);
+  });
+
+  it('keeps the details on the picked contact when an abandoned create resolves late', async () => {
+    mockApi();
+    const defaults = api.getMockImplementation()!;
+    let releaseFirst!: () => void;
+    let nextId = 11;
+    api.mockImplementation((p: string, i?: RequestInit) => {
+      if (p !== '/api/crm/contacts' || i?.method !== 'POST') return defaults(p, i);
+      const id = nextId++;
+      const made = contact({ id, name: JSON.parse(i.body as string).name });
+      if (id === 12) return Promise.resolve(made);
+      return new Promise(r => { releaseFirst = () => r(made); });
+    });
+    await render();
+    await act(async () => { typeInto(titleInput(), 'New opportunity'); });
+    await openPicker('contact');
+    await typeInPicker('contact', 'Slow Person');
+    await clickOption(t => t.startsWith('Create '));
+    await act(async () => {   // Escape abandons the slow create; its request still runs
+      combobox('contact').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    await openPicker('contact');
+    await typeInPicker('contact', 'Fast Person');
+    await clickOption(t => t.startsWith('Create '));
+    await act(async () => { releaseFirst(); });
+    await fillDetails();
+    await submit();
+    expect(contactPuts().map(([p]) => p)).toEqual(['/api/crm/contacts/12']);
+    expect(dealPost()).toMatchObject({ contact_id: 12 });
+  });
+
+  it('locks the details while the save is in flight', async () => {
+    mockApi();
+    const defaults = api.getMockImplementation()!;
+    let releasePut!: () => void;
+    api.mockImplementation((p: string, i?: RequestInit) => i?.method === 'PUT'
+      ? new Promise(r => { releasePut = () => r(contact({ id: 11 })); }) : defaults(p, i));
+    await createNew();
+    await fillDetails();
+    await submit();
+    expect(detailsInput('email').disabled).toBe(true);
+    expect(detailsInput('phone').disabled).toBe(true);
+    await act(async () => { releasePut(); });
+    expect(dealPost()).toMatchObject({ contact_id: 11 });
+  });
+
+  it('does not write hidden details after switching to an existing contact', async () => {
+    mockApi([contact()]);
+    await createNew();
+    await fillDetails();
+    await openPicker('contact');
+    await clickOption(t => t.includes('Existing Person'));
+    expect(detailsInput('email')).toBeNull();
+    await submit();
+    expect(contactPuts()).toEqual([]);
+    expect(dealPost()).toMatchObject({ contact_id: 1 });
+  });
+});

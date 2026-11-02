@@ -32,6 +32,8 @@ The Contact and Company boxes search as you type. Pick a match to link it.
 
 If the person or company is not in the CRM yet, type the name and choose **Create "name"…** at the bottom of the list. CakeCRM creates the record and links it in one step, so you do not have to leave the form. Searching first is worth it: it is how you avoid making a duplicate. See [Duplicates](../04-contacts-and-companies/07-duplicates.md).
 
+When you create a contact this way, optional **Email** and **Phone** boxes appear under the Contact field. What you type there is saved on the new contact when you save the deal, so you do not need to open the contact afterwards. The same works when you edit a deal.
+
 A deal linked to both a contact and a company scores higher than one linked to neither, and Reports can only show it under a company it is linked to.
 
 ## After you create it
