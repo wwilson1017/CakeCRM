@@ -212,3 +212,29 @@ it('appends reviewed dictation without posting a note', () => {
   expect(voice.props!.tidy).toBe(true);
   expect(onSubmit).not.toHaveBeenCalled();
 });
+
+describe('NoteComposer — camera', () => {
+  it('opens the rear camera input and stages a renamed capture', () => {
+    render(async () => {});
+    const input = container.querySelector<HTMLInputElement>('[data-testid="composer-camera-input"]')!;
+    const click = vi.spyOn(input, 'click').mockImplementation(() => {});
+    const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Take photo')!;
+    act(() => button.click());
+    expect(click).toHaveBeenCalledOnce();
+    expect(input.accept).toBe('image/*');
+    expect(input.getAttribute('capture')).toBe('environment');
+    Object.defineProperty(input, 'files', { value: [new File(['photo'], 'image.jpg', { type: 'image/jpeg' })] });
+    act(() => input.dispatchEvent(new Event('change', { bubbles: true })));
+    expect(chips()).toEqual([expect.stringMatching(/^photo-\d+\.jpg$/)]);
+    expect(input.value).toBe('');
+  });
+
+  it('disables Take photo with Attach when disabled or full', () => {
+    act(() => root.render(<NoteComposer disabled onSubmit={async () => {}} />));
+    const buttons = () => Array.from(container.querySelectorAll('button')).filter(b => ['Attach', 'Take photo'].includes(b.textContent!));
+    expect(buttons().every(b => b.disabled)).toBe(true);
+    render(async () => {});
+    drop(Array.from({ length: 10 }, (_, i) => png(`${i}.png`)));
+    expect(buttons().every(b => b.disabled)).toBe(true);
+  });
+});

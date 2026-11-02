@@ -60,3 +60,13 @@ Deleting a contact or a company is permanent — there is no recycle bin. Deals 
 at all: archiving is how one is removed, and it is recoverable (`pipeline/archived-deals`). A
 todo is never deleted: Baker drops it, and it stays recoverable. Deleting a contact keeps its
 todos, unlinked, and drops the open ones.
+
+## Baker looks a deal up before changing it
+
+Baker must find the deal in this conversation before changing it, and check that its
+title matches the deal you named. Looking it up and changing it in the same step does
+not count; Baker reads the result first, then makes the change. This also applies when
+you approve a change. After a CRM reset, Baker must look it up again.
+
+If the deal is lost or archived, the change can still go through, but Baker receives a
+warning to tell you which deal it changed and check that it is the one you meant.

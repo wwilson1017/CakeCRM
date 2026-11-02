@@ -199,6 +199,14 @@ class _StubRegistry:
     """Stands in for ToolRegistry but routes to the REAL executors, so an approved write
     actually reaches Postgres — the point of putting this test in the integration file."""
 
+    conversation_id = None
+
+    def next_tool_batch(self):
+        pass
+
+    def deal_write_refusal(self, name, args):
+        return None
+
     def is_write(self, tool):
         return True
 

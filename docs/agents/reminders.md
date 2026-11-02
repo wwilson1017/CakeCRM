@@ -22,9 +22,9 @@
   each id is an ACTIVE user on every write; delivery re-checks and skips a deactivated one.
   Empty people means the owner.
 
-- **Status: `upcoming → fired` or `upcoming → voided`.** Nothing is deleted. A void needs a
-  reason (DB CHECK `reminders_voided_needs_reason`). Only an upcoming row can be edited or
-  voided. Any row can be copied with *Remind again* (a new one-time row with the same note
+- **Status: `upcoming ↔ paused`, `upcoming → fired`, or either open state → `voided`.** Nothing is deleted. A void needs a
+  reason (DB CHECK `reminders_voided_needs_reason`). Upcoming and paused rows can be edited or
+  voided; editing keeps the status. Any row can be copied with *Remind again* (a new one-time row with the same note
   and its still-active people).
 
 - **Firing is claim-before-send, an AT-MOST-ONCE delivery attempt** (cake_os #3710). The
@@ -42,7 +42,7 @@
   series found late fires once and resumes at the next future time instead of catching up.
   DST keeps the wall-clock time. `uq_reminders_series_due` is the row-level backstop
   against a double spawn; the claim already prevents one. A series has exactly one
-  upcoming row, so voiding it ends the series with no extra machinery.
+  open (upcoming or paused) row, so voiding it ends the series with no extra machinery.
 
 - **When.** A date-only reminder fires at 09:00 install-local (`recurrence.DEFAULT_FIRE_TIME`,
   a marked simplification; a per-install setting is the upgrade path). A date before today
@@ -51,12 +51,12 @@
   patch touches the date or time, so a note edit on an overdue-but-unfired row works (the
   page sends only changed fields for the same reason).
 
-- **Access.** `owner_id` is not access control: any member may read, edit or void any
+- **Access.** `owner_id` is not access control: any member may read, edit, pause, resume or void any
   reminder, and no route is admin-only. *Mine* (page facet, `scope=mine`, the tools'
   default, the Today panel's owner scope) = I set it or I am one of its people.
 
-- **Baker tools.** `reminder_create`, `reminder_update`, `reminder_void` are writes and NONE
-  is routine (rule 2: they notify someone later), pinned by
+- **Baker tools.** `reminder_create`, `reminder_update`, `reminder_void`, `reminder_pause`
+  and `reminder_resume` are writes and NONE is routine (rule 2: they change future notifications), pinned by
   `test_confirm_tier.test_reminder_tools_are_never_routine`. `reminder_list` is a read, so
   it is in the background allowlist; its payload restates that reminder text is data. The
   owner and author are bound server-side; the model names people as 'me', an email or an
@@ -72,3 +72,15 @@
   `test_integration_reminders_pg.py` (two concurrent ticks deliver once, anchor spawn,
   late-skip, CHECKs, the scheduler seam); frontend `remindersCollection.test.ts`,
   `RemindersPage.test.tsx`, plus reminder cases in the Today panel tests.
+
+- **Landed #336 (pause/resume)** from cake_os `079c6510e` (#4492, reminders only).
+  The migration widens the status CHECK to include `paused`; `updated_at` records transitions.
+  Pause is a guarded update from upcoming. Resume locks the paused row (`FOR UPDATE`) and
+  returns it to upcoming: an overdue repeat advances from its anchor to the first occurrence
+  strictly after now, while an overdue one-time reminder keeps its due instant and is eligible
+  for the next tick. The existing upcoming-only tick skips paused rows and spawns nothing.
+  The page and Baker use the same service functions; paused rows remain editable and voidable.
+  Update already existed in #283. Pause silences other people's notifications and resume
+  re-arms them, so both keep confirmation, like update; none is background-callable.
+  The help topic documents the flow, and so does the manual's first reminders page,
+  `docs/manual/pages/05-todos/12-reminders.md` (prose only, no screenshots yet).

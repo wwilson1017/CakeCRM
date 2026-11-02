@@ -195,6 +195,7 @@ async def _run_turn(provider, registry, system_prompt, user_message: str,
 
         results: list[dict] = []
         terminated = False
+        registry.next_tool_batch()
         for tc in tool_calls:
             name = tc.get("name")
             tool_use_id = tc.get("id")

@@ -11,7 +11,7 @@ Hold the mic beside Send to speak, then let go to send your words to Baker along
 
 ## Dictating a chatter note
 
-Use the mic beside Attach on a contact, company or deal. Speak and let go: the text lands in the note box, with a best-effort tidy of ums, repetitions and false starts. Nothing is saved until you press Post. The tidy is asked to keep names, numbers, dates, times and the original language. A conservative word check falls back to the raw transcript if it detects a dropped name or number. It cannot guarantee the meaning is unchanged: always review the text before saving.
+Use the mic after Attach and Take photo on a contact, company or deal. Speak and let go: the text lands in the note box, with a best-effort tidy of ums, repetitions and false starts. Nothing is saved until you press Post. The tidy is asked to keep names, numbers, dates, times and the original language. A conservative word check falls back to the raw transcript if it detects a dropped name or number. It cannot guarantee the meaning is unchanged: always review the text before saving.
 
 ## Hearing replies
 
