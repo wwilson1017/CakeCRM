@@ -30,7 +30,7 @@ Go to **Settings**, **Personal**, **Link my Telegram**. If no bot is connected y
 
 ## Chatting with Baker
 
-Each linked chat is a full conversation with Baker. It sees the same CRM and tools as the drawer in the app, and anything it changes is recorded as you. Telegram chats run in Ask mode: when Baker wants to make a change that needs approval, the message arrives with **Approve** and **Deny** buttons, and only your account can press them. See [Approvals](../07-baker/03-approvals.md).
+Each linked chat is a full conversation with Baker. It sees the same CRM and tools as the drawer in the app, and anything it changes is recorded as you. Telegram chats run in Ask mode: when Baker wants to make a change that needs approval, the message arrives with **Approve** and **Deny** buttons, and only your account can press them. A button answers that one action; replying **yes** approves every pending change. Any other message cancels the pending changes. See [Approvals](../07-baker/03-approvals.md).
 
 When Baker mentions a deal it looked at, the reply links to that deal on the pipeline board.
 

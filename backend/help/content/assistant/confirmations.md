@@ -24,7 +24,9 @@ with **Approve** and **Deny**. Until you answer, the result Baker sees says the 
 pending your approval — which means nothing has happened yet, not that anything failed.
 
 In Telegram the same thing arrives as two inline buttons. Only the linked account can press
-them, and Baker waits until every pending change in a batch is answered before carrying on.
+them. A button answers that one action; replying with a plain **yes** (or "ok", "go ahead")
+approves every pending change. Any other message cancels the pending changes.
+Baker waits until every pending change in a batch is answered before carrying on.
 
 Approval is decided on the server: it reloads the tool and its arguments from its own record
 rather than trusting what comes back from the browser, marks the call as running before it
