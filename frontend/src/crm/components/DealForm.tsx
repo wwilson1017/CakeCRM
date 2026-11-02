@@ -41,6 +41,9 @@ export function DealForm({ contactId, onClose, onSaved }: Props) {
   const [newContactDetails, setNewContactDetails] = useState({ email: '', phone: '' });
   const [detailsTouched, setDetailsTouched] = useState(false);
   const showContactDetails = selectedContact != null && selectedContact === newContactId;
+  // Ids this form quick-created. The details follow the SELECTION, not the create's resolution:
+  // a superseded create still resolves, and must not re-point the fields at a contact nobody picked.
+  const createdContactIds = useRef(new Set<number>());
   const [selectedCompany, setSelectedCompany] = useState<number | null>(null);
   // The linked records' display names. Held here rather than looked up from a fetched
   // list, which is what ends the capped-page hazard the two <select>s used to carry: an
@@ -119,6 +122,11 @@ export function DealForm({ contactId, onClose, onSaved }: Props) {
   // where an out-of-page contact silently skipped the auto-fill.
   function pickContact(c: CrmContact | null) {
     contactTouched.current = true;
+    if (c && c.id !== newContactId && createdContactIds.current.has(c.id)) {
+      setNewContactId(c.id);
+      setNewContactDetails({ email: '', phone: '' });
+      setDetailsTouched(false);
+    }
     setSelectedContact(c?.id ?? null);
     setContactLabel(c?.name || '');
     // An auto-derived company FOLLOWS the contact it was derived from — including to
@@ -175,9 +183,7 @@ export function DealForm({ contactId, onClose, onSaved }: Props) {
             search={searchContacts}
             create={async name => {
               const c = await createContact(name);
-              setNewContactId(c.id);
-              setNewContactDetails({ email: '', phone: '' });
-              setDetailsTouched(false);
+              createdContactIds.current.add(c.id);
               return c;
             }}
             getId={recordId}

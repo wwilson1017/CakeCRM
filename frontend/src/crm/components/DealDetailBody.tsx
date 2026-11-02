@@ -498,6 +498,9 @@ export function DealDetailBody({
   const [newContactDetails, setNewContactDetails] = useState({ email: '', phone: '' });
   const [detailsTouched, setDetailsTouched] = useState(false);
   const showContactDetails = form.contact_id != null && form.contact_id === newContactId;
+  // Ids this edit session quick-created. The details follow the SELECTION, not the create's
+  // resolution: a superseded create still resolves, and must not re-point the fields.
+  const createdContactIds = useRef(new Set<number>());
   const contactDetailsDirty = editing && showContactDetails && detailsTouched;
   const [baseline, setBaseline] = useState<DealFormState>(() => toDealForm(deal));
   const [saving, setSaving] = useState(false);
@@ -702,6 +705,11 @@ export function DealDetailBody({
   // company links are independent, so neither a company already on the deal nor one the user
   // just cleared is overwritten by a contact change.
   function pickContact(c: CrmContact | null) {
+    if (c && c.id !== newContactId && createdContactIds.current.has(c.id)) {
+      setNewContactId(c.id);
+      setNewContactDetails({ email: '', phone: '' });
+      setDetailsTouched(false);
+    }
     setForm(prev => {
       if (c === null) return { ...prev, contact_id: null, contact_label: '' };
       if (companyTouched.current) {
@@ -745,6 +753,7 @@ export function DealDetailBody({
     setForm(snapshot);
     setBaseline(snapshot);
     setNewContactId(null);
+    createdContactIds.current.clear();
     setNewContactDetails({ email: '', phone: '' });
     setDetailsTouched(false);
     setFormError('');
@@ -1038,9 +1047,7 @@ export function DealDetailBody({
           form={form}
           onCreateContact={async name => {
             const c = await createContact(name);
-            setNewContactId(c.id);
-            setNewContactDetails({ email: '', phone: '' });
-            setDetailsTouched(false);
+            createdContactIds.current.add(c.id);
             return c;
           }}
           showContactDetails={showContactDetails}

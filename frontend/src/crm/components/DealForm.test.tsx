@@ -570,6 +570,36 @@ describe('DealForm — new contact details', () => {
     expect(api.mock.calls.filter(([p, i]) => p === '/api/crm/contacts' && i?.method === 'POST')).toHaveLength(1);
   });
 
+  it('keeps the details on the picked contact when an abandoned create resolves late', async () => {
+    mockApi();
+    const defaults = api.getMockImplementation()!;
+    let releaseFirst!: () => void;
+    let nextId = 11;
+    api.mockImplementation((p: string, i?: RequestInit) => {
+      if (p !== '/api/crm/contacts' || i?.method !== 'POST') return defaults(p, i);
+      const id = nextId++;
+      const made = contact({ id, name: JSON.parse(i.body as string).name });
+      if (id === 12) return Promise.resolve(made);
+      return new Promise(r => { releaseFirst = () => r(made); });
+    });
+    await render();
+    await act(async () => { typeInto(titleInput(), 'New opportunity'); });
+    await openPicker('contact');
+    await typeInPicker('contact', 'Slow Person');
+    await clickOption(t => t.startsWith('Create '));
+    await act(async () => {   // Escape abandons the slow create; its request still runs
+      combobox('contact').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    });
+    await openPicker('contact');
+    await typeInPicker('contact', 'Fast Person');
+    await clickOption(t => t.startsWith('Create '));
+    await act(async () => { releaseFirst(); });
+    await fillDetails();
+    await submit();
+    expect(contactPuts().map(([p]) => p)).toEqual(['/api/crm/contacts/12']);
+    expect(dealPost()).toMatchObject({ contact_id: 12 });
+  });
+
   it('does not write hidden details after switching to an existing contact', async () => {
     mockApi([contact()]);
     await createNew();
