@@ -12,7 +12,7 @@ bounds on every model-supplied number, and never counting an archived or closed 
 
 import pytest
 
-from crm import analytics_service as az, last_contact, scoring_service
+from crm import analytics_service as az, last_contact
 from tests.test_crm_service import Recorder
 
 
@@ -120,7 +120,7 @@ def test_contact_staleness_ignores_provenance_housekeeping_notes(rec):
     sql = rec.sql_containing("FROM contacts ct")
     # The shared housekeeping family (#239: archive/restore notes too), rendered — so
     # no pattern param leads stale_days any more.
-    assert scoring_service.not_housekeeping_sql("ch.message") in sql
+    assert last_contact.live_note_sql("ch") in sql
     assert " ".join(last_contact.last_contact_sql("contact", "ct.id").split()) in sql
     assert rec.params_for("FROM contacts ct")[0] == az.DEFAULT_CONTACT_STALE_DAYS
 

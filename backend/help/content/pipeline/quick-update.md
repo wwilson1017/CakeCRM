@@ -25,6 +25,7 @@ linked to the deal and its contact, in your Next actions.
 
 **Mark Won** asks which day the deal closed: today or earlier, never a future day.
 **Mark Lost** asks for an optional reason. A supplied reason is also added to the deal's notes.
+That reason note is a record of the close, not a customer touch.
 Both buttons include any note, value and follow-up you have filled in; the close sets the stage.
 
 ## Or just tell Baker

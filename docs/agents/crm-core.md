@@ -255,14 +255,11 @@
   server-side (`_identity_executors`, the #190 rule) into `crm_archive_deal`,
   `crm_merge_deals`, `crm_update_contact` and `crm_update_company`; REST passes
   `user["id"]`. **The audit notes must never count as touches**, so
-  `scoring_service.HOUSEKEEPING_NOTE_LIKE` became a prefix FAMILY
-  (`HOUSEKEEPING_NOTE_PREFIXES`: provenance, archive, restore) rendered by
-  `not_housekeeping_sql()` as `%`-free `starts_with` literals — which is what lets it sit
-  inside the param-less `LAST_TOUCH_SQL`. That was a behaviour change on purpose: before
-  #239 `LAST_TOUCH_SQL` excluded no housekeeping note at all, so a provenance confirmation
-  on a DEAL reset its staleness clock (the deal-side twin of the contact bug #77 fixed).
-  Stale deals, the Today panel, the nudges and Weekly Touches now agree with the contact
-  side. A new housekeeping writer must build its text from those constants.
+  `crm_chatter.system_note` marks them explicitly (#352), read through
+  `last_contact.live_note_sql()`. Before #239 `LAST_TOUCH_SQL` excluded no housekeeping
+  note at all, so a provenance confirmation on a DEAL reset its staleness clock (the
+  deal-side twin of the contact bug #77 fixed). Stale deals, the Today panel, nudges,
+  Weekly Touches and the contact side now share the system-note exclusion.
   **Automatic Last contact + Weekly Touches aligned — landed #333.**
   `backend/crm/last_contact.py` is the shared leaf for four readers: the Contacts
   list/search/detail join, contact staleness, both pipeline query twins, and Weekly
@@ -290,6 +287,29 @@
   migration or cutover: the v0.1 history change is accepted and old windows are re-read
   under the new contact rule. `today-panel.md` needs no edit because its staleness clock
   is deliberately unchanged.
+  **System notes carry a marker — landed #352.** `crm_chatter.system_note BOOLEAN NOT
+  NULL DEFAULT false` replaces text classification. The one leaf,
+  `last_contact.live_note_sql(alias)`, is `alias.archived = 0 AND NOT alias.system_note`.
+  People and Baker writing notes through REST / `crm_add_note` retain the false default.
+  Archive/restore, closed-on (single and bulk), lost reasons (`mark_deal_lost` and quick
+  update), merge announcements and provenance confirmations set true; deal/company merge
+  copies inherit their source's flag. A new system writer sets `system_note = true`;
+  never add a text prefix to a reader.
+  Every note reader switched: Contacts list/detail/search and staleness, both pipeline
+  twins, Weekly Touches, `LAST_TOUCH_SQL` (including Today, health and analytics), scoring
+  engagement and per-rep records touched. Excluding lost-reason and merge notes everywhere
+  is a deliberate behaviour change. `LAST_TOUCH_SQL` retains `d.updated_at`: marking lost
+  still moves the stale clock through the deal edit, only the NOTE's contribution is
+  excluded. Scoring's activity reads and AI `touch_count_service` evidence are unchanged.
+  `HOUSEKEEPING_NOTE_PREFIXES` / `not_housekeeping_sql` are gone; only writer text constants
+  remain. The migration strips the whole leading run
+  `^(\[Merged from (deal|company) #[0-9]+\] )+` before matching historical prefixes for
+  provenance, archive, restore, closed-on, lost reason and deal/company merge announcements.
+  It is idempotent, including nested copies; a historical human note starting with one of
+  those exact prefixes remains an accepted backfill ambiguity. New real notes with those
+  words count normally. The per-rep bound `NOT LIKE '[Merged from deal #%'` remains to
+  avoid double-credit for copies of REAL notes; extending it to company copies is out of
+  scope. No new index, frontend schema version or collection-storage version is needed.
   **Closed on (#279, port of cake_os #3642).** `deals.closed_on` is a nullable `DATE`: the
   day a Won deal actually closed, distinct from `expected_close_date` (the forecast, now
   labelled "Forecasted close date" everywhere; column, API field and the `closeDate` facet key

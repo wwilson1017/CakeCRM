@@ -185,9 +185,11 @@ def test_search_contacts_ilike_and_tag_boundary(rec):
     # name/email/company/co.name/notes + tag clauses (issue #35 added the join term)
     assert sql.count("ILIKE") >= 5
     # No case-sensitive LIKE among the SEARCH terms. The #77 last-contact join excludes
-    # housekeeping notes with a rendered `starts_with` predicate (#239), not a LIKE.
+    # system notes through their marker, not their text (#352).
     assert "LIKE %s" not in sql.replace("ILIKE %s", "")
-    assert scoring_service.not_housekeeping_sql("ch.message") in sql
+    assert last_contact.live_note_sql("ch") in sql
+    assert "starts_with" not in sql
+
     assert "ct.status = %s" in sql
     assert "LEFT JOIN companies co ON ct.company_id = co.id" in sql
     assert "co.name ILIKE %s" in sql  # linked contacts findable by company name
@@ -1238,9 +1240,10 @@ def test_contact_list_search_and_detail_all_derive_last_contact_at(rec):
         assert "FROM activity_log a WHERE a.contact_id = ct.id" in sql
         assert "ch.entity_type = 'contact'" in sql
         assert "ch.archived = 0" in sql
-        # The housekeeping family (#239) — provenance, archive and restore notes — is a
-        # rendered predicate, so no pattern param rides along any more.
-        assert scoring_service.not_housekeeping_sql("ch.message") in sql
+        # Every system note uses the shared marker predicate, with no pattern param.
+        assert last_contact.live_note_sql("ch") in sql
+        assert "starts_with" not in sql
+
         assert "NOT LIKE" not in sql
 
 
@@ -1325,7 +1328,8 @@ def test_archiving_needs_a_reason_and_writes_the_note_with_the_update(
     update(1, status="archived", archive_reason=" went dark ", actor_id=5)
     stmts = [s for s, _ in conn.executed]
     assert stmts[0] == f"SELECT status FROM {table} WHERE id = %s FOR UPDATE"
-    note = next(p for s, p in conn.executed if "INSERT INTO crm_chatter" in s)
+    note_sql, note = next((s, p) for s, p in conn.executed if "INSERT INTO crm_chatter" in s)
+    assert "system_note" in note_sql and note_sql.endswith("true)")
     assert note[:3] == (entity, 1, "Archived — went dark") and note[4] == 5
     assert conn.entries == 1 and len(set(conn.executed_by)) == 1
 
@@ -1345,6 +1349,9 @@ def test_only_a_move_across_the_archived_line_leaves_a_note(
     update(1, status=new, actor_id=5)
     notes = [p[2] for s, p in conn.executed if "INSERT INTO crm_chatter" in s]
     assert notes == ([note] if note else [])
+    for sql, _ in conn.executed:
+        if "INSERT INTO crm_chatter" in sql:
+            assert "system_note" in sql and sql.endswith("true)")
 
 
 def test_a_refused_contact_archive_auto_creates_no_company(monkeypatch, rec, fake_conn):
@@ -1370,26 +1377,9 @@ def test_a_record_cannot_be_created_already_archived(rec, create):
     assert rec.calls == []
 
 
-# ── The housekeeping family (#239) ──────────────────────────────────────────
-
-def test_every_housekeeping_writer_matches_the_family_and_renders_without_a_percent():
-    """The exclusion must mirror each writer's text, and must carry no `%`: LAST_TOUCH_SQL
-    is interpolated into statements psycopg2 is handed parameters for."""
-    written = [
-        "Confirmed AI-populated value for 'probability'.",  # provenance_service.confirm
-        scoring_service.ARCHIVE_NOTE_PREFIX + "dupe",
-        scoring_service.RESTORE_NOTE,
-        service._closed_on_note(None, "2026-10-01"),  # #279's Closed on set/clear/edit
-    ]
-    assert all(any(w.startswith(p) for p in scoring_service.HOUSEKEEPING_NOTE_PREFIXES)
-               for w in written)
-    rendered = scoring_service.not_housekeeping_sql("ch.message")
-    assert rendered.count("NOT starts_with(ch.message, '") == 4 and "%" not in rendered
-
-
 def test_last_touch_excludes_housekeeping_notes_so_archiving_moves_no_clock():
     """Staleness and customer contact share the housekeeping exclusion."""
-    predicate = scoring_service.not_housekeeping_sql("ch.message")
+    predicate = last_contact.live_note_sql("ch")
     assert predicate in service.LAST_TOUCH_SQL
     assert " ".join(last_contact.last_contact_sql("deal", "d.id").split()) in " ".join(
         service.TOUCH_AT_SQL.split()

@@ -61,6 +61,7 @@ pick the company to keep, review the preview, say why, then confirm.
   from the duplicate. The survivor's own populated values win. Different company notes
   are appended with the source name.
 - The duplicate is **archived, never deleted**, with who merged it and why in its notes.
+  The automatic merge notes do not count as contact.
   Its spelling continues to resolve to the survivor on future imports and company links.
 - There is **no undo**. A merged duplicate cannot be restored; open its successor instead.
   A manually archived duplicate can be absorbed, but the survivor must be active.

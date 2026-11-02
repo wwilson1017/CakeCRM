@@ -1,16 +1,15 @@
 """One definition of customer contact for deals and contacts (#333).
 
-A contact is a logged call/email/meeting/note or a live, non-housekeeping chatter
-note, dated by created_at. The newest wins. ``note`` is an activity kind because
-the deal sheet's Note action logs an activity row; ``follow_up`` is not contact.
+A contact is a logged call/email/meeting/note or a live chatter note not written
+by the system (``system_note``), dated by created_at. The newest wins. ``note`` is
+an activity kind because the deal sheet's Note action logs an activity row;
+``follow_up`` is not contact.
 Unlike upstream, there is no separate matched outbound-mail source here.
 
 The SQL arguments (including entity_id and before) are trusted outer-query
 expressions, never user input. Rendered fragments carry no percent characters,
 so they can be embedded in parameterized statements without extra bindings.
 """
-
-from crm.scoring_service import not_housekeeping_sql
 
 CONTACT_ACTIVITY_KINDS = ("call", "email", "meeting", "note")
 _ENTITY_FK = {"deal": "deal_id", "contact": "contact_id"}
@@ -22,7 +21,7 @@ def contact_activity_sql(column: str) -> str:
 
 
 def live_note_sql(alias: str) -> str:
-    return f"{alias}.archived = 0 AND {not_housekeeping_sql(f'{alias}.message')}"
+    return f"{alias}.archived = 0 AND NOT {alias}.system_note"
 
 
 def last_contact_sql(entity: str, entity_id: str, *, before: str | None = None) -> str:

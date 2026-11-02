@@ -2,7 +2,7 @@
 
 import pytest
 
-from crm import last_contact, scoring_service
+from crm import last_contact
 
 
 def test_contact_activity_kinds_are_the_customer_contact_allowlist():
@@ -15,10 +15,10 @@ def test_contact_activity_kinds_are_the_customer_contact_allowlist():
         assert f"'{kind}'" in predicate
 
 
-def test_live_notes_exclude_archived_and_housekeeping():
+def test_live_notes_exclude_archived_and_system_notes():
     predicate = last_contact.live_note_sql("ch")
-    assert "ch.archived = 0" in predicate
-    assert scoring_service.not_housekeeping_sql("ch.message") in predicate
+    assert predicate == "ch.archived = 0 AND NOT ch.system_note"
+    assert "starts_with" not in predicate and "message" not in predicate
 
 
 @pytest.mark.parametrize("entity,entity_id", [("deal", "d.id"), ("contact", "ct.id")])

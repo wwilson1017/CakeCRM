@@ -33,7 +33,7 @@ A bar under the tiles splits won from lost. With nothing closed yet it reads "No
 
 ## Weekly touches
 
-Once an AI touch estimate has been computed, the **Weekly touches** card shows each person's deals whose latest customer contact — a note, or a logged call, email or meeting — falls in this window while open, up to the move to Won and never after. Edits, stage moves and creating a deal do not count. Each deal counts once; a won deal uses its last contact at or before its latest recorded win. With no provider the card is not shown.
+Once an AI touch estimate has been computed, the **Weekly touches** card shows each person's deals whose latest customer contact — a note written by a person or Baker, or a logged call, email or meeting — falls in this window while open, up to the move to Won and never after. Automatic notes, edits, stage moves and creating a deal do not count. Each deal counts once; a won deal uses its last contact at or before its latest recorded win. With no provider the card is not shown.
 
 ## Closed sales
 

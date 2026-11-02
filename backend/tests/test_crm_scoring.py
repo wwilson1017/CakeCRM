@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from crm import scoring_service as ss
+from crm import last_contact, scoring_service as ss
 
 NOW = datetime(2026, 7, 26, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -389,3 +389,23 @@ def test_refresh_excludes_scored_terminal_deals(monkeypatch):
     assert "NOT (stage IN ('won', 'lost') AND lead_score IS NOT NULL)" in deals_q
     contacts_q = next(s for s in seen if "FROM contacts" in s)
     assert "stage IN" not in contacts_q  # terminal exclusion is deals-only
+
+
+@pytest.mark.parametrize("entity", ["deal", "contact"])
+def test_scoring_reads_the_shared_system_note_predicate(monkeypatch, entity):
+    calls = []
+
+    def fetchone(sql, params):
+        calls.append(sql)
+        if "crm_chatter" in sql or "activity_log" in sql:
+            return {"cnt": 1, "newest": _ago(1)}
+        return {"stage": "qualified", "status": "active", "created_at": _ago(5)}
+
+    monkeypatch.setattr(ss, "pg_fetchone", fetchone)
+    monkeypatch.setattr(ss, "pg_fetchall", lambda *a: [])
+    result = getattr(ss, f"score_{entity}")(1, now=NOW)
+    sql = next(sql for sql in calls if "crm_chatter" in sql)
+    assert last_contact.live_note_sql("ch") in sql
+    assert "message" not in sql and "starts_with" not in sql
+    factor = "engagement" if entity == "deal" else "interactions"
+    assert result["factors"][factor]["value"] == 2

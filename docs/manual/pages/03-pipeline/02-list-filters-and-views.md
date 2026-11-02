@@ -36,7 +36,7 @@ Press **Filters** to open the filter panel. The button shows how many filters ar
 | Last contact range | A from and to date |
 | Archived | Include archived, Archived only |
 
-Last contact is the deal's newest note or logged call, email or meeting. Edits and stage moves do not count.
+Last contact is the deal's newest note written by a person or Baker, or logged call, email or meeting; automatic notes do not count. Edits and stage moves do not count.
 
 Filters, search and sort are remembered for this browser tab.
 

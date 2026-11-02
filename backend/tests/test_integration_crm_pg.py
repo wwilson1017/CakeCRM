@@ -1189,7 +1189,7 @@ def test_get_pipeline_last_contact_blends_activity_and_chatter(pg_db):
     assert last_ymd() == "2026-04-15"
     pg_execute("INSERT INTO activity_log (activity, deal_id, created_at) VALUES (%s, %s, %s)",
                ("follow_up", did, "2031-01-01T00:00:00+00:00"))
-    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES (%s, %s, %s, %s)",
+    pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, system_note) VALUES (%s, %s, %s, %s, true)",
                ("deal", did, scoring_service.RESTORE_NOTE, "2031-01-01T00:00:00+00:00"))
     assert last_ymd() == "2026-04-15"
     assert service.update_deal(did, value=2000) is not None
@@ -1380,8 +1380,12 @@ def test_provenance_confirm_notes_excluded_from_engagement(pg_db):
     from crm import chatter_service, scoring_service, service
     deal = service.create_deal("D", stage="qualified", value=20000)
     for _ in range(5):
-        pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message) VALUES ('deal', %s, %s)",
+        pg_execute("INSERT INTO crm_chatter (entity_type, entity_id, message, system_note) VALUES ('deal', %s, %s, true)",
                    (deal["id"], "Confirmed AI-populated value for 'probability'."))
+    assert scoring_service.score_deal(deal["id"])["factors"]["engagement"]["value"] == 0
+    service.mark_deal_lost(deal["id"], lost_reason="price")
+    # Terminal scores have no engagement factor; reopen to inspect the note's contribution.
+    service.update_deal_stage(deal["id"], "qualified")
     assert scoring_service.score_deal(deal["id"])["factors"]["engagement"]["value"] == 0
     chatter_service.add_note("deal", deal["id"], "Real customer note")
     assert scoring_service.score_deal(deal["id"])["factors"]["engagement"]["value"] == 1
@@ -1498,7 +1502,7 @@ def test_last_contact_at_takes_the_newest_of_both_signals(pg_db):
 def test_last_contact_at_ignores_archived_and_housekeeping_notes(pg_db):
     """An archived note is retracted; a provenance confirm is bookkeeping, not a conversation."""
     from core.postgres import pg_execute
-    from crm import scoring_service, service
+    from crm import service
 
     archived_only = _mk_contact("Archived Only")
     housekeeping_only = _mk_contact("Housekeeping Only")
@@ -1507,10 +1511,10 @@ def test_last_contact_at_ignores_archived_and_housekeeping_notes(pg_db):
         "INSERT INTO crm_chatter (entity_type, entity_id, message, archived, created_at) "
         "VALUES ('contact', %s, 'retracted', 1, '2026-05-01T10:00:00Z')", (archived_only,))
     pg_execute(
-        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES "
-        "('contact', %s, %s, '2026-05-01T10:00:00Z')",
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, system_note) VALUES "
+        "('contact', %s, %s, '2026-05-01T10:00:00Z', true)",
         (housekeeping_only,
-         scoring_service.PROVENANCE_NOTE_PREFIX + "'title'."),
+         "Confirmed AI-populated value for 'title'."),
     )
 
     rows = {r["id"]: r for r in service.list_contacts(sort="id", limit=50)["contacts"]}
@@ -1539,13 +1543,13 @@ def test_search_and_detail_derive_the_same_last_contact(pg_db):
 def test_get_contact_staleness_agrees_with_the_list(pg_db):
     """The tool and the column must not contradict each other about what a touch is."""
     from core.postgres import pg_execute
-    from crm import analytics_service, scoring_service, service
+    from crm import analytics_service, service
 
     cid = _mk_contact("Only Housekeeping")
     pg_execute(
-        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) VALUES "
-        "('contact', %s, %s, now())",
-        (cid, scoring_service.PROVENANCE_NOTE_PREFIX + "'phone'."),
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, system_note) VALUES "
+        "('contact', %s, %s, now(), true)",
+        (cid, "Confirmed AI-populated value for 'phone'."),
     )
     listed = service.list_contacts(sort="id", limit=50)["contacts"][0]
     stale = analytics_service.get_contact_staleness(stale_days=1)["contacts"]
@@ -1570,8 +1574,8 @@ def test_contact_readers_ignore_newer_non_contact_events(pg_db):
         "VALUES (%s, 'follow_up', now())", (cid,),
     )
     pg_execute(
-        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at) "
-        "VALUES ('contact', %s, %s, now())", (cid, scoring_service.RESTORE_NOTE),
+        "INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, system_note) "
+        "VALUES ('contact', %s, %s, now(), true)", (cid, scoring_service.RESTORE_NOTE),
     )
 
     listed = next(c for c in service.list_contacts(sort="id")["contacts"] if c["id"] == cid)
@@ -1654,7 +1658,7 @@ def test_pipeline_pages_and_window_match_the_unbounded_board(pg_db):
     pg_execute(
         "INSERT INTO activity_log (deal_id, activity, created_at) "
         "VALUES (%s, 'follow_up', '2031-01-01T00:00:00Z')", (ids[2],))
-    chatter_service.add_note("deal", ids[3], scoring_service.RESTORE_NOTE)
+    chatter_service.add_note("deal", ids[3], scoring_service.RESTORE_NOTE, system_note=True)
 
     full = service.get_pipeline()
     full_ids = [d["id"] for d in full["deals"]]

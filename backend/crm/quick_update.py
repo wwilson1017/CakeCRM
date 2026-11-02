@@ -113,7 +113,8 @@ def apply(deal_id: int, body: QuickUpdateBody, actor_id: int) -> dict:
                                            today=today, actor_id=actor_id)
         now = service._now()
         if body.lost and body.lost_reason:
-            chatter_service.insert_note_cur(cur, "deal", deal_id, f"Deal lost — {body.lost_reason}", actor_id, now)
+            chatter_service.insert_note_cur(cur, "deal", deal_id, f"Deal lost — {body.lost_reason}",
+                                            actor_id, now, system_note=True)
         if note:
             chatter_service.insert_note_cur(cur, "deal", deal_id, note, actor_id, now)
             saved.append("note")
