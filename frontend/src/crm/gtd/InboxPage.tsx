@@ -11,6 +11,7 @@ import { useInboxFocus, useTodos } from './hooks';
 import { EmptyState, FilterEmptyState, LoadFailed, LoadingRows, TodoShell } from './TodoShell';
 import type { Todo } from './types';
 import { refreshMeta, useTodoMeta } from './useTodoMeta';
+import { useTriageLayout, type TriageLayout } from './triageLayout';
 import { matchesFilter } from './util';
 
 /**
@@ -28,6 +29,7 @@ export function InboxPage() {
   const { projects, filters } = useTodoMeta();
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [editTodo, setEditTodo] = useState<Todo | null>(null);
+  const [layout, setLayout] = useTriageLayout();
   const [search, setSearch] = useState('');
   const [contexts, setContexts] = useState<(string | number)[]>([]);
   // Bumped only by an undo (below), and part of the card's key — so the restored item
@@ -160,6 +162,22 @@ export function InboxPage() {
             ))}
           </div>
         </div>
+      )}
+      {/* The card's layout, per device. Down here, below the queue, so it takes no room from
+          the card it shapes: the todo app has no settings page of its own. */}
+      {head && (
+        <label className="mt-6 flex items-center justify-end gap-2 text-xs text-muted">
+          Triage card
+          <select
+            aria-label="Inbox triage layout"
+            value={layout}
+            onChange={e => setLayout(e.target.value as TriageLayout)}
+            className="rounded-lg border border-line bg-cream px-2 py-1 text-xs text-charcoal focus:border-brand focus:outline-none"
+          >
+            <option value="compact">Compact</option>
+            <option value="expanded">Expanded (notes, tags, project details)</option>
+          </select>
+        </label>
       )}
       {editTodo && (
         <TodoEditSheet

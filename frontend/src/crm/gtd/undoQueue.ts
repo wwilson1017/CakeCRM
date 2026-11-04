@@ -39,7 +39,7 @@ export const UNDO_WINDOW_MS = 7000;
 /** What the row is offering to undo. Drives the block's copy, the accessible names,
  *  whether the reopened-a-repeat notice applies, and whether the revert re-surfaces the
  *  item as the inbox's current triage card. */
-export type UndoKind = 'done' | 'filed';
+export type UndoKind = 'done' | 'filed' | 'deleted';
 
 /** The fields handed straight back to `updateTodo`. Narrow on purpose: a
  *  `Record<string, unknown>` here would let any field — or an invalid status — through

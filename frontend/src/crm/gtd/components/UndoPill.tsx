@@ -38,7 +38,7 @@ const STACK_GAP_PX = 8;
  *  removed when it unmounts, so a toast raised with no block on screen lands at 88px. */
 const TOAST_BOTTOM_VAR = '--ck-toast-bottom';
 
-// The one place the two undoable actions are named. `row` labels the row; `header` is
+// The one place the undoable actions are named. `row` labels the row; `header` is
 // the same fact in the plural, for the count line. Copy, so it lives in the component
 // and not in the store.
 const KIND: Record<UndoKind, { row: string; header: string; verb: (title: string) => string }> = {
@@ -46,6 +46,11 @@ const KIND: Record<UndoKind, { row: string; header: string; verb: (title: string
     row: 'Marked done',
     header: 'marked done',
     verb: title => `Undo marking “${title}” done`,
+  },
+  deleted: {
+    row: 'Deleted',
+    header: 'deleted',
+    verb: title => `Undo deleting “${title}”`,
   },
   filed: {
     row: 'Context set',
