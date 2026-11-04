@@ -24,6 +24,8 @@ vi.mock('../api', () => ({
   createProject: createProjectMock,
 }));
 
+import { saveTriageLayout } from '../triageLayout';
+import { resetUndoQueue, takeAll } from '../undoQueue';
 import { TriageCard } from './TriageCard';
 import { toast } from '../../../shared/toast';
 import type { Todo, TodoProject } from '../types';
@@ -73,6 +75,8 @@ let onChanged: Mock<() => void>;
 let onEdit: Mock<(t: Todo) => void>;
 
 beforeEach(() => {
+  saveTriageLayout('expanded');
+  resetUndoQueue();
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -89,6 +93,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  resetUndoQueue();
   vi.restoreAllMocks(); // the toast spies are per-test — don't leak them
 });
 
@@ -976,13 +981,13 @@ describe('writes decide against the state as it is NOW', () => {
   });
 });
 
-describe('Drop, the card\'s discard (#299)', () => {
-  it('drops the item through the resolving write, never a delete', async () => {
+describe('Delete, the card\'s discard (#299)', () => {
+  it('archives the item through the resolving write and queues Undo', async () => {
     const confirm = vi.spyOn(window, 'confirm');
     render();
-    const drop = [...container.querySelectorAll('button')].find(b => b.textContent === 'Drop');
-    if (!drop) throw new Error('no Drop button');
-    expect([...container.querySelectorAll('button')].some(b => b.textContent === 'Delete')).toBe(false);
+    const drop = [...container.querySelectorAll('button')].find(b => b.textContent === 'Delete');
+    if (!drop) throw new Error('no Delete button');
+
     setValue(notesBox(), 'not worth doing');
     click(drop);
     await settle();
@@ -991,6 +996,7 @@ describe('Drop, the card\'s discard (#299)', () => {
     expect(updateTodoMock).toHaveBeenNthCalledWith(1, 7, { notes: 'not worth doing' });
     expect(updateTodoMock).toHaveBeenLastCalledWith(7, { status: 'dropped' });
     expect(onProcessed).toHaveBeenCalledTimes(1);
+    expect(takeAll().map(e => [e.kind, e.restore])).toEqual([['deleted', { status: 'inbox' }]]);
     expect(confirm).not.toHaveBeenCalled(); // recoverable, so no "are you sure"
   });
 });
@@ -1325,5 +1331,25 @@ describe('Edit waits for every write the sheet would race (#297)', () => {
 
     expect(onEdit).toHaveBeenCalledTimes(1);
     expect(onEdit.mock.calls[0][0]).toMatchObject({ notes: 'slow note', star: true, project_id: 3 });
+  });
+});
+
+
+describe('compact triage', () => {
+  it('shows a notes preview and keeps the resolving controls and Edit', async () => {
+    saveTriageLayout('compact');
+    render({ notes: 'Call before noon', project_id: PROJECT.id }, undefined,
+      [{ ...PROJECT, purpose: 'Hidden purpose', outcome: 'Hidden outcome' }]);
+    for (const name of ['Notes', 'Tags', 'People']) {
+      expect(container.querySelector(`[aria-label="${name}"]`)).toBeNull();
+    }
+    expect(container.querySelector('[data-project-purpose]')).toBeNull();
+    expect(container.querySelector('.line-clamp-2')?.textContent).toBe('Call before noon');
+    for (const name of ['Took 2 minutes — Done ✓', 'Edit', 'Delete']) expect(button(name)).toBeTruthy();
+    expect(container.querySelector('[aria-label="Set context and file this todo"]')).not.toBeNull();
+    expect(container.textContent).toContain('Files it under To Do.');
+    click(button('Edit'));
+    await settle();
+    expect(onEdit.mock.calls[0][0].notes).toBe('Call before noon');
   });
 });

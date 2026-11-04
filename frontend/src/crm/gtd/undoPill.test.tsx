@@ -903,3 +903,28 @@ describe('rows belong to the session that queued them (#231, Codex connector)', 
     expect(updateTodoMock).not.toHaveBeenCalledWith(142, expect.anything());
   });
 });
+
+
+describe('triage Delete undo', () => {
+  it('labels deletion and restores the prior status', async () => {
+    const item = todo({ status: 'inbox', title: 'Old idea' });
+    await act(async () => { root.render(<TriageHarness item={item} contexts={[]} />); });
+    await clickAsync(button('Delete'));
+    expect(updateTodoMock).toHaveBeenLastCalledWith(item.id, { status: 'dropped' });
+    expect(headerCount()).toBe('1 deleted');
+    expect(rows()[0].textContent).toContain('Deleted');
+    const undo = container.querySelector<HTMLButtonElement>('[aria-label="Undo deleting “Old idea”"]')!;
+    await clickAsync(undo);
+    expect(updateTodoMock).toHaveBeenLastCalledWith(item.id, { status: 'inbox' });
+    expect(rows()).toHaveLength(0);
+  });
+
+  it('reports a failed deletion undo accurately', async () => {
+    await act(async () => { root.render(<TriageHarness item={todo({ status: 'inbox' })} contexts={[]} />); });
+    await clickAsync(button('Delete'));
+    updateTodoMock.mockRejectedValueOnce(new Error('offline'));
+    const undo = container.querySelector<HTMLButtonElement>('[aria-label^="Undo deleting"]')!;
+    await clickAsync(undo);
+    expect(container.textContent).toContain("it's still deleted");
+  });
+});

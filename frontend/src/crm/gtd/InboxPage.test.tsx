@@ -37,6 +37,7 @@ import { InboxPage } from './InboxPage';
 import type { Todo } from './types';
 import { notifyTodosChanged, resetInboxFocus } from './hooks';
 import { resetUndoQueue } from './undoQueue';
+import { saveTriageLayout } from './triageLayout';
 
 const base: Omit<Todo, 'id' | 'title'> = {
   notes: '', project_id: null, project_name: null, context: '', tags: [],
@@ -283,5 +284,21 @@ describe('InboxPage — loading the whole inbox (#295)', () => {
     expect(listTodosMock).toHaveBeenCalledTimes(2);
     expect(signalOf(0).aborted).toBe(true);
     expect(signalOf(1).aborted).toBe(false);
+  });
+});
+
+describe('InboxPage — the triage card layout', () => {
+  afterEach(() => saveTriageLayout('compact'));
+
+  it('switches the card between Compact and Expanded from below the queue', async () => {
+    await render();
+    const select = container.querySelector<HTMLSelectElement>('[aria-label="Inbox triage layout"]')!;
+    expect(select.value).toBe('compact');
+    expect(container.querySelector('[aria-label="Notes"]')).toBeNull();
+    act(() => {
+      select.value = 'expanded';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(container.querySelector('[aria-label="Notes"]')).not.toBeNull();
   });
 });
