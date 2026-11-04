@@ -27,10 +27,7 @@ someday-maybe. Otherwise, setting the context is the **last** step — it files 
 next action and clears it out of the inbox — so agree the context before writing it.
 **Edit** on the triage card opens the full edit sheet once any note or date you just changed
 has saved; the card is locked until then, so nothing changed meanwhile gets undone.
-The triage card is **Compact** by default (it fits a phone screen; notes and tags are reached
-through Edit, and existing notes show under the title). The **Triage card** choice at the
-bottom of the Inbox switches this device to **Expanded**, which puts notes, tags and the
-project's purpose and outcome on the card. **Delete** on the card drops the item, with Undo.
+Compact or Expanded card, and Delete: see todos/triage-card.
 
 **Next actions are physical, visible verbs.** "Call the dentist to book a cleaning", not
 "dentist". Rewrite vague todos whenever you touch them.
@@ -41,7 +38,7 @@ project's purpose and outcome on the card. **Delete** on the card drops the item
   at-sign: calls, office, errands, computer. The existing contexts are offered in a picker,
   with a hatch for a new one.
   To rename one on every todo at once, see the renaming topic (todos/rename-context).
-- **Tags** — anything else, comma-separated. Up to 50. Settable while triaging (Expanded card, or Edit).
+- **Tags** — anything else, comma-separated. Up to 50. Settable while triaging.
 - **Star** — today's priorities. Keep starred items to a handful. There is also an option to
   star a todo automatically when it comes due.
 - **Due date** — a real deadline only, never an aspiration. Clear it by emptying the field.
@@ -99,10 +96,9 @@ has no Views. Done's Done/Dropped switch and the Projects status buttons pick wh
 loaded, and the filters apply within it. Inbox, To Do and Waiting keep their own bar, because
 each is split into sections the shared list cannot show.
 
-## Undoing a completion, a filing or a delete
+## Undoing a completion, filing or delete
 
-Marking a todo done, setting the context that files an inbox item, or deleting one from the
-triage card shows a small undo
+Marking a todo done, filing an inbox item or deleting one shows a small undo
 block for seven seconds. On the Inbox it sits right under the item being triaged, above
 the rest of the queue; on every other page it sits in the bottom-right corner. Each change gets its own row with an
 **Undo?** button, and **Undo all** appears once there is more than one. Undo puts the todo
