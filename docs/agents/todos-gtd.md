@@ -481,8 +481,7 @@
   `todo_web_signin_tokens` (hash, seat, `expires_at`). Hashes only; `id BIGSERIAL` so every
   ORDER BY ends on `id`; FK `ON DELETE CASCADE` to `users`. They are auth state and sit in
   **neither** `_truncate_all` branch (like `saved_views`): a CRM reset does not sign phones
-  out. `crm_meta.todo_web_token` is kept but no longer read; dropping it is a follow-up once
-  no running revision reads it.
+  out. `crm_meta.todo_web_token` was dropped in #321.
   **Lifecycle:** a seat mints a code (`POST /api/crm/gtd/web-signin-link`, one hour, single
   use, at most 10 unspent per seat, QR rendered server-side by `core/qr.py`). `GET
   /todo/signin/{token}` is the page and redeems nothing; its button POSTs

@@ -3965,10 +3965,7 @@ def set_todo_mode(mode: str) -> dict:
 
 def get_todo_public_settings() -> dict:
     """The two no-login-surface settings. Fail-safe like get_todo_mode: if the row
-    can't be read, report the surfaces as OFF rather than guessing them open.
-
-    `crm_meta.todo_web_token` is no longer read (#293: the todo app opens by browser
-    sessions, crm/todo_sessions.py); the column stays until no running revision reads it."""
+    can't be read, report the surfaces as OFF rather than guessing them open."""
     try:
         row = pg_fetchone(
             "SELECT todo_capture_token, todo_web_enabled FROM crm_meta WHERE id = 1"
