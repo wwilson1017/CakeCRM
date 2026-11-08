@@ -5,6 +5,7 @@ import { createProject, updateTodo } from '../api';
 import type { Todo, TodoProject, TodoStatus } from '../types';
 import { todoSourceLabel } from '../sourceLabel';
 import { parseTags } from '../util';
+import { useTriageLayout } from '../triageLayout';
 import { dropUndo, queueUndo } from '../undoQueue';
 import { InlineTitle } from './InlineTitle';
 import { SourceLabel } from './SourceLabel';
@@ -242,6 +243,8 @@ const initState = (todo: Todo): CardState => ({
  * is the ONLY way out of the inbox.
  */
 export function TriageCard({ todo, projects, contexts, tags: knownTags = [], onProcessed, onChanged, onEdit }: Props) {
+  const compact = useTriageLayout()[0] === 'compact';
+  const gap = compact ? 'mt-3' : 'mt-5';
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [destination, setDestination] = useState<TodoStatus>('next_action');
@@ -511,11 +514,11 @@ export function TriageCard({ todo, projects, contexts, tags: knownTags = [], onP
       // `fields.context !== undefined` on an inbox row is the filing write and nothing
       // else. Queued from `before`, which still holds the status AND context the row had
       // — both are restored, because an item that arrived carrying "@errands" from Quick
-      // Add must go back to '@errands' and not to empty. The Drop button (#299) and any
-      // other status write fall through to `dropUndo`: a later write that
-      // moves the todo retires an offer that no longer describes a pending change.
+      // Add must go back to '@errands' and not to empty. Delete restores the prior status.
+      // Other status writes retire an offer that no longer describes a pending change.
       if (fields.status === 'done' && before.status !== 'done') queueUndo(before);
       else if (fields.context !== undefined && before.status === 'inbox') queueUndo(before, 'filed');
+      else if (fields.status === 'dropped' && before.status !== 'dropped') queueUndo(before, 'deleted');
       else if (fields.status !== undefined) dropUndo(todo.id);
       if (resolves) {
         // Deliberately STAYS busy — this card is spent. The parent's reload is async
@@ -651,9 +654,13 @@ export function TriageCard({ todo, projects, contexts, tags: knownTags = [], onP
         </p>
       )}
 
+      {compact && notesDraft && (
+        <p className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-sm text-muted">{notesDraft}</p>
+      )}
+
       {/* Step 1 — where it's headed. Selecting is local: the item stays put until
           step 3 gives it a context. */}
-      <div className="mt-5">
+      <div className={gap}>
         <StepHeading step={1}>What kind of action?</StepHeading>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {DESTINATIONS.map(d => {
@@ -686,7 +693,7 @@ export function TriageCard({ todo, projects, contexts, tags: knownTags = [], onP
       </div>
 
       {/* Step 2 — optional enrichment. Nothing here leaves the inbox. */}
-      <div className="mt-5">
+      <div className={gap}>
         <StepHeading step={2}>Add detail (optional)</StepHeading>
         <div className="flex flex-wrap items-end gap-2">
           {newProject === null ? (
@@ -837,7 +844,7 @@ export function TriageCard({ todo, projects, contexts, tags: knownTags = [], onP
           <button
             type="button"
             disabled={locked}
-            // A todo is never deleted (#299): Drop is this card's discard, the same
+            // Delete archives the todo with a 7-second Undo, using the same
             // resolving write filing uses, so the item leaves the inbox for Done's
             // Dropped tab, where it can be reopened. No confirm — it is recoverable.
             onClick={() => void patch({ status: 'dropped' }, true)}
@@ -848,14 +855,14 @@ export function TriageCard({ todo, projects, contexts, tags: knownTags = [], onP
             // only kind these tokens can carry.
             className={`${linkCls} text-ck-accent-text hover:underline`}
           >
-            Drop
+            Delete
           </button>
         </div>
         {/* The picked project's purpose and outcome (#262), read-only: filing an item under a
             project is the moment to check it belongs there. Edited on the project's own page,
             not here — this card's writes are all to the todo. Hidden while a new project is
             being named (it has neither yet) and when the project has neither. */}
-        {newProject === null && pickedProject && (pickedProject.purpose || pickedProject.outcome) && (
+        {!compact && newProject === null && pickedProject && (pickedProject.purpose || pickedProject.outcome) && (
           <dl className="mt-2 space-y-0.5 text-sm" data-project-purpose>
             {pickedProject.purpose && (
               <div className="flex gap-2">
@@ -873,59 +880,66 @@ export function TriageCard({ todo, projects, contexts, tags: knownTags = [], onP
         )}
         {/* Notes belong to clarifying, not only to the full editor — jot the link or the
             phone number without leaving triage. Saved on blur, non-resolving, so the item
-            stays in the inbox. This replaces the read-only preview that used to sit under
-            the title. */}
-        <span className={`${fieldCls} mt-3`}>Notes</span>
-        <textarea
-          value={notesDraft}
-          disabled={locked}
-          onChange={e => apply({ type: 'notes-draft', value: e.target.value })}
-          onBlur={() => void flushNotes()}
-          placeholder="Links, numbers, anything you'll want when you do it"
-          className={`${inputCls} block min-h-16 w-full`}
-          aria-label="Notes"
-        />
-        {/* Tags while clarifying, comma-separated as in the Edit sheet, with the tags already
-            in use one tap away. Saved on blur or on a pick, non-resolving. */}
-        <span className={`${fieldCls} mt-3`}>Tags</span>
-        <input
-          value={tagsDraft}
-          disabled={locked}
-          onChange={e => apply({ type: 'tags-draft', value: e.target.value })}
-          onBlur={() => void flushTags()}
-          placeholder="errand, quick, house"
-          className={`${inputCls} block w-full`}
-          aria-label="Tags"
-        />
-        {tagsOffered.length > 0 && (
-          <span className="mt-1 flex flex-wrap gap-1" data-tag-suggestions>
-            {tagsOffered.map(tag => (
-              <button
-                key={tag}
-                type="button"
-                disabled={locked}
-                // Keep focus in the input: a blur here would commit the half-typed fragment
-                // this click is about to replace.
-                onMouseDown={e => e.preventDefault()}
-                onClick={() => pickTag(tag)}
-                className="rounded-full border border-line px-2 py-0.5 text-xs text-muted hover:bg-sand hover:text-charcoal disabled:opacity-50"
-              >
-                + {tag}
-              </button>
-            ))}
-          </span>
-        )}
+            stays in the inbox. Compact reaches these fields through Edit instead. */}
+        {!compact && <>
+          <span className={`${fieldCls} mt-3`}>Notes</span>
+          <textarea
+            value={notesDraft}
+            disabled={locked}
+            onChange={e => apply({ type: 'notes-draft', value: e.target.value })}
+            onBlur={() => void flushNotes()}
+            placeholder="Links, numbers, anything you'll want when you do it"
+            className={`${inputCls} block min-h-16 w-full`}
+            aria-label="Notes"
+          />
+          {/* Tags while clarifying, comma-separated as in the Edit sheet, with the tags already
+              in use one tap away. Saved on blur or on a pick, non-resolving. */}
+          <span className={`${fieldCls} mt-3`}>Tags</span>
+          <input
+            value={tagsDraft}
+            disabled={locked}
+            onChange={e => apply({ type: 'tags-draft', value: e.target.value })}
+            onBlur={() => void flushTags()}
+            placeholder="errand, quick, house"
+            className={`${inputCls} block w-full`}
+            aria-label="Tags"
+          />
+          {tagsOffered.length > 0 && (
+            <span className="mt-1 flex flex-wrap gap-1" data-tag-suggestions>
+              {tagsOffered.map(tag => (
+                <button
+                  key={tag}
+                  type="button"
+                  disabled={locked}
+                  // Keep focus in the input: a blur here would commit the half-typed fragment
+                  // this click is about to replace.
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={() => pickTag(tag)}
+                  className="rounded-full border border-line px-2 py-0.5 text-xs text-muted hover:bg-sand hover:text-charcoal disabled:opacity-50"
+                >
+                  + {tag}
+                </button>
+              ))}
+            </span>
+          )}
+        </>}
       </div>
 
       {/* Step 3 — the last step. Picking a context files it and clears the inbox. */}
-      <div className="mt-5 border-t border-line-faint pt-4">
+      <div className={`${gap} border-t border-line-faint ${compact ? 'pt-3' : 'pt-4'}`}>
         <StepHeading step={3} required>Last step — set context</StepHeading>
-        <p className="mb-2 text-sm text-muted">
-          Where can you actually do this? Every item needs a context before it leaves the
-          inbox. Choosing one files it under{' '}
-          <span className="font-semibold text-charcoal">{dest.list}</span> and clears it out of
-          your inbox — do it last.
-        </p>
+        {compact ? (
+          <p className="mb-2 text-sm text-muted">
+            Files it under <span className="font-semibold text-charcoal">{dest.list}</span>.
+          </p>
+        ) : (
+          <p className="mb-2 text-sm text-muted">
+            Where can you actually do this? Every item needs a context before it leaves the
+            inbox. Choosing one files it under{' '}
+            <span className="font-semibold text-charcoal">{dest.list}</span> and clears it out of
+            your inbox — do it last.
+          </p>
+        )}
         {newContext === null ? (
           <div className="flex flex-wrap items-center gap-2">
             <select
