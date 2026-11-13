@@ -23,11 +23,11 @@ def test_def_and_executor_counts():
     # Phase 2: get_deal_health, get_pipeline_analytics) + 2 (#70 todo parity:
     # crm_update_todo, crm_delete_todo) + 1 (#55 crm_bulk_move_deals) + 1 (#200
     # crm_get_setup_status) - 1 (#299 removed crm_delete_todo) + N (sibling
-    # additions) — SUM the additions, never overwrite the number. On rebase behind a
+    # additions) + 2 (#334 crm_preview_company_merge, crm_merge_companies) — SUM the additions, never overwrite the number. On rebase behind a
     # sibling that also adds a tool, recompute cumulative (do NOT keep-both a single
     # number). The executor count is always defs + 1 (crm_log_note alias).
-    assert len(CRM_TOOL_DEFS) == 47
-    assert len(TOOL_EXECUTORS) == 48
+    assert len(CRM_TOOL_DEFS) == 49
+    assert len(TOOL_EXECUTORS) == 50
     # Relative invariant (robust to any future additions): exactly one alias-only executor.
     assert len(TOOL_EXECUTORS) == len(CRM_TOOL_DEFS) + 1
 
@@ -680,7 +680,7 @@ def test_pipeline_and_search_tools_project_the_payload(monkeypatch):
         "id": 1, "title": "T", "stage": "lead", "value": 10, "currency": "USD",
         "probability": 20, "expected_close_date": "", "contact_id": None,
         "contact_name": None, "company_id": None, "company_name": None,
-        "last_activity_at": None, "archived_at": None,
+        "last_contact_at": "2026-07-20T10:00:00+00:00", "archived_at": None,
         # noise the model never needs:
         "notes": "x" * 5000, "created_at": "t", "updated_at": "t",
         "ai_touch_count": 3, "ai_touch_count_at": "t", "ai_touch_evidence_count": 2,
@@ -700,6 +700,7 @@ def test_pipeline_and_search_tools_project_the_payload(monkeypatch):
         assert set(payload) <= set(tools._DEAL_SUMMARY_FIELDS) | {"custom_fields", "url"}
         assert "notes" not in payload and "ai_touch_count" not in payload
         assert payload["title"] == "T"   # the useful fields survive
+        assert payload["last_contact_at"] == "2026-07-20T10:00:00+00:00"
 
 
 def test_search_reports_an_unknown_custom_field_key(monkeypatch):
@@ -874,7 +875,7 @@ def test_lifecycle_tools_surface_a_refusal_instead_of_raising(monkeypatch):
 
 def test_summary_projection_keeps_the_fields_the_prompt_relies_on():
     """SALES_GUIDE calls lost_reason 'the most useful field when reviewing a quarter',
-    and a search row's only recency signal is updated_at (last_activity_at is computed
+    and a search row's only recency signal is updated_at (last_contact_at is computed
     by get_pipeline alone)."""
     assert "lost_reason" in tools._DEAL_SUMMARY_FIELDS
     assert "updated_at" in tools._DEAL_SUMMARY_FIELDS

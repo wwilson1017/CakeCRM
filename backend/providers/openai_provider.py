@@ -12,7 +12,8 @@ import json
 import logging
 from collections.abc import AsyncGenerator
 
-from providers.base import AIProvider
+from providers.base import AIProvider, rate_limit_event
+from providers.openai_compat import openai_user_content
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,10 @@ def _ensure_array_items(schema: dict) -> dict:
     if "items" in result and isinstance(result["items"], dict):
         result["items"] = _ensure_array_items(result["items"])
     return result
+
+# Audio models stay out of chat tier pickers. No language or prompt hint: auto-detect speech.
+TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
+
 
 # Fallback list only — list_models() fetches live from the OpenAI Models API
 # and this is used when that call fails. Kept current against the official
@@ -59,7 +64,34 @@ def _is_openai_chat_model(model_id: str) -> bool:
     return not any(token in low for token in _OPENAI_EXCLUDE)
 
 
+_VISION_PREFIXES = ("gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4", "chatgpt-")
+_NO_VISION = ("o1-mini", "o1-preview", "o3-mini")
+
+
 class OpenAIProvider(AIProvider):
+    @property
+    def supports_images(self) -> bool:
+        low = self.model.lower()
+        return low.startswith(_VISION_PREFIXES) and not low.startswith(_NO_VISION)
+
+    @property
+    def can_transcribe(self) -> bool:
+        return True
+
+    async def transcribe(self, audio: bytes, mime: str, filename: str) -> str:
+        import openai
+
+        client = openai.AsyncOpenAI(api_key=self.access_token)
+        try:
+            result = await client.audio.transcriptions.create(
+                model=TRANSCRIBE_MODEL,
+                file=(filename, audio, mime),
+                response_format="json",
+            )
+            return (getattr(result, "text", "") or "").strip()
+        finally:
+            await client.close()
+
     # `access_token` is the chatty contract name for the credential; for CakeCRM
     # (key-based only) it is always the OpenAI API key.
     def __init__(self, access_token: str, model: str = "gpt-5.4"):
@@ -106,7 +138,7 @@ class OpenAIProvider(AIProvider):
         for m in messages:
             role = m.get("role")
             if role == "user":
-                api_messages.append({"role": "user", "content": m.get("content", "")})
+                api_messages.append({"role": "user", "content": openai_user_content(m.get("content", ""))})
             elif role == "assistant":
                 msg: dict = {"role": "assistant"}
                 if m.get("content") is not None:
@@ -138,8 +170,11 @@ class OpenAIProvider(AIProvider):
                 kwargs["tools"] = openai_tools
 
             stream = await client.chat.completions.create(**kwargs)
+            finish_reason = None
 
             async for chunk in stream:
+                if chunk.choices and chunk.choices[0].finish_reason:
+                    finish_reason = chunk.choices[0].finish_reason
                 delta = chunk.choices[0].delta if chunk.choices else None
                 if not delta:
                     continue
@@ -181,10 +216,11 @@ class OpenAIProvider(AIProvider):
                     except Exception:
                         tc["args"] = {}
 
-            stop_reason = "tool_use" if tool_calls else "stop"
+            # "length" = cut off at the output cap; the engine notes it as unfinished (#340).
+            stop_reason = "tool_use" if tool_calls else ("max_tokens" if finish_reason == "length" else "stop")
 
-        except openai.RateLimitError:
-            yield {"type": "error", "error": "OpenAI is rate-limited. Please try again in a moment."}
+        except openai.RateLimitError as e:
+            yield rate_limit_event(self.model, e)
             yield {"type": "_turn_complete", "tool_calls": [], "stop_reason": "error"}
             return
 

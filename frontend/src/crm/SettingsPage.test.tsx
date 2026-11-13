@@ -80,6 +80,7 @@ const RESPONSES: Record<string, unknown> = {
     client_secret_present: false, scopes: [], redirect_uri: 'https://example.test/api/gmail/oauth/callback',
   },
   '/api/auth/2fa/status': { enabled: false },
+  '/api/voice/live-preview': { enabled: false, voice_ready: false },
   '/api/crm/demo-status': { todo_mode: 'normal' },
   '/api/mcp/connections': { may_connect: false, oauth_url: null, connections: [] },
   '/api/mcp/admin/connections': { members_enabled: false, connections: [] },
@@ -88,7 +89,7 @@ const RESPONSES: Record<string, unknown> = {
 // 'Todo mode' is admin-only as of #102, which makes its routes require_admin.
 // 'AI tool connections' (#322) holds the members switch and every seat's connections.
 const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Export data', 'AI tool connections',
-  'Telegram', 'Gmail', 'Todo mode'];
+  'Telegram', 'Gmail', 'Todo mode', 'Live transcription'];
 // 'Link my Telegram' is the personal half of the Telegram split (#193); the bot card
 // above stays admin-only.
 const MEMBER_TITLES = [
@@ -186,13 +187,13 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     }
   });
 
-  it('reaches an admin all fifteen cards, across four sections', async () => {
+  it('reaches an admin all sixteen cards, across four sections', async () => {
     auth.isAdmin = true;
     await render();
     expect(navLabels()).toEqual(['Personal', 'Assistant', 'Workspace', 'Integrations']);
 
     const reachable = await allReachableTitles();
-    expect(reachable).toHaveLength(15);
+    expect(reachable).toHaveLength(16);
     expect(reachable.sort()).toEqual([...MEMBER_TITLES, ...ADMIN_ONLY_TITLES].sort());
   });
 

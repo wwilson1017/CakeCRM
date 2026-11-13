@@ -351,7 +351,9 @@ async def list_models(provider: str, user=Depends(get_current_user)):
 
 @setup_router.get("/status")
 def setup_status(user=Depends(get_current_user)):
-    """AI-readiness gate for the frontend. ``ai_ready`` (the active provider
+    """Readiness gates for the frontend. Vision readiness follows the active model.
+    ``voice_ready`` requires
+    a usable transcriber (the active provider or an OpenAI profile). ``ai_ready`` (the active provider
     resolves to a usable provider) is the flag the CRM UI keys AI affordances off;
     ``credentials_present`` is the softer "any provider configured" signal;
     ``gmail_connected`` gates the Gmail affordances (issue #8).
@@ -359,19 +361,33 @@ def setup_status(user=Depends(get_current_user)):
     Sync ``def`` on purpose: it does blocking pooled Postgres reads (CredentialStore
     + the Gmail check), so FastAPI runs it in a worker thread rather than blocking
     the event loop."""
-    from providers import get_ai_provider
+    from providers import get_ai_provider, get_transcriber
     store = CredentialStore()
     try:
-        ai_ready = get_ai_provider() is not None
+        provider = get_ai_provider()
     except Exception:
-        ai_ready = False
+        provider = None
+    ai_ready = provider is not None
+    vision_ready = bool(ai_ready and getattr(provider, "supports_images", False))
+    try:
+        voice_ready = ai_ready and get_transcriber(store=store) is not None
+    except Exception:
+        voice_ready = False
     try:
         from gmail.store import is_connected as _gmail_connected
         gmail_connected = _gmail_connected()
     except Exception:
         gmail_connected = False
+    try:
+        from voice.service import get_live_preview
+        voice_live_preview = voice_ready and get_live_preview()
+    except Exception:
+        voice_live_preview = False
     return {
         "ai_ready": ai_ready,
+        "vision_ready": vision_ready,
+        "voice_ready": voice_ready,
+        "voice_live_preview": voice_live_preview,
         "credentials_present": store.is_configured(),
         "active_provider": store.data.get("active_provider", ""),
         "active_model": store.data.get("active_model", ""),

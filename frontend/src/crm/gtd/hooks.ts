@@ -161,7 +161,7 @@ async function revertEntry(entry: UndoEntry): Promise<boolean> {
   } catch {
     // Kind-specific, because a filing that fails to revert was never marked done, and
     // saying so would be a plain lie about the user's data.
-    const still = entry.kind === 'filed' ? "it's still filed" : "it's still marked done";
+    const still = { filed: "it's still filed", deleted: "it's still deleted", done: "it's still marked done" }[entry.kind];
     toast.error(`Couldn't undo “${entry.title}” — ${still}.`);
     return false;
   }

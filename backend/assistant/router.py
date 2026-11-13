@@ -9,7 +9,7 @@ Bearer header, which a browser EventSource cannot set).
   POST   /api/assistant/chat                  — stream a turn (SSE); {} messages = continuation;
                                                  optional validated `context` (open CRM record, #14)
                                                  and `page` (open settings section, #200)
-  POST   /api/assistant/chat/upload           — same, multipart (payload + files + turn_id)
+  POST   /api/assistant/chat/upload           — same, multipart (payload + files (documents and photos) + turn_id)
   GET    /api/assistant/turns/:id/events      — replay a detached turn's frames after ?after=N,
                                                  then tail it (#282)
   POST   /api/assistant/turns/:id/cancel      — Stop a detached turn (#282)
@@ -33,15 +33,17 @@ never 403 — so the API is not an existence oracle for other people's threads.
 """
 
 import asyncio
+import html
 import json
 import logging
+import re
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
-from assistant import engine, history, identity, turns, uploads
+from assistant import delimiters, engine, history, identity, turns, uploads
 from assistant.registry import ToolRegistry
 from core.auth import get_current_user, require_admin
 from providers import get_ai_provider
@@ -241,7 +243,13 @@ async def chat_upload(
         raise HTTPException(status_code=400, detail=f"At most {uploads.MAX_FILES} files per message.")
 
     blocks: list[str] = []
+    images: list[dict] = []
     for f in files:
+        name = f.filename or "upload"
+        if uploads.is_image_name(name) and not provider.supports_images:
+            raise HTTPException(status_code=400, detail=(
+                f"{provider.model} can't see photos. Pick a model that can in AI Setup, "
+                "or attach a document instead."))
         # Read at most MAX_FILE_SIZE+1 so an oversized file can't exhaust memory.
         raw = await f.read(uploads.MAX_FILE_SIZE + 1)
         if len(raw) > uploads.MAX_FILE_SIZE:
@@ -251,7 +259,11 @@ async def chat_upload(
         try:
             # Offload the (synchronous, CPU-bound) parse so a large PDF/DOCX/XLSX
             # can't block the async event loop / other concurrent SSE streams.
-            blocks.append(await asyncio.to_thread(uploads.extract_upload, f.filename or "upload", raw))
+            if uploads.is_image_name(name):
+                images.append(await asyncio.to_thread(uploads.read_image, name, raw))
+                blocks.append(delimiters.wrap_untrusted_image(name))
+            else:
+                blocks.append(await asyncio.to_thread(uploads.extract_upload, name, raw))
         except uploads.UploadError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -273,8 +285,9 @@ async def chat_upload(
     registry = await asyncio.to_thread(ToolRegistry, user=user)
     return await _start_turn(turn_id, user, lambda: engine.chat(
         provider, registry, messages,
-        tool_mode=tool_mode, conversation_id=conversation_id, title_hint=original_text,
-        context=context, page=page, user=user,
+        tool_mode=tool_mode, conversation_id=conversation_id,
+        title_hint=original_text or " ".join(i["filename"] for i in images),
+        context=context, page=page, images=images or None, user=user,
     ))
 
 
@@ -395,6 +408,12 @@ def update_identity(req: IdentityUpdateRequest, user=Depends(require_admin)):
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
+_UPLOAD_BLOCK_RE = re.compile(
+    r'<untrusted_file_content id="([0-9a-f]+)" filename="([^"]*)"[^>]*>.*?'
+    r'</untrusted_file_content id="\1">\n*', re.DOTALL,
+)
+
+
 def _message_for_ui(msg: dict) -> dict:
     """Fold capped tool-result previews into each tool_call and drop tool_results.
 
@@ -402,6 +421,12 @@ def _message_for_ui(msg: dict) -> dict:
     ``result`` preview), so the raw/uncapped ``tool_results`` never crosses the
     wire. ``tool_calls`` stays a JSON array — the frontend maps it directly.
     """
+    if msg.get("role") == "user" and isinstance(msg.get("content"), str):
+        names = [html.unescape(n) for _, n in _UPLOAD_BLOCK_RE.findall(msg["content"])]
+        if names:
+            msg = {**msg, "content": _UPLOAD_BLOCK_RE.sub("", msg["content"]).strip(), "attachments": names}
+        msg.pop("tool_results", None)
+        return msg
     calls = msg.get("tool_calls")
     if not calls:
         msg.pop("tool_results", None)

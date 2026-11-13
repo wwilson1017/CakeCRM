@@ -1,10 +1,10 @@
 ---
 title: Duplicates
-summary: How to find duplicate records, and why contacts and companies cannot be merged.
+summary: How to find duplicate records, and why contacts cannot be merged.
 shots: []
 ---
 
-Duplicate records are the commonest way a CRM goes stale. CakeCRM helps you avoid them, but it cannot merge contacts or companies, so prevention matters most.
+Duplicate records are the commonest way a CRM goes stale. CakeCRM helps you avoid them, but it cannot merge contacts, so prevention matters most.
 
 ## Preventing duplicates
 
@@ -26,6 +26,14 @@ There is no duplicate screen outside Baker. On an install with no AI provider, s
 
 ## Merging
 
-**Only deals can be merged.** There is no contact merge and no company merge. To clean up two contacts for one person, move what matters onto the one you keep, then delete the other.
+**Deals and companies can be merged.** Contacts cannot be merged. To clean up two contacts for one person, move what matters onto the one you keep, then delete the other.
 
 Baker can merge two deals for you. In Baker's **Ask** mode, a merge always waits for your approval (see [Approvals](../07-baker/03-approvals.md)), so check which deal it keeps. The deal you keep gets the other's activity, open todos and copied notes. Its own title, value, stage and links stay as they were. The other deal is archived, not deleted.
+
+On a company's page, **Merge into…** lets you pick the company to keep, shows a current estimate
+of what will move (recomputed at merge), and asks why. Contacts and deals, including archived
+deals, move to the survivor; their todos and activity follow. Company notes are copied and
+blank fields are filled without replacing the survivor's own values. The duplicate is archived,
+with who merged it and why recorded. Its spelling resolves to the survivor on future imports.
+There is no undo, and a merged duplicate cannot be restored. Baker can do this too; in
+**Ask** mode the merge always waits for your approval.

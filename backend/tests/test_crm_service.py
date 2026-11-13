@@ -8,7 +8,7 @@ writes go through ``get_connection`` and use the shared ``fake_conn`` fixture.
 
 import pytest
 
-from crm import gtd_common, scoring_service, service
+from crm import gtd_common, last_contact, scoring_service, service
 
 
 class Recorder:
@@ -58,9 +58,14 @@ class _RecCursor:
 
     def execute(self, sql, params=()):
         self._last = sql
+        self._params = params
         self.r.calls.append((" ".join(sql.split()), list(params)))
 
     def fetchone(self):
+        if "SELECT company_follow_merge" in self._last:
+            return (self._params[0],)
+        if "SELECT merged_into_id" in self._last:
+            return (None,)
         if self.r.cursor_fetchone_queue:
             return self.r.cursor_fetchone_queue.pop(0)
         if "SELECT status FROM" in self._last:
@@ -180,9 +185,11 @@ def test_search_contacts_ilike_and_tag_boundary(rec):
     # name/email/company/co.name/notes + tag clauses (issue #35 added the join term)
     assert sql.count("ILIKE") >= 5
     # No case-sensitive LIKE among the SEARCH terms. The #77 last-contact join excludes
-    # housekeeping notes with a rendered `starts_with` predicate (#239), not a LIKE.
+    # system notes through their marker, not their text (#352).
     assert "LIKE %s" not in sql.replace("ILIKE %s", "")
-    assert scoring_service.not_housekeeping_sql("ch.message") in sql
+    assert last_contact.live_note_sql("ch") in sql
+    assert "starts_with" not in sql
+
     assert "ct.status = %s" in sql
     assert "LEFT JOIN companies co ON ct.company_id = co.id" in sql
     assert "co.name ILIKE %s" in sql  # linked contacts findable by company name
@@ -373,7 +380,7 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
         "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
         "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_values, "
         "crm_field_provenance, deal_stage_events, proactive_nudges, deal_ai_touch_evidence, "
-        "crm_stage_criteria, reminders, mcp_audit RESTART IDENTITY"
+        "crm_stage_criteria, reminders, assistant_deal_finds, mcp_audit RESTART IDENTITY"
         in s for s in stmts
     )
     assert not any("crm_field_definitions" in s for s in stmts)
@@ -411,7 +418,8 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
         "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
         "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_definitions, "
         "crm_field_values, crm_field_provenance, deal_stage_events, proactive_nudges, "
-        "deal_ai_touch_evidence, crm_stage_criteria, reminders, mcp_audit RESTART IDENTITY"
+        "deal_ai_touch_evidence, crm_stage_criteria, reminders, assistant_deal_finds, mcp_audit "
+        "RESTART IDENTITY"
         in s for s in stmts
     )
     assert any("sample_data_loaded = FALSE" in s for s in stmts)
@@ -777,29 +785,29 @@ def test_get_deal_joins_company_name(rec):
     assert "co.name AS company_name" in sql and "LEFT JOIN companies co" in sql
 
 
-# ── Pipeline board payload: company_name + derived last_activity_at (issue #21) ─
+# ── Pipeline board payload: company_name + derived last_contact_at (issue #21) ─
 
-def test_get_pipeline_includes_company_and_last_activity(rec):
+def test_get_pipeline_includes_company_and_last_contact(rec):
     # deals query, then the stage_summary aggregate query.
     rec.fetchall_queue = [
         [{"id": 1, "stage": "lead", "contact_name": "Ann",
-          "company_name": "Acme", "last_activity_at": "2026-07-20T10:00:00+00:00"}],
+          "company_name": "Acme", "last_contact_at": "2026-07-20T10:00:00+00:00"}],
         [{"stage": "lead", "count": 1, "total_value": 100.0}],
     ]
     out = service.get_pipeline()
-    sql = rec.sql_containing("last_activity_at")
+    sql = rec.sql_containing("last_contact_at")
     # company join mirrors get_deal; new derived field is aliased.
     assert "co.name AS company_name" in sql and "LEFT JOIN companies co" in sql
-    assert "la.last_at AS last_activity_at" in sql
-    # last_activity blends BOTH genuine activity lanes via UNION ALL → one row per deal.
+    assert "la.last_at AS last_contact_at" in sql
+    # last_contact blends BOTH customer-contact lanes via UNION ALL → one row per deal.
     assert "UNION ALL" in sql and "GROUP BY deal_id" in sql
-    assert "FROM activity_log WHERE deal_id IS NOT NULL" in sql
+    assert " ".join(last_contact.DEAL_CONTACTS_UNION_SQL.split()) in sql
     assert "FROM crm_chatter" in sql and "entity_type = 'deal'" in sql and "archived = 0" in sql
     # unfiltered board load carries no stage WHERE.
     assert "WHERE d.stage" not in sql
     # new fields pass straight through the payload.
     assert out["deals"][0]["company_name"] == "Acme"
-    assert out["deals"][0]["last_activity_at"] == "2026-07-20T10:00:00+00:00"
+    assert out["deals"][0]["last_contact_at"] == "2026-07-20T10:00:00+00:00"
     assert out["total_pipeline_value"] == 100.0
 
 
@@ -807,14 +815,14 @@ def test_get_pipeline_stage_branch_carries_new_fields(rec):
     # The stage-filtered branch (used by the assistant's crm_get_pipeline tool) must
     # carry the same new fields — the unified query guarantees the branches can't drift.
     rec.fetchall_queue = [
-        [{"id": 2, "stage": "lead", "company_name": None, "last_activity_at": None}],
+        [{"id": 2, "stage": "lead", "company_name": None, "last_contact_at": None}],
         [],
     ]
     service.get_pipeline(stage="lead")
-    sql = rec.sql_containing("last_activity_at")
+    sql = rec.sql_containing("last_contact_at")
     assert "WHERE d.archived_at IS NULL AND d.stage = %s" in sql
-    assert "la.last_at AS last_activity_at" in sql and "co.name AS company_name" in sql
-    assert rec.params_for("last_activity_at") == ["lead"]
+    assert "la.last_at AS last_contact_at" in sql and "co.name AS company_name" in sql
+    assert rec.params_for("last_contact_at") == ["lead"]
 
 
 # ── Pipeline board: the three bounding modes (issue #59) ──────────────────────
@@ -828,8 +836,9 @@ def test_get_pipeline_keyset_first_page(rec):
     # A page must use the per-deal LATERAL, never the whole-table grouped aggregate:
     # the grouped form would scan all of activity_log on every page of a sweep.
     assert "LEFT JOIN LATERAL" in sql and "GROUP BY deal_id" not in sql
+    assert " ".join(last_contact.last_contact_sql("deal", "d.id").split()) in sql
     # ...while still carrying every column the unbounded board carries.
-    assert "la.last_at AS last_activity_at" in sql and "co.name AS company_name" in sql
+    assert "la.last_at AS last_contact_at" in sql and "co.name AS company_name" in sql
     assert "d.id > %s" not in sql, "a first page has no cursor"
     assert rec.params_for("ORDER BY d.id ASC") == [501]
     # A FIRST page still pays for — and returns — the envelope.
@@ -1227,13 +1236,15 @@ def test_contact_list_search_and_detail_all_derive_last_contact_at(rec):
         call()
         sql = rec.sql_containing("last_contact_at")
         assert "lt.last_at AS last_contact_at" in sql
+        assert " ".join(last_contact.last_contact_sql("contact", "ct.id").split()) in sql
         # Both signals, and the archived + housekeeping exclusions.
         assert "FROM activity_log a WHERE a.contact_id = ct.id" in sql
         assert "ch.entity_type = 'contact'" in sql
         assert "ch.archived = 0" in sql
-        # The housekeeping family (#239) — provenance, archive and restore notes — is a
-        # rendered predicate, so no pattern param rides along any more.
-        assert scoring_service.not_housekeeping_sql("ch.message") in sql
+        # Every system note uses the shared marker predicate, with no pattern param.
+        assert last_contact.live_note_sql("ch") in sql
+        assert "starts_with" not in sql
+
         assert "NOT LIKE" not in sql
 
 
@@ -1318,7 +1329,8 @@ def test_archiving_needs_a_reason_and_writes_the_note_with_the_update(
     update(1, status="archived", archive_reason=" went dark ", actor_id=5)
     stmts = [s for s, _ in conn.executed]
     assert stmts[0] == f"SELECT status FROM {table} WHERE id = %s FOR UPDATE"
-    note = next(p for s, p in conn.executed if "INSERT INTO crm_chatter" in s)
+    note_sql, note = next((s, p) for s, p in conn.executed if "INSERT INTO crm_chatter" in s)
+    assert "system_note" in note_sql and note_sql.endswith("true)")
     assert note[:3] == (entity, 1, "Archived — went dark") and note[4] == 5
     assert conn.entries == 1 and len(set(conn.executed_by)) == 1
 
@@ -1332,11 +1344,15 @@ def test_archiving_needs_a_reason_and_writes_the_note_with_the_update(
 def test_only_a_move_across_the_archived_line_leaves_a_note(
     monkeypatch, rec, fake_conn, update, old, new, note,
 ):
-    conn = fake_conn(monkeypatch, service, fetchone_results=[(old,)])
+    rows = [(old,)] + ([(None,)] if update is service.update_company and new != "archived" else [])
+    conn = fake_conn(monkeypatch, service, fetchone_results=rows)
     rec.fetchone_queue = [{"id": 1, "status": old}, {"id": 1}]  # contact's peek, getter
     update(1, status=new, actor_id=5)
     notes = [p[2] for s, p in conn.executed if "INSERT INTO crm_chatter" in s]
     assert notes == ([note] if note else [])
+    for sql, _ in conn.executed:
+        if "INSERT INTO crm_chatter" in sql:
+            assert "system_note" in sql and sql.endswith("true)")
 
 
 def test_a_refused_contact_archive_auto_creates_no_company(monkeypatch, rec, fake_conn):
@@ -1362,27 +1378,35 @@ def test_a_record_cannot_be_created_already_archived(rec, create):
     assert rec.calls == []
 
 
-# ── The housekeeping family (#239) ──────────────────────────────────────────
-
-def test_every_housekeeping_writer_matches_the_family_and_renders_without_a_percent():
-    """The exclusion must mirror each writer's text, and must carry no `%`: LAST_TOUCH_SQL
-    is interpolated into statements psycopg2 is handed parameters for."""
-    written = [
-        "Confirmed AI-populated value for 'probability'.",  # provenance_service.confirm
-        scoring_service.ARCHIVE_NOTE_PREFIX + "dupe",
-        scoring_service.RESTORE_NOTE,
-        service._closed_on_note(None, "2026-10-01"),  # #279's Closed on set/clear/edit
-    ]
-    assert all(any(w.startswith(p) for p in scoring_service.HOUSEKEEPING_NOTE_PREFIXES)
-               for w in written)
-    rendered = scoring_service.not_housekeeping_sql("ch.message")
-    assert rendered.count("NOT starts_with(ch.message, '") == 4 and "%" not in rendered
-
-
 def test_last_touch_excludes_housekeeping_notes_so_archiving_moves_no_clock():
-    """Today panel, stale deals, the nudges and Weekly Touches (via TOUCH_AT_SQL) all
-    read LAST_TOUCH_SQL, so all of them now agree an audit note is not a touch."""
-    predicate = scoring_service.not_housekeeping_sql("ch.message")
+    """Staleness and customer contact share the housekeeping exclusion."""
+    predicate = last_contact.live_note_sql("ch")
     assert predicate in service.LAST_TOUCH_SQL
-    assert service.LAST_TOUCH_SQL in service.TOUCH_AT_SQL
+    assert " ".join(last_contact.last_contact_sql("deal", "d.id").split()) in " ".join(
+        service.TOUCH_AT_SQL.split()
+    )
+    assert "d.updated_at" not in service.TOUCH_AT_SQL
+    assert "%" not in service.TOUCH_AT_SQL
     assert "%" not in service.LAST_TOUCH_SQL
+
+
+def test_resolver_follows_company_merge_chain(rec):
+    service.resolve_or_create_company_ids(["Duplicate"])
+    assert "company_follow_merge(co.id) AS id" in rec.sql_containing("SELECT t.n AS raw")
+
+
+@pytest.mark.parametrize("sort_by, order", [
+    ("updated_at", "d.updated_at DESC, d.id DESC"),
+    ("closed_on", "d.closed_on DESC NULLS LAST, d.id DESC"),
+])
+def test_list_deals_sort(rec, sort_by, order):
+    kwargs = {} if sort_by == "updated_at" else {"sort_by": sort_by}
+    service.list_deals(stage="won", limit=1000, **kwargs)
+    assert f"ORDER BY {order} LIMIT %s" in rec.sql_containing("FROM deals")
+    assert rec.params_for("FROM deals") == ["won", 1000]
+
+
+def test_list_deals_unknown_sort_refused_before_io(rec):
+    with pytest.raises(ValueError, match="sort_by"):
+        service.list_deals(sort_by="bogus")
+    assert rec.calls == []

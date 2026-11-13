@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../core/api/client';
 import { rowIsGone, writeMayHaveLanded } from './usePatchableAssembly';
 import type { CrmCompany } from '../core/types';
+import { CompanyMergeDialog } from './components/CompanyMergeDialog';
 import { CompanyForm } from './components/CompanyForm';
 import { ActivityTimeline } from './components/ActivityTimeline';
 import { CustomFieldsSection } from './components/CustomFieldsSection';
@@ -42,6 +43,7 @@ export function CompanyDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
   const [company, setCompany] = useState<CrmCompany | null>(null);
   const [loading, setLoading] = useState(true);
   const [showEdit, setShowEdit] = useState(false);
+  const [showMerge, setShowMerge] = useState(false);
   // Bumped on modal save so the self-fetching Custom Fields section remounts + refetches.
   const [cfVersion, setCfVersion] = useState(0);
 
@@ -130,6 +132,8 @@ export function CompanyDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
           </div>
           <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
             <button onClick={() => setShowEdit(true)} style={{ ...btnSecondary, ...btnSmall }}>Edit</button>
+            {!company.merged_into_id && <button onClick={() => setShowMerge(true)}
+              style={{ ...btnSecondary, ...btnSmall }}>Merge into…</button>}
             <button onClick={handleDelete} style={{ ...btnDanger, ...btnSmall }}>Delete</button>
           </div>
         </div>
@@ -143,6 +147,10 @@ export function CompanyDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
           <span style={{ ...mono(10), color: INK_DIM }}>Owner</span>
           <OwnerName ownerId={company.owner_id} />
         </p>
+        {company.merged_into_id && <p>Merged into <button style={btnSecondary}
+          onClick={() => navigate(`/crm/companies/${company.merged_into_id}`)}>
+          company #{company.merged_into_id}
+        </button></p>}
       </div>
 
       {/* Notes */}
@@ -237,6 +245,9 @@ export function CompanyDetailPage({ onChanged, onDeleted, onWriteUncertain }: Co
         sectionStyle={{ marginTop: 24, borderTop: `1px solid ${LINE_STRONG}`, paddingTop: 24 }}
       />
 
+      {showMerge && <CompanyMergeDialog absorbed={company} onCancel={() => setShowMerge(false)}
+        onWriteUncertain={async () => { onWriteUncertain?.(); await load(); setShowMerge(false); }}
+        onMerged={async sid => { setShowMerge(false); await load(); navigate(`/crm/companies/${sid}`); }} />}
       {showEdit && <CompanyForm company={company} onWriteUncertain={onWriteUncertain} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); setCfVersion(v => v + 1); }} />}
     </div>
   );

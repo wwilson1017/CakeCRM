@@ -129,6 +129,38 @@ describe('RemindersPage', () => {
     expect(container.textContent).toContain('Voided');
   });
 
+  it.each([
+    ['upcoming', 'Pause', 'pause', 'paused', 'Paused'],
+    ['paused', 'Resume', 'resume', 'upcoming', 'Upcoming'],
+  ] as const)('%s reminder can %s and updates its row', async (status, label, action, next, nextLabel) => {
+    let resolve!: (row: CrmReminder) => void;
+    await mount([reminder({ status })], () => new Promise<CrmReminder>(r => { resolve = r; }));
+    await openRow('Call the bakery');
+    expect(button('Edit')).toBeTruthy();
+    expect(button('Void')).toBeTruthy();
+    expect(() => button(label === 'Pause' ? 'Resume' : 'Pause')).toThrow();
+    await act(async () => { button(label).click(); });
+    expect(button(label).disabled).toBe(true);
+    expect(apiMock).toHaveBeenCalledWith(`/api/crm/reminders/1/${action}`, { method: 'POST' });
+    await act(async () => { resolve(reminder({ status: next })); });
+    await settle();
+    expect(container.querySelector('tbody')?.textContent).toContain(nextLabel);
+    expect(button(label === 'Pause' ? 'Resume' : 'Pause').disabled).toBe(false);
+  });
+
+  it('shows a failed pause inline, keeps the detail open and refreshes an uncertain write', async () => {
+    await mount([reminder()], () => { throw new Error('Connection lost'); });
+    await openRow('Call the bakery');
+    const readsBefore = apiMock.mock.calls.filter(c => String(c[0]).startsWith('/api/crm/reminders?')).length;
+    await act(async () => { button('Pause').click(); });
+    await settle();
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe('Connection lost');
+    expect(button('Pause').disabled).toBe(false);
+    expect(container.querySelector('tbody')?.textContent).toContain('Upcoming');
+    expect(apiMock.mock.calls.filter(c => String(c[0]).startsWith('/api/crm/reminders?')).length)
+      .toBeGreaterThan(readsBefore);
+  });
+
   it('remind again posts only the new date and time, and adds the new row', async () => {
     const writes: [string, unknown][] = [];
     await mount([reminder({ status: 'fired' })], (url, init) => {

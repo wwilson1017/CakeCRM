@@ -27,6 +27,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { api } from '../core/api/client';
 import { getToken, TOKEN_KEY } from '../core/auth/tokenUtils';
 import { parseUTC } from '../crm/gtd/util';
+import { shrinkImage } from '../shared/shrinkImage';
 import { toast } from '../shared/toast';
 import type {
   ActiveRecordContext,
@@ -148,6 +149,7 @@ function mapServerMessages(serverMsgs: ServerMessage[]): ChatMessage[] {
       id: sm.id,
       role: sm.role,
       content: sm.content,
+      attachments: sm.attachments,
       model: sm.model,
       pendingConfirmations: calls
         .filter((tc) => isPending(tc.result))
@@ -636,7 +638,7 @@ export function useAssistantChat(
 
   const sendMessage = useCallback((text: string, files?: File[]) => {
     if (activeTurnRef.current) return; // a turn is already streaming
-    const userMsg: ChatMessage = { id: newId(), role: 'user', content: text };
+    const userMsg: ChatMessage = { id: newId(), role: 'user', content: text, attachments: files?.map(f => f.name) };
     const turn = startAssistant([userMsg]);
     // Snapshot the record for THIS message's turn so its post-confirm continuation
     // reuses it (keyed by the assistant message id).
@@ -653,16 +655,21 @@ export function useAssistantChat(
       turn_id: turn.turnId,
     };
     if (files && files.length) {
-      const fd = new FormData();
-      fd.append('payload', JSON.stringify(payload));
-      // Its own form field: the upload route reads it beside `payload`, not inside it.
-      fd.append('turn_id', turn.turnId);
-      for (const f of files) fd.append('files', f);
-      void runStream(fd, true, turn);
+      void (async () => {
+        const prepared = await Promise.all(files.map(f => shrinkImage(f)));
+        // Resizing yields: Stop, unmount or switching threads may have ended this turn.
+        if (!isLive(turn)) return;
+        const fd = new FormData();
+        fd.append('payload', JSON.stringify(payload));
+        // Its own form field: the upload route reads it beside `payload`, not inside it.
+        fd.append('turn_id', turn.turnId);
+        for (const f of prepared) fd.append('files', f);
+        await runStream(fd, true, turn);
+      })();
     } else {
       void runStream(JSON.stringify(payload), false, turn);
     }
-  }, [runStream, startAssistant, wireTurn]);
+  }, [isLive, runStream, startAssistant, wireTurn]);
 
   const continueTurn = useCallback((ctx: TurnContext | undefined) => {
     if (!convIdRef.current || activeTurnRef.current) return;

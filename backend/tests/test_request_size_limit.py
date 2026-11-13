@@ -339,8 +339,10 @@ def test_each_ceiling_is_exactly_its_feature_cap_plus_the_envelope():
     """
     from branding.router import MAX_LOGO_BYTES
     from crm.router import MAX_UPLOAD_BYTES
+    from voice import service as voice_service
 
     expected = {
+        "/api/voice/transcribe": voice_service.MAX_AUDIO_BYTES,
         "/api/crm/chatter/note/{note_id}/attachments": attachment_service.MAX_ATTACHMENT_BYTES,
         "/api/crm/import": MAX_UPLOAD_BYTES,
         "/api/crm/smart-import/parse": MAX_UPLOAD_BYTES,
@@ -362,9 +364,9 @@ def test_each_ceiling_is_exactly_its_feature_cap_plus_the_envelope():
         )
 
 
-#: Deliberately unbounded, with the reason. The assistant's legitimate maximum is
-#: MAX_FILES x MAX_FILE_SIZE = 50 MB against the same 64 MB backstop, so the global ceiling
-#: is already the tight one there and a row would only restate it.
+#: Photos (#345) share the assistant upload route and MAX_FILES x MAX_FILE_SIZE cap
+#: (50 MB). The 64 MB backstop remains the tight one for the multipart request,
+#: so no route-specific row is added.
 _EXEMPT_UPLOAD_ROUTES = {"/api/assistant/chat/upload"}
 
 

@@ -29,6 +29,7 @@ connected or the recipient has no link.
 import asyncio
 import json
 import logging
+import re
 
 from assistant import engine
 from assistant.history import list_pending_tool_uses
@@ -59,6 +60,19 @@ _NO_PROVIDER = (
     "⚠️ No AI provider is connected, so I can't chat yet. Add one in CakeCRM → Settings "
     "to start using the assistant."
 )
+
+
+# Whole-message assent only (#331): punctuation and emoji are ignored, but
+# "yes, but change the title" still cancels the batch and starts a new turn.
+_APPROVE_PHRASES = frozenset({
+    "y", "yes", "yep", "yeah", "yup", "ok", "okay", "sure", "approve", "approved",
+    "confirm", "confirmed", "go ahead", "do it", "please do", "go for it",
+    "yes please", "ok go ahead", "sounds good", "looks good",
+})
+
+
+def is_approval(text: str) -> bool:
+    return " ".join(re.sub(r"[^a-z]+", " ", text.lower()).split()) in _APPROVE_PHRASES
 
 
 # ── Outbound (the channel notifications/delivery consumes) ──────────────────
@@ -194,10 +208,61 @@ async def _handle_message(msg: dict) -> None:
         await _send_text(chat_id, _LINK_HELP, token)
         return
 
+    if await _try_typed_approval(link, token, text):
+        return
+
+    # Any other message cancels the open batch before capture and the provider check:
+    # abandoned buttons must not execute a write the user has moved on from, even
+    # with no provider configured. Capture never reaches _run_turn.
+    await _cancel_stale_batch(link)
+
     if await _try_capture(chat_id, text, token, link["user_id"]):
         return
 
     await _run_turn(link, token, user_text=text)
+
+
+async def _cancel_stale_batch(link: dict) -> None:
+    """Deny against the existing conversation and clear only the batch we saw."""
+    stale = link.get("pending_msg_id")
+    stale_conv = link.get("conversation_id")
+    if stale and stale_conv:
+        await _auto_deny_batch(stale_conv, stale, link["user"])
+        # A batch installed in between keeps its live buttons.
+        await asyncio.to_thread(store.clear_pending_msg, link["id"], stale)
+        link["pending_msg_id"] = ""
+
+
+async def _try_typed_approval(link: dict, token: str, text: str) -> bool:
+    """Approve the pending batch for the seat already authorized by find_link.
+
+    As with a button press, resolve_confirmation verifies conversation ownership
+    before claiming each action. The assent itself never reaches the model.
+    """
+    msg_id = link.get("pending_msg_id")
+    conv = link.get("conversation_id")
+    if not msg_id or not conv or not is_approval(text):
+        return False
+    user = link["user"]
+    registry = ToolRegistry(user=user)
+    approved = failed = 0
+    for tuid in await asyncio.to_thread(list_pending_tool_uses, conv, msg_id):
+        result = await asyncio.to_thread(
+            engine.resolve_confirmation, registry, conv, tuid, "approve", msg_id, user=user,
+        )
+        if result.get("status"):  # already_resolved / not_found: nothing approved now
+            continue
+        value = result.get("result")
+        if isinstance(value, dict) and "error" in value:
+            failed += 1
+        else:
+            approved += 1
+    _paused_deal_refs.setdefault(link["id"], {}).update(registry.deal_refs)
+    outcome = "⚠️ Action failed." if failed else "✅ Approved." if approved else "Already handled."
+    await _send_text(link["chat_id"], outcome, token)
+    if await asyncio.to_thread(store.try_consume_batch, link["id"], msg_id):
+        await _run_turn(link, token, user_text=None)
+    return True
 
 
 async def _try_capture(chat_id: str, text: str, token: str, owner_id: int) -> bool:
@@ -335,20 +400,6 @@ async def _run_turn(link: dict, token: str, user_text: str | None) -> None:
         return
     user = link["user"]
 
-    # A new user message cancels any still-open confirmation batch FIRST — before the
-    # provider check — so abandoned Approve/Deny buttons can't later execute a write the
-    # user has moved on from, even when no provider is configured. The pending batch
-    # lives on the existing conversation, so deny against that id directly.
-    if user_text is not None:
-        stale = link.get("pending_msg_id")
-        stale_conv = link.get("conversation_id")
-        if stale and stale_conv:
-            await _auto_deny_batch(stale_conv, stale, user)
-            # Conditional: clear only if this is still the batch we just denied, so a
-            # batch installed in between keeps its live buttons.
-            await asyncio.to_thread(store.clear_pending_msg, link["id"], stale)
-            link["pending_msg_id"] = ""
-
     provider = await asyncio.to_thread(get_ai_provider)
     if provider is None:
         await _send_text(chat_id, _NO_PROVIDER, token)
@@ -445,7 +496,8 @@ async def _send_confirm(link: dict, chat_id, token: str, evt: dict) -> None:
     body = f"🔧 {desc}"
     if args_str:
         body += f"\n\n{args_str}"
-    body += "\n\nApprove this action?"
+    body += ("\n\nApprove this action? Tap a button, or reply yes to approve every pending change. "
+             "Any other message cancels them.")
     # Bind the button to its originating batch via an 8-char msg_id prefix. On a press
     # we require this to still match the link's pending_msg_id, so a stale button from a
     # superseded batch is rejected — otherwise it would resolve against the CURRENT

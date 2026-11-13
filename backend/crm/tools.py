@@ -35,6 +35,7 @@ from core.postgres import pg_fetchall
 from crm import (
     analytics_service,
     chatter_service,
+    company_merge_service,
     field_service,
     provenance_service,
     scoring_service,
@@ -994,6 +995,37 @@ CRM_TOOL_DEFS = [
         },
         "kind": "integration",
     },
+    {
+        "name": "crm_preview_company_merge",
+        "writes": False,
+        "description": "Preview the current estimate for merging one company into another: contacts, deals (including archived), open todos that follow, copied notes, and fields filled from the duplicate. Writes nothing. Show these counts before crm_merge_companies; the merge recomputes them.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "survivor_id": {"type": "integer", "description": "The company to KEEP"},
+                "absorbed_id": {"type": "integer", "description": "The duplicate that will be archived"},
+                "rename_to": {"type": "string", "description": "Rename the survivor as part of the merge"},
+            },
+            "required": ["survivor_id", "absorbed_id"],
+        },
+        "kind": "integration",
+    },
+    {
+        "name": "crm_merge_companies",
+        "writes": True,
+        "description": "Merge a duplicate company into the one being kept. Contacts and deals (and their todos and activity) move; notes are copied with a merged-from marker; custom fields and blank standard fields are gap-filled. The duplicate is archived, never deleted, with who did it and why. Confirm which company survives before calling; a reason is required.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "survivor_id": {"type": "integer", "description": "The company to KEEP"},
+                "absorbed_id": {"type": "integer", "description": "The duplicate that will be archived"},
+                "rename_to": {"type": "string", "description": "Rename the survivor as part of the merge"},
+                "reason": {"type": "string", "description": "Why — REQUIRED, recorded with who did it"},
+            },
+            "required": ["survivor_id", "absorbed_id", "reason"],
+        },
+        "kind": "integration",
+    },
     # ── Custom fields (6 tools) ───────────────────────────────────────────────
     # User-defined fields on contacts/companies/deals. Get tools discover the field
     # schema (types/options/keys); with an id they also read that record's values.
@@ -1515,9 +1547,9 @@ def crm_delete_contact(contact_id: int) -> dict:
 _DEAL_SUMMARY_FIELDS = (
     "id", "title", "stage", "value", "currency", "probability",
     "expected_close_date", "closed_on", "contact_id", "contact_name", "company_id",
-    "company_name", "last_activity_at", "archived_at",
+    "company_name", "last_contact_at", "archived_at",
     # lost_reason is THE field a quarter review reads (SALES_GUIDE says so), and
-    # updated_at is the only recency signal a search row carries — last_activity_at
+    # updated_at is the only recency signal a search row carries — last_contact_at
     # is computed by get_pipeline only. Dropping either made the projection lossy for
     # the exact queries these tools exist to answer.
     "lost_reason", "updated_at",
@@ -1919,6 +1951,26 @@ def crm_update_company(company_id: int, actor_id: int | None = None, **kwargs) -
     return _with_target(result, "company", company_id, record=result)
 
 
+def crm_preview_company_merge(survivor_id: int, absorbed_id: int, rename_to: str | None = None) -> dict:
+    try:
+        return company_merge_service.plan_merge(survivor_id, absorbed_id, rename_to=rename_to)
+    except (LookupError, ValueError) as e:
+        return {"error": str(e)}
+
+
+def crm_merge_companies(survivor_id: int, absorbed_id: int, reason: str = "",
+                        rename_to: str | None = None, actor_id: int | None = None) -> dict:
+    try:
+        plan = company_merge_service.merge_companies(
+            survivor_id, absorbed_id, actor_id=actor_id, reason=reason, rename_to=rename_to,
+        )
+    except (LookupError, ValueError) as e:
+        return {"error": str(e)}
+    except psycopg2.errors.UniqueViolation:
+        return {"error": "Another company already has that name"}
+    return _with_target({"ok": True, "merged_from": absorbed_id, "plan": plan}, "company", survivor_id)
+
+
 # ── Install setup status (issue #200) ─────────────────────────────────────────
 
 def crm_get_setup_status(user_id: int | None = None) -> dict:
@@ -2249,6 +2301,8 @@ TOOL_EXECUTORS = {
     "crm_list_companies": crm_list_companies,
     "crm_create_company": crm_create_company,
     "crm_update_company": crm_update_company,
+    "crm_preview_company_merge": crm_preview_company_merge,
+    "crm_merge_companies": crm_merge_companies,
     # Custom fields
     "crm_get_contact_fields": crm_get_contact_fields,
     "crm_set_contact_fields": crm_set_contact_fields,
@@ -2413,6 +2467,7 @@ def _identity_executors(user: dict | None) -> dict[str, Callable[..., dict]]:
         # on the row the archived banner reads.
         "crm_archive_deal": bind_server_args(crm_archive_deal, actor_id=user_id),
         "crm_merge_deals": bind_server_args(crm_merge_deals, actor_id=user_id),
+        "crm_merge_companies": bind_server_args(crm_merge_companies, actor_id=user_id),
         "crm_update_contact": bind_server_args(crm_update_contact, actor_id=user_id),
         # Who set, moved or cleared a deal's Closed on date (#279) — the author of its
         # "Closed on: …" note. Each of these can move a deal into or out of won.

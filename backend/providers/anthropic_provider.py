@@ -15,7 +15,7 @@ import time
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
 
-from providers.base import AIProvider
+from providers.base import AIProvider, rate_limit_event
 from providers.windows import get_context_window
 
 if TYPE_CHECKING:  # annotations only — never imported at runtime
@@ -49,7 +49,22 @@ def _get_client(api_key: str = "") -> anthropic.AsyncAnthropic:
     return client
 
 
+def _api_content(content):
+    """Translate neutral images into Anthropic base64 sources."""
+    if not isinstance(content, list):
+        return content
+    return [
+        {"type": "image", "source": {"type": "base64", "media_type": part["media_type"], "data": part["data"]}}
+        if isinstance(part, dict) and part.get("type") == "image" else part
+        for part in content
+    ]
+
+
 class AnthropicProvider(AIProvider):
+    @property
+    def supports_images(self) -> bool:
+        return self.model.startswith("claude-")
+
     def __init__(self, api_key: str = "", model: str = "claude-opus-4-8"):
         super().__init__(model=model)
         self.api_key = api_key
@@ -148,7 +163,8 @@ class AnthropicProvider(AIProvider):
 
         # Convert messages: filter to user/assistant only
         api_messages = [
-            m for m in messages if m.get("role") in ("user", "assistant")
+            {**m, "content": _api_content(m.get("content"))}
+            for m in messages if m.get("role") in ("user", "assistant")
         ]
         api_messages = self._cache_last_user_message(api_messages)
 
@@ -206,8 +222,8 @@ class AnthropicProvider(AIProvider):
                 final_message = await stream.get_final_message()
                 stop_reason = final_message.stop_reason
 
-        except anthropic.RateLimitError:
-            yield {"type": "error", "error": "Claude is rate-limited. Please try again in a moment."}
+        except anthropic.RateLimitError as e:
+            yield rate_limit_event(self.model, e)
             yield {"type": "_turn_complete", "tool_calls": [], "stop_reason": "error"}
             return
 

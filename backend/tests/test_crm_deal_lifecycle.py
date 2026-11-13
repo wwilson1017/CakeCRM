@@ -130,7 +130,8 @@ def test_every_written_column_is_compared_and_cast(monkeypatch, rec, fake_conn):
     one gap is enough). A comparison left UNCAST is just as bad: assignment and comparison
     contexts disagree, so an uncast INTEGER silently bumps on a fractional no-op and an
     uncast TEXT raises outright."""
-    conn = fake_conn(monkeypatch, service, fetchone_results=[("lead", None, None, None)])
+    # (3,) answers company_follow_merge (#334), which runs before the deal lock.
+    conn = fake_conn(monkeypatch, service, fetchone_results=[(3,), ("lead", None, None, None)])
     rec.fetchone_queue = [{"id": 1}]
     service.update_deal(1, title="T", value=5, notes="n", probability=20,
                         expected_close_date="2026-09-01", currency="USD",
@@ -259,13 +260,13 @@ def test_mark_deal_lost_records_reason_and_a_timeline_note(monkeypatch, rec, fak
     rec.fetchone_queue = [{"id": 1, "stage": "lost"}]
     notes = []
     monkeypatch.setattr(chatter_service, "add_note",
-                        lambda t, i, m, author_id=None: notes.append((t, i, m, author_id)))
+                        lambda t, i, m, author_id=None, system_note=False: notes.append((t, i, m, author_id, system_note)))
     service.mark_deal_lost(1, lost_reason="chose a competitor")
     _, params = next((s, p) for s, p in conn.executed if "UPDATE deals SET" in s)
     assert "lost" in params and 0 in params and "chose a competitor" in params
     # NULL author: the assistant tool is this default's caller, and Phase A does not thread
     # identity into tool executors, so "unattributed" is the honest record there.
-    assert notes == [("deal", 1, "Deal lost — chose a competitor", None)]
+    assert notes == [("deal", 1, "Deal lost — chose a competitor", None, True)]
 
 
 def test_mark_deal_lost_credits_the_author_when_one_is_given(monkeypatch, rec, fake_conn):
@@ -279,9 +280,9 @@ def test_mark_deal_lost_credits_the_author_when_one_is_given(monkeypatch, rec, f
     rec.fetchone_queue = [{"id": 1, "stage": "lost"}]
     notes = []
     monkeypatch.setattr(chatter_service, "add_note",
-                        lambda t, i, m, author_id=None: notes.append((t, i, m, author_id)))
+                        lambda t, i, m, author_id=None, system_note=False: notes.append((t, i, m, author_id, system_note)))
     service.mark_deal_lost(1, lost_reason="price", author_id=42)
-    assert notes == [("deal", 1, "Deal lost — price", 42)]
+    assert notes == [("deal", 1, "Deal lost — price", 42, True)]
 
 
 def test_mark_deal_lost_without_a_reason_writes_no_note(monkeypatch, rec, fake_conn):
@@ -338,6 +339,7 @@ def test_archiving_a_live_deal_records_who_and_why_in_one_transaction(monkeypatc
     assert update[1:] == (5, "duplicate of #12", 1)  # trimmed reason, actor, id
     note_sql, note = next((s, p) for s, p in conn.executed if "INSERT INTO crm_chatter" in s)
     assert "author_id" in note_sql
+    assert "system_note" in note_sql and note_sql.endswith("true)")
     assert note[:3] == ("deal", 1, "Archived — duplicate of #12") and note[4] == 5
     # The state change and its audit note ride ONE cursor in ONE transaction.
     assert conn.entries == 1 and len(set(conn.executed_by)) == 1
@@ -365,7 +367,8 @@ def test_restore_clears_who_and_why_and_writes_a_restored_note(monkeypatch, rec,
     service.archive_deal(1, archived=False, actor_id=5)
     assert ("UPDATE deals SET archived_at = NULL, archived_by = NULL, archived_reason = NULL "
             "WHERE id = %s") in _stmts(conn)
-    note = next(p for s, p in conn.executed if "INSERT INTO crm_chatter" in s)
+    note_sql, note = next((s, p) for s, p in conn.executed if "INSERT INTO crm_chatter" in s)
+    assert "system_note" in note_sql and note_sql.endswith("true)")
     assert note[2] == scoring_service.RESTORE_NOTE and note[4] == 5
 
 
@@ -420,6 +423,8 @@ def test_merge_repoints_moves_copies_and_archives_the_source(monkeypatch, rec, f
     assert any("UPDATE todos SET deal_id = %s" in s for s in stmts)
     # Notes are COPIED (source keeps its own thread for the restore case).
     assert any("INSERT INTO crm_chatter" in s and "left(%s || message, %s)" in s for s in stmts)
+    copy_sql = next(s for s in stmts if "left(%s || message, %s)" in s)
+    assert copy_sql.count("archived, system_note") == 2
     # Custom fields gap-fill only — the target's own SET values must win, but a
     # CLEARED target field (an existing row holding '') must still be filled.
     upsert = next(s for s in stmts if "INSERT INTO crm_field_values" in s)
@@ -460,7 +465,9 @@ def test_merge_records_the_actor_and_keeps_the_source_note_off_the_target(
     stmts = _stmts(conn)
     copy_at = next(i for i, s in enumerate(stmts) if "left(%s || message, %s)" in s)
     notes = [(i, p) for i, (s, p) in enumerate(conn.executed)
-             if s.startswith("INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id)")]
+             if s.startswith("INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id, system_note)")]
+    assert len(notes) == 2
+    assert all(stmts[i].endswith("true)") for i, _ in notes)
     target_note = next(p for _, p in notes if p[0] == 1)
     assert target_note[-1] == 5  # the "Merged deal #2" note credits the actor
     src_at, src_note = next((i, p) for i, p in notes if p[1] == 2)
@@ -538,7 +545,7 @@ def test_get_deal_detail_embeds_custom_fields(rec, monkeypatch):
 def test_pipeline_excludes_archived_deals(rec):
     rec.fetchall_queue = [[], []]
     service.get_pipeline()
-    assert "d.archived_at IS NULL" in rec.sql_containing("last_activity_at")
+    assert "d.archived_at IS NULL" in rec.sql_containing("last_contact_at")
     assert "archived_at IS NULL" in rec.sql_containing("GROUP BY stage")
 
 
@@ -549,7 +556,7 @@ def test_pipeline_include_archived_opens_only_the_deals_query(rec):
     see. A regression here is silent: the board looks right and the totals lie."""
     rec.fetchall_queue = [[], []]
     service.get_pipeline(include_archived=True)
-    assert "archived_at IS NULL" not in rec.sql_containing("last_activity_at")
+    assert "archived_at IS NULL" not in rec.sql_containing("last_contact_at")
     assert "archived_at IS NULL" in rec.sql_containing("GROUP BY stage")
 
 
@@ -557,7 +564,7 @@ def test_pipeline_include_archived_still_binds_the_stage_filter(rec):
     """Dropping the predicate rebuilt the WHERE clause — the stage param must survive it."""
     rec.fetchall_queue = [[], []]
     service.get_pipeline(stage="lead", include_archived=True)
-    sql = rec.sql_containing("last_activity_at")
+    sql = rec.sql_containing("last_contact_at")
     assert "d.stage = %s" in sql
     assert "archived_at IS NULL" not in sql
     assert list(rec.calls[0][1]) == ["lead"]
@@ -567,7 +574,7 @@ def test_pipeline_stage_filter_alone_keeps_the_sweep(rec):
     """The rebuilt WHERE must AND both conditions when only `stage` is given."""
     rec.fetchall_queue = [[], []]
     service.get_pipeline(stage="lead")
-    sql = rec.sql_containing("last_activity_at")
+    sql = rec.sql_containing("last_contact_at")
     assert "d.archived_at IS NULL" in sql and "d.stage = %s" in sql
 
 

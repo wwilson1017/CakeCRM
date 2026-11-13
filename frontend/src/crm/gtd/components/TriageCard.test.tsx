@@ -24,6 +24,8 @@ vi.mock('../api', () => ({
   createProject: createProjectMock,
 }));
 
+import { saveTriageLayout } from '../triageLayout';
+import { resetUndoQueue, takeAll } from '../undoQueue';
 import { TriageCard } from './TriageCard';
 import { toast } from '../../../shared/toast';
 import type { Todo, TodoProject } from '../types';
@@ -73,6 +75,8 @@ let onChanged: Mock<() => void>;
 let onEdit: Mock<(t: Todo) => void>;
 
 beforeEach(() => {
+  saveTriageLayout('expanded');
+  resetUndoQueue();
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -89,10 +93,13 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  resetUndoQueue();
   vi.restoreAllMocks(); // the toast spies are per-test — don't leak them
 });
 
-function render(todo: Partial<Todo> = {}, contexts = ['@calls', '@errands'], projects = [PROJECT]) {
+function render(
+  todo: Partial<Todo> = {}, contexts = ['@calls', '@errands'], projects = [PROJECT], tags = ['errand', 'house'],
+) {
   // Each render is a fresh row unless the case pins its own `updated_at`, so a re-render
   // stands for the parent's refetch landing rather than for nothing at all.
   const next: Todo = { ...TODO, updated_at: nextStamp(), ...todo };
@@ -102,6 +109,7 @@ function render(todo: Partial<Todo> = {}, contexts = ['@calls', '@errands'], pro
         todo={next}
         projects={projects}
         contexts={contexts}
+        tags={tags}
         onProcessed={onProcessed}
         onChanged={onChanged}
         onEdit={onEdit}
@@ -973,13 +981,13 @@ describe('writes decide against the state as it is NOW', () => {
   });
 });
 
-describe('Drop, the card\'s discard (#299)', () => {
-  it('drops the item through the resolving write, never a delete', async () => {
+describe('Delete, the card\'s discard (#299)', () => {
+  it('archives the item through the resolving write and queues Undo', async () => {
     const confirm = vi.spyOn(window, 'confirm');
     render();
-    const drop = [...container.querySelectorAll('button')].find(b => b.textContent === 'Drop');
-    if (!drop) throw new Error('no Drop button');
-    expect([...container.querySelectorAll('button')].some(b => b.textContent === 'Delete')).toBe(false);
+    const drop = [...container.querySelectorAll('button')].find(b => b.textContent === 'Delete');
+    if (!drop) throw new Error('no Delete button');
+
     setValue(notesBox(), 'not worth doing');
     click(drop);
     await settle();
@@ -988,7 +996,123 @@ describe('Drop, the card\'s discard (#299)', () => {
     expect(updateTodoMock).toHaveBeenNthCalledWith(1, 7, { notes: 'not worth doing' });
     expect(updateTodoMock).toHaveBeenLastCalledWith(7, { status: 'dropped' });
     expect(onProcessed).toHaveBeenCalledTimes(1);
+    expect(takeAll().map(e => [e.kind, e.restore])).toEqual([['deleted', { status: 'inbox' }]]);
     expect(confirm).not.toHaveBeenCalled(); // recoverable, so no "are you sure"
+  });
+});
+
+const tagsInput = () => container.querySelector<HTMLInputElement>('input[aria-label="Tags"]')!;
+
+describe('step 2 — every field says what it is', () => {
+  it('labels project, due date, bring-back, notes and tags', () => {
+    render();
+    const shown = [...container.querySelectorAll('span')].map(e => e.textContent);
+    for (const name of ['Project', 'Due date', 'Bring back on', 'Notes', 'Tags']) expect(shown).toContain(name);
+  });
+});
+
+describe('step 2 — tags without leaving triage', () => {
+  it('seeds from the todo and saves on blur without filing the item', async () => {
+    render({ tags: ['house'] });
+    expect(tagsInput().value).toBe('house');
+    setValue(tagsInput(), 'house, 5 min');
+    unfocus(tagsInput());
+    await settle();
+
+    expect(updateTodoMock).toHaveBeenCalledWith(7, { tags: ['house', '5 min'] });
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    expect(onProcessed).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when the tags only changed spacing', async () => {
+    render({ tags: ['house', 'errand'] });
+    setValue(tagsInput(), 'house,errand ');
+    unfocus(tagsInput());
+    await settle();
+    expect(updateTodoMock).not.toHaveBeenCalled();
+  });
+
+  it('offers known tags not already on the item, narrowed by what is typed, and saves a pick', async () => {
+    render({ tags: ['house'] });
+    expect(() => button('+ house')).toThrow();
+    setValue(tagsInput(), 'house, err');
+    click(button('+ errand'));
+    await settle();
+
+    expect(tagsInput().value).toBe('house, errand');
+    expect(updateTodoMock).toHaveBeenCalledWith(7, { tags: ['house', 'errand'] });
+    expect(onProcessed).not.toHaveBeenCalled();
+  });
+
+  it('carries tags just typed into the write that files the item', async () => {
+    render();
+    setValue(tagsInput(), 'errand');
+    setValue(contextPicker(), '0'); // '@calls'
+    await settle();
+
+    expect(updateTodoMock).toHaveBeenNthCalledWith(1, 7, { tags: ['errand'] });
+    expect(updateTodoMock).toHaveBeenNthCalledWith(2, 7, { context: '@calls', status: 'next_action' });
+  });
+
+  it('holds the filing write until a tags save already in flight has landed', async () => {
+    // A repeating todo's next occurrence copies the row's tags, so filing must not overtake
+    // the save the blur started.
+    let land: () => void = () => {};
+    updateTodoMock.mockImplementationOnce((_id, fields) => new Promise(r => {
+      land = () => r({ ...TODO, ...fields, updated_at: nextStamp() });
+    }));
+    render();
+    setValue(tagsInput(), 'errand');
+    unfocus(tagsInput());
+    setValue(contextPicker(), '0'); // '@calls'
+    await settle();
+    expect(updateTodoMock).toHaveBeenCalledTimes(1);
+
+    land();
+    await settle();
+    expect(updateTodoMock).toHaveBeenNthCalledWith(1, 7, { tags: ['errand'] });
+    expect(updateTodoMock).toHaveBeenNthCalledWith(2, 7, { context: '@calls', status: 'next_action' });
+    expect(updateTodoMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('toasts a rejected tags save even when filing follows at once', async () => {
+    // Filing clears the card's inline error and swaps the card, so the toast is the one
+    // place the failure is still said.
+    const err = vi.spyOn(toast, 'error').mockImplementation(() => {});
+    updateTodoMock.mockRejectedValueOnce(new Error('Too many tags'));
+    render();
+    setValue(tagsInput(), 'errand');
+    setValue(contextPicker(), '0'); // '@calls'
+    await settle();
+
+    expect(err).toHaveBeenCalledWith('Too many tags');
+    expect(updateTodoMock).toHaveBeenNthCalledWith(2, 7, { context: '@calls', status: 'next_action' });
+    expect(onProcessed).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the Edit sheet only once a tags save in flight has landed', async () => {
+    let land: () => void = () => {};
+    updateTodoMock.mockImplementationOnce((_id, fields) => new Promise(r => {
+      land = () => r({ ...TODO, ...fields, updated_at: nextStamp() });
+    }));
+    render();
+    setValue(tagsInput(), 'house');
+    unfocus(tagsInput());
+    click(button('Edit'));
+    await settle();
+    expect(onEdit).not.toHaveBeenCalled();
+
+    land();
+    await settle();
+    expect(onEdit).toHaveBeenCalledWith(expect.objectContaining({ tags: ['house'] }));
+  });
+
+  it('hands the Edit sheet the tags on screen', async () => {
+    render();
+    setValue(tagsInput(), 'house');
+    click(button('Edit'));
+    await settle();
+    expect(onEdit).toHaveBeenCalledWith(expect.objectContaining({ tags: ['house'] }));
   });
 });
 
@@ -1207,5 +1331,25 @@ describe('Edit waits for every write the sheet would race (#297)', () => {
 
     expect(onEdit).toHaveBeenCalledTimes(1);
     expect(onEdit.mock.calls[0][0]).toMatchObject({ notes: 'slow note', star: true, project_id: 3 });
+  });
+});
+
+
+describe('compact triage', () => {
+  it('shows a notes preview and keeps the resolving controls and Edit', async () => {
+    saveTriageLayout('compact');
+    render({ notes: 'Call before noon', project_id: PROJECT.id }, undefined,
+      [{ ...PROJECT, purpose: 'Hidden purpose', outcome: 'Hidden outcome' }]);
+    for (const name of ['Notes', 'Tags', 'People']) {
+      expect(container.querySelector(`[aria-label="${name}"]`)).toBeNull();
+    }
+    expect(container.querySelector('[data-project-purpose]')).toBeNull();
+    expect(container.querySelector('.line-clamp-2')?.textContent).toBe('Call before noon');
+    for (const name of ['Took 2 minutes — Done ✓', 'Edit', 'Delete']) expect(button(name)).toBeTruthy();
+    expect(container.querySelector('[aria-label="Set context and file this todo"]')).not.toBeNull();
+    expect(container.textContent).toContain('Files it under To Do.');
+    click(button('Edit'));
+    await settle();
+    expect(onEdit.mock.calls[0][0].notes).toBe('Call before noon');
   });
 });

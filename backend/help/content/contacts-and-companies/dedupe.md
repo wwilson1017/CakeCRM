@@ -1,7 +1,7 @@
 ---
 title: Finding duplicates
-description: The duplicate scan is exact matching, not fuzzy. Deals can be merged; contacts and companies cannot.
-aliases: duplicates, dedupe, merge, duplicate contacts, same person, cleanup, merge deals
+description: The duplicate scan is exact matching, not fuzzy. Deals and companies can be merged; contacts cannot.
+aliases: duplicates, dedupe, merge, duplicate contacts, same person, cleanup, merge deals, merge companies, duplicate companies
 admin: false
 ---
 ## The scan
@@ -23,8 +23,7 @@ What it compares:
 
 ## Merging
 
-**The only merge in this product is deal-to-deal.** There is no contact merge and no company
-merge. If someone asks how to merge two contacts, the honest answer is that the product
+**Deals and companies can be merged.** Contacts cannot be merged. If someone asks how to merge two contacts, the honest answer is that the product
 cannot, and the practical route is to move what matters onto the record you are keeping and
 delete the other.
 
@@ -45,9 +44,31 @@ What happens:
 
 Restoring the source later makes it visible again but does not undo any of the above.
 
+## Merging two companies
+
+Call `crm_preview_company_merge` first and show the counts: they are a **current estimate,
+recomputed at merge**. Confirm which company survives, then call `crm_merge_companies` with
+both company ids and a required reason. In Ask mode the merge keeps its approval card.
+The **Merge into…** button on a company's page offers the same flow without an AI provider:
+pick the company to keep, review the preview, say why, then confirm.
+
+- Contacts and deals move, **including archived deals**. Their todos and activity follow
+  through the existing contact/deal links; the preview counts open, non-dropped todos on
+  live deals.
+- Company notes are copied, marked with the source company. The original thread keeps
+  its attachments and mentions; those are not copied.
+- Custom fields and blank domain, industry, phone, address and source fields are filled
+  from the duplicate. The survivor's own populated values win. Different company notes
+  are appended with the source name.
+- The duplicate is **archived, never deleted**, with who merged it and why in its notes.
+  The automatic merge notes do not count as contact.
+  Its spelling continues to resolve to the survivor on future imports and company links.
+- There is **no undo**. A merged duplicate cannot be restored; open its successor instead.
+  A manually archived duplicate can be absorbed, but the survivor must be active.
+
 ## Preventing duplicates in the first place
 
 Search before you create — `crm_find_contact`, `crm_search_companies`, `crm_search_deals`. If
 a near match turns up that you are not sure about, show it and ask rather than creating a
 second record. Duplicate records are the commonest way a CRM rots, and here they are
-expensive because two of the three kinds cannot be merged back together.
+expensive because contacts cannot be merged back together.

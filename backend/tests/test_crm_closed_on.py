@@ -88,6 +88,7 @@ def test_mark_won_dates_today_and_writes_the_note_on_the_same_cursor(monkeypatch
     assert "closed_on = %s" in sql and "closed_on IS DISTINCT FROM %s::date" in sql
     assert TODAY in params
     [(note_sql, note_params)] = _notes(conn)
+    assert "system_note" in note_sql and note_sql.endswith("true)")
     assert note_params[2] == "Closed on: none → 2026-10-10" and note_params[4] == 5
     assert conn.executed_by[-1] == conn.executed_by[0], "note rides the write's cursor"
 
@@ -204,6 +205,7 @@ def test_bulk_into_won_dates_and_notes_in_one_insert(monkeypatch, fake_conn):
     result = service.bulk_move_deals([1, 2], "won", closed_on="2026-10-05", actor_id=7)
     assert result["updated_ids"] == [1]
     [(sql, params)] = _notes(conn)
+    assert "system_note" in sql and ", true FROM unnest" in sql
     assert "unnest" in sql and params[1:] == (7, [1], ["Closed on: none → 2026-10-05"])
     stmts = [s for s, _ in conn.executed]
     assert stmts.index(sql) > next(i for i, s in enumerate(stmts) if "deal_stage_events" in s)

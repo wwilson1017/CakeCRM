@@ -54,6 +54,7 @@ TABLES: tuple[tuple[str, str, str], ...] = (
 
 # Table -> why it stays out. The pin test holds every schema table to one of the two sets.
 NOT_EXPORTED: dict[str, str] = {
+    "assistant_deal_finds": "owner-only conversation bookkeeping",
     "auth_credential": "credential",
     "totp_config": "credential",
     "trusted_devices": "credential",
@@ -80,6 +81,7 @@ NOT_EXPORTED: dict[str, str] = {
     "assistant_identity": "assistant configuration",
     "assistant_conversations": "owner-only by rule; an admin export must not read other seats' chats",
     "assistant_messages": "owner-only by rule; an admin export must not read other seats' chats",
+    "assistant_message_images": "photos on owner-only assistant messages; same rule as assistant_messages",
     "chat_turns": "owner-only conversation bookkeeping",
     "chat_turn_events": "owner-only conversation bookkeeping",
     "dreaming_runs": "assistant bookkeeping",

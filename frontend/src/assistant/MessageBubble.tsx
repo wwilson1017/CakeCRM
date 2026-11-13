@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 
-import { IconBot, IconCheck, IconChevronRight, IconX } from '../shared/icons';
+import { IconAttach, IconBot, IconCheck, IconChevronRight, IconVolume, IconX } from '../shared/icons';
 import {
   ACCENT, ACCENT_TEXT,
   ACCENT_INK,
@@ -150,12 +150,17 @@ export function MessageBubble({
   working = null,
   onApprove,
   onDeny,
+  onSpeak,
+  speaking = false,
 }: {
   message: ChatMessage;
   /** The in-flight turn's state when this is its bubble (#282). */
   working?: WorkingState | null;
   onApprove: (msgId: string, toolUseId: string) => void;
   onDeny: (msgId: string, toolUseId: string) => void;
+  /** Read-aloud play/stop for a finished reply (#338); absent where speech is unsupported. */
+  onSpeak?: () => void;
+  speaking?: boolean;
 }) {
   if (message.role === 'user') {
     return (
@@ -166,7 +171,14 @@ export function MessageBubble({
             color: INK, fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
           }}
         >
-          {message.content}
+          {message.content && <div>{message.content}</div>}
+          {!!message.attachments?.length && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {message.attachments.map((name, i) => (
+              <span key={`${name}-${i}`} data-testid="user-attachment" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, background: BG_RAISED, border: `1px solid ${LINE}`, borderRadius: 6, padding: '2px 6px', color: INK_MUTE }}>
+                <IconAttach size={12} /> {name}
+              </span>
+            ))}
+          </div>}
         </div>
       </div>
     );
@@ -189,6 +201,9 @@ export function MessageBubble({
         ) : (
           message.content && <MarkdownContent content={message.content} />
         )}
+        {onSpeak && !message.streaming && !message.error && message.content && <button onClick={onSpeak} aria-label={speaking ? 'Stop reading' : 'Read aloud'} aria-pressed={speaking} title={speaking ? 'Stop reading' : 'Read this reply aloud'} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 2, padding: '2px 6px', fontSize: 11, background: 'none', border: 'none', cursor: 'pointer', color: speaking ? ACCENT_TEXT : INK_SOFT, borderRadius: 6 }}>
+          {speaking ? '■' : <IconVolume size={13} />}{speaking ? ' Stop' : ' Read aloud'}
+        </button>}
         {message.toolCalls?.map((c, i) => (
           // index key, not toolUseId — positional-id providers (Gemini) reuse ids
           // within one message, which would collide as React keys.

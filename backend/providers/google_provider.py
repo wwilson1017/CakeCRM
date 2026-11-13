@@ -9,6 +9,7 @@ missing package or absent key never breaks import or startup.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 from collections.abc import AsyncGenerator
@@ -58,6 +59,10 @@ _GOOGLE_NON_CHAT = ("tts", "image", "audio", "embedding", "aqa", "-exp", "previe
 
 
 class GoogleProvider(AIProvider):
+    @property
+    def supports_images(self) -> bool:
+        return self.model.startswith("gemini-")
+
     def __init__(self, api_key: str = "", model: str = "gemini-2.5-flash"):
         super().__init__(model=model)
         self.api_key = api_key
@@ -135,6 +140,9 @@ class GoogleProvider(AIProvider):
                                 response=part_data.get("response", {}),
                             )
                         ))
+                    elif part_data.get("type") == "image":
+                        parts.append(protos.Part(inline_data=protos.Blob(
+                            mime_type=part_data["media_type"], data=base64.b64decode(part_data["data"]))))
                     elif part_data.get("type") == "text" and part_data.get("text"):
                         parts.append(protos.Part(text=part_data["text"]))
                 if parts:
@@ -174,6 +182,9 @@ class GoogleProvider(AIProvider):
                             response=part_data.get("response", {}),
                         )
                     ))
+                elif part_data.get("type") == "image":
+                    parts.append(protos.Part(inline_data=protos.Blob(
+                        mime_type=part_data["media_type"], data=base64.b64decode(part_data["data"]))))
                 elif part_data.get("type") == "text" and part_data.get("text"):
                     parts.append(protos.Part(text=part_data["text"]))
             send_msg = protos.Content(role="user", parts=parts) if parts else ""
@@ -185,6 +196,7 @@ class GoogleProvider(AIProvider):
 
         try:
             response = await chat.send_message_async(send_msg, stream=True)
+            hit_length_cap = False
 
             async for chunk in response:
                 # Text chunks
@@ -195,6 +207,8 @@ class GoogleProvider(AIProvider):
                 # Function calls
                 if chunk.candidates:
                     for candidate in chunk.candidates:
+                        if getattr(candidate.finish_reason, "name", None) == "MAX_TOKENS":
+                            hit_length_cap = True
                         if not candidate.content.parts:
                             continue
                         for part in candidate.content.parts:
@@ -211,7 +225,8 @@ class GoogleProvider(AIProvider):
                                 yield {"type": "tool_start", "tool": fc.name, "tool_use_id": call_id}
                                 yield {"type": "tool_args", "tool": fc.name, "tool_use_id": call_id, "args": args}
 
-            stop_reason = "tool_use" if tool_calls else "stop"
+            # Cut off at the output cap; the engine notes it as unfinished (#340).
+            stop_reason = "tool_use" if tool_calls else ("max_tokens" if hit_length_cap else "stop")
 
         except Exception as e:
             logger.error("Gemini API error: %s", e)

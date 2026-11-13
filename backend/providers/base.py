@@ -17,11 +17,19 @@ Internal tool format (used in ToolRegistry):
         }
     }
 
+User content can be a string or a list of neutral image and text parts:
+    [{"type": "image", "media_type": "image/jpeg", "data": "<base64>"},
+     {"type": "text", "text": "..."}]
+Images are the only non-text user input the engine emits. Adapters translate them
+and must advertise supports_images=False if their model cannot carry them.
+
 SSE event types yielded by stream_turn():
     {"type": "text", "text": "chunk"}
     {"type": "tool_start", "tool": "name", "tool_use_id": "id"}
     {"type": "tool_args", "tool": "name", "tool_use_id": "id", "args": {...}}
     {"type": "_turn_complete", "tool_calls": [...], "stop_reason": "stop|tool_use"}
+
+Rate-limit errors also carry rate_limited: True and retry_after (seconds or None).
 
 The _turn_complete event is INTERNAL — the assistant engine intercepts it to
 execute tools and loop. It is never forwarded to the frontend.
@@ -31,10 +39,26 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
 
+from providers.tiers import _short_label
+
 
 def _sse(data: dict) -> str:
     """Format a dict as an SSE data line."""
     return f"data: {json.dumps(data)}\n\n"
+
+
+def rate_limit_event(model: str, err: Exception) -> dict:
+    """Name the rate-limited model and carry the provider's retry delay."""
+    try:
+        retry_after = float(err.response.headers.get("retry-after"))
+    except (AttributeError, TypeError, ValueError):
+        retry_after = None
+    return {
+        "type": "error",
+        "error": f"{_short_label(model)} is rate-limited. Please try again in a minute.",
+        "rate_limited": True,
+        "retry_after": retry_after,
+    }
 
 
 class AIProvider(ABC):
@@ -60,6 +84,8 @@ class AIProvider(ABC):
             system_prompt: Either a single string or a (static, volatile) tuple.
                            When a tuple is provided, providers that support prompt
                            caching (e.g. Anthropic) can cache the static portion.
+
+        Rate-limit error dicts carry rate_limited: True and retry_after (seconds or None).
 
         Yields dicts (NOT yet SSE-encoded). Types:
             - {"type": "text", "text": "..."}
@@ -113,6 +139,20 @@ class AIProvider(ABC):
         event's `input_tokens` / `output_tokens` stay RAW for the CLI and cost log.
         """
         return None
+
+    @property
+    def can_transcribe(self) -> bool:
+        """Whether this provider supports speech to text; unsupported mics stay hidden."""
+        return False
+
+    @property
+    def supports_images(self) -> bool:
+        """Whether this model accepts photos; otherwise camera/image uploads hide."""
+        return False
+
+    async def transcribe(self, audio: bytes, mime: str, filename: str) -> str:
+        """Transcribe one clip without retaining its bytes."""
+        raise NotImplementedError(f"{self.provider_name} cannot transcribe audio")
 
     def build_tool_turn(
         self,

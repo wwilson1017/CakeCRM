@@ -64,6 +64,7 @@ export function IconFlame(p: IconProps) { return <Ico d="M12 2c1.2 3 3 4.2 4.4 6
 export function IconHelp(p: IconProps) { return <Ico {...p}><circle cx="12" cy="12" r="9" /><path d="M9.5 9a2.5 2.5 0 0 1 4.9.8c0 1.7-2.4 2.2-2.4 3.7M12 17h.01" /></Ico>; }
 export function IconMenu(p: IconProps) { return <Ico d="M4 6h16M4 12h16M4 18h16" {...p} />; }
 export function IconMore(p: IconProps) { return <Ico {...p}><circle cx="5" cy="12" r="1.2" fill="currentColor" /><circle cx="12" cy="12" r="1.2" fill="currentColor" /><circle cx="19" cy="12" r="1.2" fill="currentColor" /></Ico>; }
+export function IconCamera(p: IconProps) { return <Ico d="M4 8h3l2-3h6l2 3h3v11H4z M12 17a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7" {...p} />; }
 export function IconAttach(p: IconProps) { return <Ico d="M21 12.5 12.5 21a5.5 5.5 0 0 1-7.8-7.8l9-9a3.7 3.7 0 0 1 5.2 5.2l-9 9a2 2 0 0 1-2.8-2.8L14.5 9" {...p} />; }
 export function IconSend(p: IconProps) { return <Ico d="m22 2-7 20-4-9-9-4z M22 2 11 13" {...p} />; }
 export function IconFilter(p: IconProps) { return <Ico d="M3 4h18l-7 9v7l-4-2v-5L3 4z" {...p} />; }
@@ -82,3 +83,7 @@ export function IconCircle(p: IconProps) { return <Ico {...p}><circle cx="12" cy
 export function IconTarget(p: IconProps) { return <Ico {...p}><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1" fill="currentColor" /></Ico>; }
 export function IconBuilding(p: IconProps) { return <Ico {...p}><rect x="4" y="3" width="16" height="18" rx="1" /><path d="M9 21v-4h6v4M8 7h2M14 7h2M8 11h2M14 11h2M8 15h2M14 15h2" /></Ico>; }
 export function IconRefresh(p: IconProps) { return <Ico d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6" {...p} />; }
+
+export function IconMic(p: IconProps) { return <Ico {...p}><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" /></Ico>; }
+export function IconVolume(p: IconProps) { return <Ico {...p}><path d="M11 5 6 9H3v6h3l5 4V5z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" /></Ico>; }
+export function IconVolumeOff(p: IconProps) { return <Ico {...p}><path d="M11 5 6 9H3v6h3l5 4V5z" /><path d="m22 9-6 6M16 9l6 6" /></Ico>; }

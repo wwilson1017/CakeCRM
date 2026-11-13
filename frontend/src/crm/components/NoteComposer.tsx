@@ -10,6 +10,8 @@ import {
 import {
   COMPOSER_MIN_HEIGHT_PX, composerKeyAction, MAX_NOTE_LEN, nextComposerHeight,
 } from '../chatterComposer';
+import { joinDraft } from '../../shared/voice/dictationGesture';
+import { VoiceMicButton } from '../../shared/voice/VoiceMicButton';
 import { useMentionPicker } from './MentionPicker';
 import {
   ACCENT, ACCENT_INK, ACCENT_TEXT, CORAL_FILL, CORAL_TEXT, INK, INK_DIM, INK_MUTE, LINE, LINE_STRONG,
@@ -68,6 +70,7 @@ export function NoteComposer({
   const [dragging, setDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const mention = useMentionPicker(text, setText, textareaRef);
 
   // Revoke on unmount only. Per-chip revocation happens in the remove/submit paths, so
@@ -278,7 +281,7 @@ export function NoteComposer({
         </ul>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
         <input
           ref={fileInputRef}
           type="file"
@@ -299,6 +302,37 @@ export function NoteComposer({
             opacity: staged.length >= MAX_ATTACHMENTS ? 0.5 : 1,
           }}
         >Attach</button>
+        <input
+          ref={cameraInputRef}
+          data-testid="composer-camera-input"
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onChange={e => {
+            const files = Array.from(e.target.files ?? []).map(file => {
+              const ext = file.name.split('.').pop() || 'jpg';
+              return new File([file], `photo-${Date.now()}.${ext}`, {
+                type: file.type, lastModified: file.lastModified,
+              });
+            });
+            addFiles(files);
+            e.target.value = '';
+          }}
+          style={{ display: 'none' }}
+        />
+        <button
+          type="button"
+          onClick={() => cameraInputRef.current?.click()}
+          disabled={disabled || staged.length >= MAX_ATTACHMENTS}
+          style={{
+            ...linkBtn, color: ACCENT_TEXT, fontSize: 12,
+            opacity: staged.length >= MAX_ATTACHMENTS ? 0.5 : 1,
+          }}
+        >Take photo</button>
+        <VoiceMicButton mode="review" tidy disabled={disabled} onTranscript={transcript => {
+          setText(prev => joinDraft(prev, transcript).slice(0, MAX_NOTE_LEN));
+          textareaRef.current?.focus();
+        }} />
         <span style={{ ...mono(10), color: INK_DIM, flex: 1 }}>
           Paste or drop files · Cmd/Ctrl+Enter to post
         </span>

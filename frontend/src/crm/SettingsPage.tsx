@@ -44,6 +44,7 @@ import { MemoryCard } from './components/MemoryCard';
 import { NotificationSettings } from './components/NotificationSettings';
 import { PipelineBoardCard } from './components/PipelineBoardCard';
 import { TodoDevicesCard } from './components/TodoDevicesCard';
+import { VoiceLiveCard } from './components/VoiceLiveCard';
 import { TodoModeCard } from './components/TodoModeCard';
 import { TeamSettings } from './components/TeamSettings';
 import { TelegramLinkCard } from './components/TelegramLinkCard';
@@ -60,6 +61,7 @@ const CARD_COMPONENTS: Record<SettingsCardId, ComponentType<{ isMobile: boolean 
   connect_ai_tool: ConnectAiToolCard,
   memory: MemoryCard,
   todo_mode: TodoModeCard,
+  voice_live: VoiceLiveCard,
   branding: BrandingCard,
   team: TeamSettings,
   custom_fields: CustomFieldSettings,

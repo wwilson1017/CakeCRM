@@ -139,7 +139,7 @@ def test_corrupt_pdf_raises_upload_error(monkeypatch):
 
 def test_no_top_level_parser_imports():
     """pdfplumber / docx / openpyxl must be imported lazily inside functions only."""
-    roots = {"pdfplumber", "docx", "openpyxl"}
+    roots = {"pdfplumber", "docx", "openpyxl", "PIL"}
     assistant_dir = Path(__file__).resolve().parent.parent / "assistant"
     offenders = []
     for path in sorted(assistant_dir.glob("*.py")):
@@ -153,3 +153,54 @@ def test_no_top_level_parser_imports():
                 continue
             offenders += [f"{path.name}:{node.lineno} {n}" for n in names if n.split(".")[0] in roots]
     assert not offenders, f"parsers must be lazy-imported: {offenders}"
+
+
+def _photo(fmt="PNG", size=(1, 1)):
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", size).save(buf, fmt)
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("fmt, mime", [("PNG", "image/png"), ("JPEG", "image/jpeg"), ("WEBP", "image/webp")])
+def test_read_image_accepts_photos(fmt, mime):
+    data = _photo(fmt)
+    assert uploads.read_image("card.png", data) == {"filename": "card.png", "mime": mime, "data": data}
+
+
+@pytest.mark.parametrize("data", [b"plain text", b"%PDF-renamed", b"GIF89a"])
+def test_read_image_refuses_other_magic(data):
+    with pytest.raises(UploadError, match="not a JPEG, PNG or WebP"):
+        uploads.read_image("card.png", data)
+
+
+def test_read_image_refuses_corrupt_header():
+    with pytest.raises(UploadError, match="Could not read image"):
+        uploads.read_image("card.png", b"\x89PNG\r\n\x1a\n")
+
+
+def test_read_image_byte_limit(monkeypatch):
+    monkeypatch.setattr(uploads, "MAX_IMAGE_BYTES", 8)
+    with pytest.raises(UploadError, match="3.75 MB photo limit"):
+        uploads.read_image("card.png", _photo())
+
+
+def test_read_image_dimension_limit(monkeypatch):
+    monkeypatch.setattr(uploads, "MAX_IMAGE_EDGE", 100)
+    with pytest.raises(UploadError, match="100 px on a side"):
+        uploads.read_image("card.png", _photo(size=(1, 200)))
+
+
+@pytest.mark.parametrize("ext, message", [("heic", "HEIC photos"), ("heif", "HEIC photos"), ("gif", "GIFs aren't supported")])
+def test_unsupported_photo_format_explained(ext, message):
+    with pytest.raises(UploadError, match=message):
+        extract_upload(f"photo.{ext}", b"data")
+
+
+def test_image_name_case_insensitive():
+    assert uploads.is_image_name("card.JPG")
+    assert not uploads.is_image_name("notes.txt")
+    assert not uploads.is_image_name("card.gif")

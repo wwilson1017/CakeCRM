@@ -35,7 +35,9 @@ as the drawer in the web app, and anything it changes is recorded as **you**, th
 you had done it here.
 
 When it wants to make a change, the message arrives with two inline buttons, Approve and
-Deny. Only your linked account can press yours.
+Deny. Only your linked account can press yours. A button answers that one action;
+replying with a plain **yes** (or "ok", "go ahead") approves every pending change.
+Any other message cancels the pending changes and is answered as a new question.
 
 A Telegram message cannot open a deal from its number, so when a reply names a deal the
 assistant looked at during that same exchange, the number is replaced with the deal's title

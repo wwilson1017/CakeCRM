@@ -33,7 +33,7 @@ const MEMBER_CARDS: SettingsCardId[] = [
 const ADMIN_ONLY_CARDS: SettingsCardId[] = [
   'branding', 'team', 'custom_fields', 'telegram', 'gmail',
   // #102 made the todo-mode + todo-surface routes require_admin.
-  'todo_mode',
+  'todo_mode', 'voice_live',
   // #302: the whole database as CSV.
   'export',
   // #322: the members switch and every seat's AI tool connections.
@@ -49,10 +49,10 @@ describe('settingsSections — the member/admin partition', () => {
     expect(visibleCardIds(false).sort()).toEqual([...MEMBER_CARDS].sort());
   });
 
-  it('shows an admin all fifteen cards, each exactly once', () => {
+  it('shows an admin all sixteen cards, each exactly once', () => {
     const ids = visibleCardIds(true);
-    expect(ids).toHaveLength(15);
-    expect(new Set(ids).size).toBe(15);
+    expect(ids).toHaveLength(16);
+    expect(new Set(ids).size).toBe(16);
     expect(ids.sort()).toEqual([...MEMBER_CARDS, ...ADMIN_ONLY_CARDS].sort());
   });
 
@@ -153,7 +153,7 @@ describe('settingsSections — every card has a home', () => {
   it('declares each card id exactly once across all sections', () => {
     const ids = SETTINGS_SECTIONS.flatMap(s => s.cards).map(c => c.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(15);
+    expect(ids).toHaveLength(16);
   });
 
   it('gives every section a non-empty label', () => {
@@ -190,6 +190,7 @@ describe('SettingsCard is the only owner of card chrome', () => {
     'NotificationSettings.tsx': 'notifications',
     'PipelineBoardCard.tsx': 'pipeline_board',
     'TodoModeCard.tsx': 'todo_mode',
+    'VoiceLiveCard.tsx': 'voice_live',
     'TeamSettings.tsx': 'team',
     'TelegramLinkCard.tsx': 'telegram_link',
     'TodoDevicesCard.tsx': 'todo_devices',

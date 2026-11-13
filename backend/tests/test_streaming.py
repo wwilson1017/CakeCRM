@@ -28,13 +28,14 @@ class _Delta:
 
 
 class _Choice:
-    def __init__(self, delta):
+    def __init__(self, delta, finish_reason=None):
         self.delta = delta
+        self.finish_reason = finish_reason
 
 
 class _Chunk:
-    def __init__(self, delta):
-        self.choices = [_Choice(delta)]
+    def __init__(self, delta, finish_reason=None):
+        self.choices = [_Choice(delta, finish_reason)]
 
 
 class _FakeStream:
@@ -53,6 +54,7 @@ class _Completions:
         self._chunks = chunks
 
     async def create(self, **kwargs):
+        self.kwargs = kwargs
         return _FakeStream(self._chunks)
 
 
@@ -68,6 +70,24 @@ async def test_openai_compat_text_only():
     events = [e async for e in stream_openai_turn(FakeOpenAIClient(chunks), "m", [], [], "sys")]
     assert "".join(e["text"] for e in events if e["type"] == "text") == "Hi there"
     assert events[-1] == {"type": "_turn_complete", "tool_calls": [], "stop_reason": "stop"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('provider_kind', ['openai', 'compat'])
+async def test_openai_length_finish_is_max_tokens(monkeypatch, provider_kind):
+    """A reply cut at the output cap reaches the engine as max_tokens (#340)."""
+    import openai
+
+    from providers import openai_provider as op
+    from providers.openai_compat import stream_openai_turn
+    client = FakeOpenAIClient([_Chunk(_Delta(content="Half")), _Chunk(_Delta(), finish_reason="length")])
+    if provider_kind == 'compat':
+        stream = stream_openai_turn(client, "m", [], [], "sys")
+    else:
+        monkeypatch.setattr(openai, 'AsyncOpenAI', lambda **kw: client)
+        stream = op.OpenAIProvider(access_token='k', model='m').stream_turn([], [], 'sys')
+    events = [e async for e in stream]
+    assert events[-1]["stop_reason"] == "max_tokens"
 
 
 @pytest.mark.asyncio
@@ -149,7 +169,11 @@ class _AnthStream:
 
 class FakeAnthClient:
     def __init__(self, events, final):
-        self.messages = type("_M", (), {"stream": lambda _self, **kw: _AnthStream(events, final)})()
+        def stream(**kw):
+            self.kwargs = kw
+            return _AnthStream(events, final)
+
+        self.messages = type("_M", (), {"stream": staticmethod(stream)})()
 
 
 @pytest.mark.asyncio
@@ -184,3 +208,127 @@ async def test_anthropic_stream_tool_call(monkeypatch):
     types = [e["type"] for e in out]
     assert "tool_start" in types and "tool_args" in types
     assert next(e for e in out if e["type"] == "tool_args")["args"] == {"q": "hi"}
+
+
+@pytest.mark.parametrize('header', ['7', None, 'invalid'])
+def test_rate_limit_event(header):
+    from types import SimpleNamespace
+
+    from providers.base import rate_limit_event
+
+    err = Exception('limited')
+    err.response = SimpleNamespace(headers={'retry-after': header})
+    assert rate_limit_event('Qwen/Qwen3.5-7B', err) == {
+        'type': 'error', 'error': 'Qwen3.5-7B is rate-limited. Please try again in a minute.',
+        'rate_limited': True, 'retry_after': 7.0 if header == '7' else None,
+    }
+    assert rate_limit_event('model', Exception())['retry_after'] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('provider_kind', ['anthropic', 'openai', 'compat'])
+async def test_provider_rate_limit_names_model(monkeypatch, provider_kind):
+    from types import SimpleNamespace
+
+    import anthropic
+    import httpx
+    import openai
+
+    from providers import anthropic_provider as ap, openai_provider as op
+    from providers.openai_compat import stream_openai_turn
+
+    sdk = anthropic if provider_kind == 'anthropic' else openai
+    response = httpx.Response(429, headers={'retry-after': '7'}, request=httpx.Request('POST', 'https://example.com'))
+    error = sdk.RateLimitError('limited', response=response, body=None)
+
+    def fail(**kwargs):
+        raise error
+
+    async def async_fail(**kwargs):
+        raise error
+
+    if provider_kind == 'anthropic':
+        monkeypatch.setattr(ap, '_get_client', lambda api_key="": SimpleNamespace(messages=SimpleNamespace(stream=fail)))
+        stream = ap.AnthropicProvider(api_key='k', model='Qwen/Qwen3.5-7B').stream_turn([], [], 'sys')
+    else:
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=async_fail)))
+        if provider_kind == 'compat':
+            stream = stream_openai_turn(client, 'Qwen/Qwen3.5-7B', [], [], 'sys')
+        else:
+            monkeypatch.setattr(openai, 'AsyncOpenAI', lambda **kw: client)
+            stream = op.OpenAIProvider(access_token='k', model='Qwen/Qwen3.5-7B').stream_turn([], [], 'sys')
+    events = [event async for event in stream]
+    assert events[0] == {
+        'type': 'error', 'error': 'Qwen3.5-7B is rate-limited. Please try again in a minute.',
+        'rate_limited': True, 'retry_after': 7.0,
+    }
+    assert events[1]['stop_reason'] == 'error'
+
+
+async def test_anthropic_photo_sdk_shape_and_cache(monkeypatch):
+    from providers import anthropic_provider as ap
+
+    client = FakeAnthClient([], _FinalMsg("end_turn"))
+    monkeypatch.setattr(ap, "_get_client", lambda api_key="": client)
+    content = [{"type": "image", "media_type": "image/png", "data": "cGhvdG8="}, {"type": "text", "text": "read"}]
+    events = [e async for e in ap.AnthropicProvider().stream_turn([{"role": "user", "content": content}], [], "sys")]
+    assert events[-1]["type"] == "_turn_complete"
+    sent = client.kwargs["messages"][0]["content"]
+    assert sent[0] == {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "cGhvdG8="}}
+    assert sent[-1] == {"type": "text", "text": "read", "cache_control": {"type": "ephemeral"}}
+    assert "cache_control" not in content[-1]
+
+
+@pytest.mark.parametrize("kind", ["openai", "compat"])
+async def test_openai_photo_sdk_shape(monkeypatch, kind):
+    import openai
+
+    from providers.openai_compat import stream_openai_turn
+    from providers.openai_provider import OpenAIProvider
+
+    client = FakeOpenAIClient([])
+    content = [{"type": "image", "media_type": "image/png", "data": "cGhvdG8="}, {"type": "text", "text": "read"}]
+    messages = [{"role": "user", "content": content}]
+    monkeypatch.setattr(openai, "AsyncOpenAI", lambda **kw: client)
+    stream = (OpenAIProvider("k").stream_turn(messages, [], "sys") if kind == "openai"
+              else stream_openai_turn(client, "m", messages, [], "sys"))
+    events = [e async for e in stream]
+    assert events[-1]["type"] == "_turn_complete"
+    assert client.chat.completions.kwargs["messages"][-1]["content"] == [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,cGhvdG8="}}, content[-1]]
+
+
+async def test_google_photos_in_history_and_last_message(monkeypatch):
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    from providers.google_provider import GoogleProvider
+
+    captured = {}
+
+    async def send(message, **kw):
+        captured["message"] = message
+        return _FakeStream([])
+
+    def start_chat(**kw):
+        captured.update(kw)
+        return SimpleNamespace(send_message_async=send)
+
+    fake = ModuleType("google.generativeai")
+    fake.configure = lambda **kw: None
+    fake.GenerativeModel = lambda **kw: SimpleNamespace(start_chat=start_chat)
+    fake.protos = SimpleNamespace(Part=SimpleNamespace, Blob=SimpleNamespace, Content=SimpleNamespace)
+    google = ModuleType("google")
+    google.generativeai = fake
+    monkeypatch.setitem(sys.modules, "google", google)
+    monkeypatch.setitem(sys.modules, "google.generativeai", fake)
+    provider = GoogleProvider()
+    monkeypatch.setattr(provider, "_format_tools", lambda tools: [])
+    content = [{"type": "image", "media_type": "image/png", "data": "cGhvdG8="}, {"type": "text", "text": "read"}]
+    messages = [{"role": "user", "content": content}, {"role": "assistant", "content": "ok"}, {"role": "user", "content": content}]
+    events = [e async for e in provider.stream_turn(messages, [], "sys")]
+    assert events[-1]["stop_reason"] == "stop"
+    for parts in (captured["history"][0].parts, captured["message"].parts):
+        assert parts[0].inline_data.mime_type == "image/png"
+        assert parts[0].inline_data.data == b"photo"
+        assert parts[1].text == "read"

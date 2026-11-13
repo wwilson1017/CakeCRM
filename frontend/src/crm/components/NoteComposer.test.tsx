@@ -12,6 +12,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NoteComposer } from './NoteComposer';
+import { MAX_NOTE_LEN } from '../chatterComposer';
+import type { VoiceMicButtonProps } from '../../shared/voice/VoiceMicButton';
+const voice = vi.hoisted(() => ({ props: null as VoiceMicButtonProps | null }));
+vi.mock('../../shared/voice/VoiceMicButton', () => ({ VoiceMicButton: (props: VoiceMicButtonProps) => { voice.props = props; return null; } }));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -195,5 +199,50 @@ describe('NoteComposer — intake', () => {
     // cannot show, since the server stores it inert.
     expect(created).toHaveLength(1);
     expect(container.querySelectorAll('img')).toHaveLength(1);
+  });
+});
+
+
+it('appends reviewed dictation without posting a note', () => {
+  const onSubmit = vi.fn(async () => {});
+  render(onSubmit);
+  type('met at the show ');
+  act(() => voice.props!.onTranscript('follow up Monday', 'review'));
+  expect(textarea().value).toBe('met at the show follow up Monday');
+  expect(voice.props!.mode).toBe('review');
+  expect(voice.props!.tidy).toBe(true);
+  expect(onSubmit).not.toHaveBeenCalled();
+});
+
+it('clamps dictation appended to a full draft to the note limit', () => {
+  render(async () => {});
+  type('x'.repeat(MAX_NOTE_LEN - 3));
+  act(() => voice.props!.onTranscript('follow up Monday', 'review'));
+  expect(textarea().value).toHaveLength(MAX_NOTE_LEN);
+});
+
+describe('NoteComposer — camera', () => {
+  it('opens the rear camera input and stages a renamed capture', () => {
+    render(async () => {});
+    const input = container.querySelector<HTMLInputElement>('[data-testid="composer-camera-input"]')!;
+    const click = vi.spyOn(input, 'click').mockImplementation(() => {});
+    const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Take photo')!;
+    act(() => button.click());
+    expect(click).toHaveBeenCalledOnce();
+    expect(input.accept).toBe('image/*');
+    expect(input.getAttribute('capture')).toBe('environment');
+    Object.defineProperty(input, 'files', { value: [new File(['photo'], 'image.jpg', { type: 'image/jpeg' })] });
+    act(() => input.dispatchEvent(new Event('change', { bubbles: true })));
+    expect(chips()).toEqual([expect.stringMatching(/^photo-\d+\.jpg$/)]);
+    expect(input.value).toBe('');
+  });
+
+  it('disables Take photo with Attach when disabled or full', () => {
+    act(() => root.render(<NoteComposer disabled onSubmit={async () => {}} />));
+    const buttons = () => Array.from(container.querySelectorAll('button')).filter(b => ['Attach', 'Take photo'].includes(b.textContent!));
+    expect(buttons().every(b => b.disabled)).toBe(true);
+    render(async () => {});
+    drop(Array.from({ length: 10 }, (_, i) => png(`${i}.png`)));
+    expect(buttons().every(b => b.disabled)).toBe(true);
   });
 });

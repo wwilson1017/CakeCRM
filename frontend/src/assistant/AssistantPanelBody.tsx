@@ -7,7 +7,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { IconAttach, IconBot, IconPlus, IconSettings, IconX } from '../shared/icons';
+import { IconAttach, IconBot, IconCamera, IconPlus, IconSettings, IconVolume, IconVolumeOff, IconX } from '../shared/icons';
+import { useVisionReady } from '../shared/VisionReadyContext';
 import { toast } from '../shared/toast';
 import {
   ACCENT, ACCENT_TEXT,
@@ -30,11 +31,16 @@ import { QuickActions } from './QuickActions';
 import type { ActiveRecordContext, PageContext, ToolMode } from './types';
 import { useAssistantChat } from './useAssistantChat';
 import { useConversations } from './useConversations';
+import { useReadAloud } from './useReadAloud';
+import { VoiceMicButton } from '../shared/voice/VoiceMicButton';
+import { joinDraft, type DictationIntent } from '../shared/voice/dictationGesture';
 
 // Client-side pre-check mirrors backend/assistant/uploads.py (ALLOWED_EXTENSIONS
 // / MAX_FILES / MAX_FILE_SIZE). Keep in sync — the backend re-validates and is
 // authoritative, so a drift here only affects the pre-submit UX, never safety.
 const ALLOWED = ['csv', 'json', 'xlsx', 'md', 'txt', 'pdf', 'docx'];
+// Mirrors uploads.IMAGE_EXTENSIONS; GIF and HEIC are not supported.
+const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp'];
 const MAX_FILES = 5;
 const MAX_BYTES = 10 * 1024 * 1024;
 
@@ -59,8 +65,12 @@ export interface AssistantPanelBodyProps {
 export default function AssistantPanelBody({
   recordContext = null, pageContext = null,
 }: AssistantPanelBodyProps = {}) {
+  const visionReady = useVisionReady();
+  const allowed = visionReady ? [...ALLOWED, ...IMAGE_EXTS] : ALLOWED;
   const chat = useAssistantChat(recordContext, pageContext);
   const { conversations, load: loadConversations, openConversation: fetchConversation, remove: removeConversation } = useConversations();
+  const readAloud = useReadAloud({ messages: chat.messages, isStreaming: chat.isStreaming });
+  const [threadEpoch, setThreadEpoch] = useState(0);
   const [input, setInput] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [showSettings, setShowSettings] = useState(false);
@@ -68,6 +78,7 @@ export default function AssistantPanelBody({
 
   const endRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -78,13 +89,17 @@ export default function AssistantPanelBody({
     endRef.current?.scrollIntoView({ block: 'end' });
   }, [chat.messages]);
 
-  const stageFiles = (incoming: FileList | null) => {
+  const stageFiles = (incoming: FileList | File[] | null) => {
     if (!incoming) return;
     const next = [...files];
     for (const f of Array.from(incoming)) {
       const ext = f.name.includes('.') ? f.name.split('.').pop()!.toLowerCase() : '';
-      if (!ALLOWED.includes(ext)) {
-        toast.error(`${f.name}: unsupported type. Allowed: ${ALLOWED.join(', ')}.`);
+      if (IMAGE_EXTS.includes(ext) && !visionReady) {
+        toast.error(`${f.name}: this model can't see photos.`);
+        continue;
+      }
+      if (!allowed.includes(ext)) {
+        toast.error(`${f.name}: unsupported type. Allowed: ${allowed.join(', ')}.`);
         continue;
       }
       if (f.size > MAX_BYTES) {
@@ -104,18 +119,32 @@ export default function AssistantPanelBody({
   const submit = () => {
     const text = input.trim();
     if ((!text && files.length === 0) || chat.isStreaming) return;
+    readAloud?.arm();
     chat.sendMessage(text, files.length ? files : undefined);
     setInput('');
     setFiles([]);
     if (taRef.current) taRef.current.style.height = 'auto';
   };
 
+  const onTranscript = (text: string, intent: DictationIntent) => {
+    if (intent === 'review') { setInput(prev => joinDraft(prev, text)); taRef.current?.focus(); return; }
+    if (chat.isStreaming) return;
+    readAloud?.arm();
+    chat.sendMessage(joinDraft(input, text), files.length ? files : undefined);
+    setInput(''); setFiles([]);
+    if (taRef.current) taRef.current.style.height = 'auto';
+  };
+
   const newChat = () => {
+    setThreadEpoch(epoch => epoch + 1);
+    readAloud?.disarm();
     chat.clear();
     setShowHistory(false);
   };
 
   const openConversation = async (id: string) => {
+    setThreadEpoch(epoch => epoch + 1);
+    readAloud?.disarm();
     setShowHistory(false);
     const conv = await fetchConversation(id);
     if (conv) chat.loadMessages(conv.messages, conv.id, conv.running_turn ?? null);
@@ -142,6 +171,7 @@ export default function AssistantPanelBody({
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Conversations</span>
         </button>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 2 }}>
+          {readAloud && <button onClick={() => readAloud.setEnabled(!readAloud.enabled)} aria-pressed={readAloud.enabled} title={readAloud.enabled ? 'Stop reading replies aloud' : 'Read replies aloud'} style={{ ...iconBtn, color: readAloud.enabled ? ACCENT_TEXT : INK_MUTE }}>{readAloud.enabled ? <IconVolume size={17} /> : <IconVolumeOff size={17} />}</button>}
           <button onClick={newChat} title="New chat" style={iconBtn}><IconPlus size={17} /></button>
           <button onClick={() => setShowSettings(true)} title="Assistant settings" style={iconBtn}><IconSettings size={17} /></button>
         </div>
@@ -172,13 +202,15 @@ export default function AssistantPanelBody({
         {chat.messages.length === 0 ? (
           <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: INK_MUTE, textAlign: 'center', gap: 8, padding: 20 }}>
             <IconBot size={28} />
-            <div style={{ fontSize: 14 }}>Ask me about your contacts, deals, and todos — or drop in a file.</div>
+            <div style={{ fontSize: 14 }}>Ask me about your contacts, deals, and todos — or drop in {visionReady ? 'a file or a photo.' : 'a file.'}</div>
           </div>
         ) : (
           chat.messages.map((m) => (
             <MessageBubble
               key={m.id}
               message={m}
+              onSpeak={readAloud ? () => readAloud.playMessage(m.id) : undefined}
+              speaking={readAloud?.playingId === m.id}
               working={chat.working?.messageId === m.id ? chat.working : null}
               onApprove={chat.approveAction}
               onDeny={chat.denyAction}
@@ -194,7 +226,7 @@ export default function AssistantPanelBody({
           <QuickActions
             record={recordContext}
             page={pageContext}
-            onPick={(p) => { if (!chat.isStreaming) chat.sendMessage(p); }}
+            onPick={(p) => { if (!chat.isStreaming) { readAloud?.arm(); chat.sendMessage(p); } }}
             disabled={chat.isStreaming}
           />
         )}
@@ -219,9 +251,24 @@ export default function AssistantPanelBody({
           </div>
         )}
 
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6 }}>
-          <input ref={fileRef} type="file" multiple accept={ALLOWED.map((e) => `.${e}`).join(',')} onChange={(e) => stageFiles(e.target.files)} style={{ display: 'none' }} />
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-end', gap: 6 }}>
+          <input ref={fileRef} type="file" multiple accept={allowed.map((e) => `.${e}`).join(',')} onChange={(e) => stageFiles(e.target.files)} style={{ display: 'none' }} />
           <button onClick={() => fileRef.current?.click()} title="Attach a file" style={iconBtn}><IconAttach size={18} /></button>
+          {visionReady && <>
+            <input ref={cameraRef} data-testid="assistant-camera-input" type="file" accept="image/*" capture="environment"
+              onChange={(e) => {
+                const photos = Array.from(e.target.files ?? []).map(file => {
+                  // An extensionless capture ("image", "blob") takes its extension from the MIME type.
+                  const ext = file.name.includes('.') ? file.name.split('.').pop()!.toLowerCase()
+                    : ({ 'image/png': 'png', 'image/webp': 'webp' } as Record<string, string>)[file.type] ?? 'jpg';
+                  return new File([file], `photo-${Date.now()}.${ext}`, { type: file.type, lastModified: file.lastModified });
+                });
+                stageFiles(photos);
+                e.target.value = '';
+              }}
+              style={{ display: 'none' }} />
+            <button onClick={() => cameraRef.current?.click()} title="Take photo" style={iconBtn}><IconCamera size={18} /></button>
+          </>}
           <textarea
             ref={taRef}
             value={input}
@@ -240,8 +287,9 @@ export default function AssistantPanelBody({
             rows={1}
             style={{ flex: 1, resize: 'none', border: `1px solid ${LINE}`, borderRadius: 10, padding: '8px 10px', fontSize: 14, fontFamily: 'inherit', color: INK, background: BG_CARD, maxHeight: 120, outline: 'none' }}
           />
+          {!chat.isStreaming && <VoiceMicButton key={threadEpoch} mode="send" onTranscript={onTranscript} />}
           {chat.isStreaming ? (
-            <button onClick={chat.stop} title="Stop" style={{ ...sendBtn, background: BG_RAISED, color: INK_MUTE }}>■</button>
+            <button onClick={() => { readAloud?.disarm(); chat.stop(); }} title="Stop" style={{ ...sendBtn, background: BG_RAISED, color: INK_MUTE }}>■</button>
           ) : (
             <button onClick={submit} title="Send" disabled={!input.trim() && files.length === 0} style={{ ...sendBtn, opacity: !input.trim() && files.length === 0 ? 0.5 : 1 }}>
               <IconArrowUpInline />

@@ -87,10 +87,10 @@ class Store:
         return (text or "")[:60]
 
     def save_message(self, cid, mid, role, content, tool_calls=None, model="",
-                     context_tokens=None, context_boundary_seq=None):
+                     context_tokens=None, context_boundary_seq=None, images=None):
         self.context_tokens.append(context_tokens)
         self.boundary_stamps.append(context_boundary_seq)
-        self.saved.append({"cid": cid, "mid": mid, "role": role, "content": content, "tool_calls": tool_calls})
+        self.saved.append({"images": images, "cid": cid, "mid": mid, "role": role, "content": content, "tool_calls": tool_calls})
         self.convs.setdefault(cid, {"id": cid, "messages": []})["messages"].append(
             {"id": mid, "role": role, "content": content, "tool_calls": tool_calls, "tool_results": None})
 
@@ -119,6 +119,14 @@ class Registry:
         self._routine = set(routine)
         self.descriptions = descriptions or {}
         self.calls: list[tuple[str, dict]] = []
+
+    conversation_id = None
+
+    def next_tool_batch(self):
+        pass
+
+    def deal_write_refusal(self, name, args):
+        return None
 
     def is_write(self, name):
         return name in self._writes
@@ -434,10 +442,10 @@ async def test_tool_iteration_persist_failure_fails_closed(store, monkeypatch):
     reg = Registry(writes={"crm_create_contact"})
     prov = FakeProvider([[_complete([_tc("crm_create_contact")], stop="tool_use")]])
 
-    def _save(cid, mid, role, content, tool_calls=None, model=""):
+    def _save(cid, mid, role, content, tool_calls=None, model="", images=None):
         if tool_calls is not None:
             raise RuntimeError("db down")
-        store.save_message(cid, mid, role, content, tool_calls, model)
+        store.save_message(cid, mid, role, content, tool_calls, model, images=images)
 
     monkeypatch.setattr(history, "save_message", _save)
     events = await _run(prov, reg, [{"role": "user", "content": "add"}], tool_mode="power")
@@ -1323,3 +1331,253 @@ def test_a_confirmation_from_a_user_row_without_an_id_refuses_too(monkeypatch):
     with pytest.raises(KeyError):
         engine.resolve_confirmation(Registry(writes={"t"}), "c1", "t1", "approve",
                                     user={"name": "no id here"})
+
+
+async def test_unfound_deal_write_refused_before_confirmation(store, monkeypatch):
+    from assistant.registry import ToolRegistry
+    from crm import deal_write_guard
+
+    monkeypatch.setattr(deal_write_guard, 'pg_fetchall', lambda *a: [])
+    monkeypatch.setattr(deal_write_guard, 'pg_fetchone', lambda *a: None)
+    reg = ToolRegistry()
+    calls = []
+    reg.executors['crm_archive_deal'] = lambda **kw: calls.append(kw)
+    prov = FakeProvider([
+        [_complete([_tc('crm_archive_deal', args={'deal_id': 7})], 'tool_use')],
+        [_complete()],
+    ])
+    events = await _run(prov, reg, [{'role': 'user', 'content': 'Archive the renewal'}],
+                        tool_mode='normal')
+    assert not any(event['type'] == 'confirm' for event in events)
+    assert any('crm_search_deals' in str(event) for event in events)
+    assert reg.conversation_id == 'conv1'
+    assert calls == []
+
+
+async def test_deal_found_in_an_earlier_batch_can_be_written(store, monkeypatch):
+    # Pins the engine's per-batch bump: without it the find and the write share batch 0
+    # and the write in step 2 is refused as "same batch".
+    from assistant.registry import ToolRegistry
+    from crm import deal_write_guard
+    from crm.links import with_deal_url
+
+    monkeypatch.setattr(deal_write_guard, "pg_fetchall", lambda *a: [])
+    monkeypatch.setattr(deal_write_guard, "pg_execute", lambda *a: 1)
+    monkeypatch.setattr(deal_write_guard, "pg_fetchone", lambda *a: None)
+    reg = ToolRegistry()
+    calls = []
+    reg.executors["crm_get_deal"] = lambda **kw: with_deal_url({"id": 7, "title": "Renewal"})
+    reg.executors["crm_update_deal"] = lambda **kw: calls.append(kw) or {"ok": True}
+    prov = FakeProvider([
+        [_complete([_tc("crm_get_deal", "t1", {"deal_id": 7})], "tool_use")],
+        [_complete([_tc("crm_update_deal", "t2", {"deal_id": 7, "value": 5})], "tool_use")],
+        [_complete()],
+    ])
+    await _run(prov, reg, [{"role": "user", "content": "Bump the renewal"}], tool_mode="power")
+    assert calls == [{"deal_id": 7, "value": 5}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('stop', 'text', 'reason'), [
+    ('end_turn', '', 'ended without writing'),
+    ('refusal', '', 'declined to answer'),
+    ('max_tokens', 'Partial', 'length limit'),
+])
+async def test_unfinished_completed_round(store, stop, text, reason):
+    events = await _run(FakeProvider([[{'type': 'text', 'text': text}, _complete(stop=stop)]]),
+                        Registry(), [{'role': 'user', 'content': 'hi'}])
+    rows = [r for r in store.saved if r['role'] == 'assistant']
+    assert len(rows) == 1
+    assert reason in rows[0]['content']
+    assert rows[0]['content'] == ''.join(e['text'] for e in events if e['type'] == 'text')
+    assert rows[0]['content'].startswith(text + '\n\n*(This reply is incomplete' if text else '*(No complete reply')
+    assert events[-1]['type'] == 'done'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('ending', [[], [{'type': 'error', 'error': 'broken'}]])
+@pytest.mark.parametrize('partial', ['', 'Half a reply'])
+@pytest.mark.parametrize('earlier_round', [False, True])
+async def test_unfinished_error_and_cut(store, ending, partial, earlier_round):
+    scripts = [[_complete([_tc('crm_dashboard')], stop='tool_use')]] if earlier_round else []
+    scripts.append(([{'type': 'text', 'text': partial}] if partial else []) + ending)
+    events = await _run(FakeProvider(scripts), Registry(), [{'role': 'user', 'content': 'hi'}])
+    rows = [r for r in store.saved if r['role'] == 'assistant']
+    assert events[-1]['type'] == 'error'
+    if earlier_round or partial:
+        assert len(rows) == (2 if earlier_round else 1)
+        assert rows[-1]['content'] == partial + events[-2]['text']
+        if earlier_round:
+            assert 'after 1 tool call(s) (last: crm_dashboard)' in rows[-1]['content']
+            assert 'Some steps may already have run' in rows[-1]['content']
+            assert 'send your message again' not in rows[-1]['content']
+    else:
+        assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_unbilled_tool_start_cut(store):
+    events = await _run(FakeProvider([[{'type': 'tool_start', 'tool': 'crm_dashboard'}]]),
+                        Registry(), [{'role': 'user', 'content': 'hi'}])
+    assert events[-1]['type'] == 'error'
+    assert [r for r in store.saved if r['role'] == 'assistant'] == []
+
+
+@pytest.mark.asyncio
+async def test_unfinished_tool_round_limit(store, monkeypatch):
+    monkeypatch.setattr(engine, 'MAX_ITERATIONS', 2)
+    events = await _run(FakeProvider([[_complete([_tc('crm_dashboard')], stop='tool_use')]]),
+                        Registry(), [{'role': 'user', 'content': 'hi'}])
+    assert 'limit of 2 tool rounds' in store.saved[-1]['content']
+    assert 'after 2 tool call(s)' in store.saved[-1]['content']
+    assert events[-2]['text'] == store.saved[-1]['content']
+    assert events[-1]['error'] == 'Tool loop exceeded maximum iterations.'
+
+
+def _rate_limit(delay=None):
+    return {'type': 'error', 'error': 'Model X is rate-limited.', 'rate_limited': True, 'retry_after': delay}
+
+
+@pytest.fixture
+def sleeps(monkeypatch):
+    recorded = []
+
+    async def record(delay):
+        recorded.append(delay)
+
+    monkeypatch.setattr(engine, '_sleep', record)
+    return recorded
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('delay', 'expected'), [(3, 3), (None, 2.0), (120, 10.0), (-2, 0)])
+async def test_rate_limit_retry_success(store, sleeps, delay, expected):
+    prov = FakeProvider([[_rate_limit(delay)], [{'type': 'text', 'text': 'Success'}, _complete()]])
+    events = await _run(prov, Registry(), [{'role': 'user', 'content': 'hi'}])
+    assert sleeps == [expected]
+    assert prov._i == 2
+    assert prov.captured_messages[0] == prov.captured_messages[1]
+    assert prov.captured_tools[0] == prov.captured_tools[1]
+    assert prov.captured_system_prompts[0] == prov.captured_system_prompts[1]
+    assert store.saved[-1]['content'] == 'Success'
+    assert events[-1]['type'] == 'done'
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_twice(store, sleeps):
+    prov = FakeProvider([[_rate_limit()]])
+    events = await _run(prov, Registry(), [{'role': 'user', 'content': 'hi'}])
+    assert sleeps == [2.0]
+    assert prov._i == 2
+    assert events[-1]['error'] == 'Model X is rate-limited.'
+    assert [r for r in store.saved if r['role'] == 'assistant'] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('pending', [False, True])
+async def test_rate_limit_budget_shared_across_rounds(store, sleeps, pending):
+    name = 'crm_create_contact' if pending else 'crm_dashboard'
+    prov = FakeProvider([[_rate_limit()], [_complete([_tc(name)], stop='tool_use')], [_rate_limit()]])
+    events = await _run(prov, Registry(writes={'crm_create_contact'}), [{'role': 'user', 'content': 'hi'}])
+    assert sleeps == [2.0]
+    assert prov._i == 3
+    assert events[-1]['error'] == 'Model X is rate-limited.'
+    rows = [r for r in store.saved if r['role'] == 'assistant']
+    assert len(rows) == (1 if pending else 2)
+    if not pending:
+        assert 'the AI model is rate-limited right now' in rows[-1]['content']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('prefix', [{'type': 'text', 'text': 'Hello'}, {'type': 'tool_start', 'tool': 'crm_dashboard'}])
+async def test_rate_limit_after_output_never_retries(store, sleeps, prefix):
+    prov = FakeProvider([[prefix, _rate_limit()]])
+    events = await _run(prov, Registry(), [{'role': 'user', 'content': 'hi'}])
+    assert sleeps == []
+    assert prov._i == 1
+    assert events[-1]['error'] == 'Model X is rate-limited.'
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_cancellation_closes_attempt(store, monkeypatch):
+    import asyncio
+
+    closed = []
+
+    class ClosingProvider(FakeProvider):
+        async def stream_turn(self, *args):
+            try:
+                async for event in super().stream_turn(*args):
+                    yield event
+            finally:
+                closed.append(True)
+
+    async def cancel(delay):
+        assert closed == [True]
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(engine, '_sleep', cancel)
+    prov = ClosingProvider([[_rate_limit()]])
+    with pytest.raises(asyncio.CancelledError):
+        await _run(prov, Registry(), [{'role': 'user', 'content': 'hi'}])
+    assert prov._i == 1
+    assert [r for r in store.saved if r['role'] == 'assistant'] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('refusal', ['read-only', 'deal-guard', 'budget'])
+async def test_unfinished_progress_excludes_refused_tools(store, sleeps, monkeypatch, refusal):
+    reg = Registry(writes={'crm_create_contact'})
+    mode = 'read-only' if refusal == 'read-only' else 'power'
+    if refusal == 'deal-guard':
+        monkeypatch.setattr(reg, 'deal_write_refusal', lambda name, args: {'error': 'refused'})
+    elif refusal == 'budget':
+        monkeypatch.setattr(engine.BudgetState, 'check_write', lambda self, name: engine.BudgetAction.REJECT)
+    prov = FakeProvider([[_complete([_tc('crm_create_contact')], stop='tool_use')],
+                         [{'type': 'error', 'error': 'broken'}]])
+    events = await _run(prov, reg, [{'role': 'user', 'content': 'hi'}], tool_mode=mode)
+    assert reg.calls == []
+    assert 'Please send your message again' in store.saved[-1]['content']
+    assert 'after 1 tool call' not in store.saved[-1]['content']
+    assert events[-1]['type'] == 'error'
+
+
+@pytest.mark.asyncio
+async def test_unfinished_save_failure_still_reports_error(store, monkeypatch):
+    original = history.save_message
+
+    def fail_assistant(cid, mid, role, *args, **kwargs):
+        if role == 'assistant':
+            raise RuntimeError('store unavailable')
+        return original(cid, mid, role, *args, **kwargs)
+
+    monkeypatch.setattr(history, 'save_message', fail_assistant)
+    events = await _run(FakeProvider([[{'type': 'text', 'text': 'Partial'}]]),
+                        Registry(), [{'role': 'user', 'content': 'hi'}])
+    assert 'This reply is incomplete' in events[-2]['text']
+    assert events[-1]['error'] == 'The model response ended unexpectedly.'
+
+
+@pytest.mark.asyncio
+async def test_confirmation_wrap_up_can_use_retry(store, sleeps):
+    prov = FakeProvider([[_complete([_tc('crm_create_contact')], stop='tool_use')],
+                         [_rate_limit()], [{'type': 'text', 'text': 'Please approve'}, _complete()]])
+    reg = Registry(writes={'crm_create_contact'})
+    events = await _run(prov, reg, [{'role': 'user', 'content': 'hi'}])
+    assert sleeps == [2.0]
+    assert reg.calls == []
+    assert store.saved[-1]['content'] == 'Please approve'
+    assert events[-1]['type'] == 'done'
+
+
+@pytest.mark.parametrize("with_photo", [True, False])
+async def test_uploaded_images_reach_history_and_taint(store, monkeypatch, with_photo):
+    marks = []
+    monkeypatch.setattr(history, "mark_untrusted_seen", marks.append)
+    images = [{"filename": "card.png", "mime": "image/png", "data": b"photo"}] if with_photo else None
+    content = delimiters.wrap_untrusted_image("card.png") if with_photo else "hello"
+    provider = FakeProvider([[{"type": "text", "text": "Hello"}, _complete()]])
+    events = await _run(provider, Registry(), [{"role": "user", "content": content}], images=images)
+    assert "done" in _types(events)
+    assert store.saved[0]["images"] == images
+    assert marks == ([store.saved[0]["cid"]] if with_photo else [])

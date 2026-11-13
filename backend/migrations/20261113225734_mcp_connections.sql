@@ -93,7 +93,8 @@ CREATE INDEX IF NOT EXISTS idx_mcp_audit_at ON mcp_audit (at);
 -- Admin switch "Members may connect their own AI tools". Off by default; admins always may.
 ALTER TABLE crm_meta ADD COLUMN IF NOT EXISTS mcp_members_enabled BOOLEAN NOT NULL DEFAULT FALSE;
 
--- A todo written through a connected AI tool says so.
+-- A todo written through a connected AI tool says so. Keeps every earlier value,
+-- including `capture_token` (20261021173642).
 ALTER TABLE todos DROP CONSTRAINT IF EXISTS todos_source_check;
 ALTER TABLE todos ADD CONSTRAINT todos_source_check
-    CHECK (source IN ('capture_web', 'telegram', 'agent', 'observer', 'ui', 'mcp'));
+    CHECK (source IN ('capture_web', 'capture_token', 'telegram', 'agent', 'observer', 'ui', 'mcp'));

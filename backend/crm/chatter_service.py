@@ -181,9 +181,13 @@ def _bounded_offset(offset: int) -> int:
 
 
 def add_note(entity_type: str, entity_id: int, message: str,
-             author_id: int | None = None) -> dict:
+             author_id: int | None = None, *, system_note: bool = False) -> dict:
     """Append a note to a deal or contact. Raises ValueError on invalid input or a
     non-existent target.
+
+    ``system_note=True`` marks a note the CRM wrote about a state change; it is
+    excluded from every contact/touch read. The REST route and ``crm_add_note``
+    never set it.
 
     ``author_id`` is who WROTE the note (issue #60), which is not who owns the record
     — per-rep activity credits the author. NULL means unattributed, which is the
@@ -199,13 +203,27 @@ def add_note(entity_type: str, entity_id: int, message: str,
     uses. The assistant's ``crm_add_note`` stays on this signature on purpose: no agent,
     attended or unattended, can make a mention notification fire.
     """
-    note, _ = post_note(entity_type, entity_id, message, author_id=author_id)
+    note, _ = post_note(entity_type, entity_id, message, author_id=author_id, system_note=system_note)
+    return note
+
+
+def insert_note_cur(cur, entity_type: str, entity_id: int, text: str,
+                    author_id: int | None, now, *, system_note: bool = False) -> dict:
+    """Insert already-cleaned text on the caller's cursor, without scheduling work."""
+    cur.execute(
+        """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id, system_note)
+           VALUES (%s, %s, %s, %s, %s, %s) RETURNING *""",
+        (entity_type, entity_id, text, now, author_id, system_note),
+    )
+    # Hydrate from the INSERT's own row, inside the transaction — a post-commit
+    # re-select could return None if a concurrent delete removes the row first.
+    note = row_to_dict(cur, cur.fetchone())
     return note
 
 
 def post_note(entity_type: str, entity_id: int, message: str,
               author_id: int | None = None,
-              mentions: list[int] | None = None) -> tuple[dict, list[int]]:
+              mentions: list[int] | None = None, *, system_note: bool = False) -> tuple[dict, list[int]]:
     """``add_note`` plus @-mentions (#235). Returns ``(note, recipients)``.
 
     Mentions are stored in the note's own transaction; ``recipients`` are the seats the
@@ -221,14 +239,7 @@ def post_note(entity_type: str, entity_id: int, message: str,
         cur.execute(f"SELECT 1 FROM {table} WHERE id = %s FOR UPDATE", (entity_id,))
         if cur.fetchone() is None:
             raise ValueError(f"No {entity_type} with id {entity_id}")
-        cur.execute(
-            """INSERT INTO crm_chatter (entity_type, entity_id, message, created_at, author_id)
-               VALUES (%s, %s, %s, %s, %s) RETURNING *""",
-            (entity_type, entity_id, text, now, author_id),
-        )
-        # Hydrate from the INSERT's own row, inside the transaction — a post-commit
-        # re-select could return None if a concurrent delete removes the row first.
-        note = row_to_dict(cur, cur.fetchone())
+        note = insert_note_cur(cur, entity_type, entity_id, text, author_id, now, system_note=system_note)
         newly: list[int] = []
         note["mentions"] = []
         if wanted:  # the common, mention-free post costs no extra query

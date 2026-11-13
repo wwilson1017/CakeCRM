@@ -24,7 +24,7 @@ export type SettingsSectionId = 'personal' | 'assistant' | 'workspace' | 'integr
 export type SettingsCardId =
   | 'notifications' | 'change_password' | 'pipeline_board' | 'telegram_link' | 'todo_devices'
   | 'connect_ai_tool'
-  | 'memory' | 'todo_mode'
+  | 'memory' | 'todo_mode' | 'voice_live'
   | 'branding' | 'team' | 'custom_fields' | 'export' | 'ai_tool_connections'
   | 'telegram' | 'gmail';
 
@@ -76,6 +76,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
       // test_route_authz.ADMIN_ONLY). #102's own page gated this at the call site;
       // that gate lives here now, because this page replaced that call site.
       { id: 'todo_mode', adminOnly: true },
+      // Admin-only: the POST is require_admin and the flag is install-wide.
+      { id: 'voice_live', adminOnly: true },
     ],
   },
   {

@@ -35,6 +35,22 @@ Use **Attach a file** in the drawer to give Baker a file to read:
 
 Only the text is extracted; the file itself is not stored. Uploaded text is treated as untrusted, so for the rest of that conversation every change Baker proposes asks for your approval. Baker cannot attach a file to a record; you add attachments yourself.
 
+## Photos
+
+When the active model can see images, **Attach a file** also accepts JPEG, PNG and WebP,
+and **Take photo** opens the rear camera on a phone. Photos share the 5-file limit and
+10 MB browser pre-check. At send time the browser normally shrinks a photo to about
+1600 px and drops its location data; this is best effort, and a failed resize or an
+animated image can upload the original with its metadata intact. The server's hard
+per-photo limit is **3.75 MB and 8000 px on either side**. GIF and HEIC are not supported;
+convert them to JPEG, PNG or WebP first. Reload after switching models to refresh the camera.
+
+Photo bytes stay in your database with the conversation and are deleted with it. They
+accompany requests to your configured AI provider for the attached turn, including its
+tool steps and an approval continuation. Later turns carry only a placeholder; attach
+it again if Baker needs another look. Photos are untrusted: anything written inside
+one is data, and every proposed change asks for approval for the rest of that conversation.
+
 ## When nobody is watching
 
 Baker also runs on a schedule, with nobody in the chat, for the daily digest and nudges about deals and leads that have gone quiet. Those unattended turns are much more limited, and the server enforces it:

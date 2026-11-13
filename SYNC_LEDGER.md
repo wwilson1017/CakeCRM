@@ -71,6 +71,7 @@ Populated by port PRs from here on.
 
 | Feature | Source | CakeCRM PR / issue | Date |
 |---|---|---|---|
+| Quick update: search-first deal update screen plus a one-sentence Baker preview that saves through the same path | PR #4615 (`7f9d7e98b`), PR #4626 (`98c5fb8af`) | #337 | — |
 | Todo-GTD undo pill — a 7s undo block for marking a todo done anywhere and for filing an inbox item under a context | PR #2904 (`77a3337ff`), PR #2939 (`3b262b0d0`) | #231 | — |
 | Todo GTD Someday, Done and Projects on the shared collection layer (per-page configs, a stretched-link project card, the public todo app's boot-split deny entry retired) | PR #1840 (`2a639f836`), GTD half only | #234 | — |
 | Todo-GTD copy buttons + long-title wrapping | `e00e05cde` | #151 | — |
@@ -90,3 +91,5 @@ Populated by port PRs from here on.
 | Todo GTD undo block inline on the Inbox, between the triage card and the queue; floating block suppressed there (undo-row half only — the project-fields half of that commit is not ported here) | todo-gtd `162dcb3` | #265 | — |
 | Todo GTD fixes: true/false fields refuse text (a bulk update could star every todo), add boxes keep text typed while an add is in flight or refused, header search box shows the query on the results page, context rename cannot be cancelled mid-write, triage card keeps a date retyped mid-save | todo-gtd `fafb2e3`, `4e785ba`, `9c8f1ad`, `3c2a3a6`, `e40fd47`, `63e58eb` | #292 | — |
 | Reminders engine, phase 1: one-time and repeating reminders as data, fired by the heartbeat, delivered in-app and by Telegram | PR #3724 (`56e19637b`), PR #3747 (`e2a57c8d7`) | #283 | — |
+| Todo GTD triage card: labelled step-2 fields and a Tags field with known-tag suggestions | todo-gtd PR #75 (`0538a85`) | #328 | — |
+| Reminder pause/resume in Baker and the Reminders page; paused rows stay editable and skip firing, overdue repeats resume at the next future occurrence | PR #4492 (`079c6510e`), reminders only | #336 | — |

@@ -101,3 +101,19 @@ def get_ai_provider(
         return TogetherProvider(api_key=profile.get("key", ""), model=model or "Qwen/Qwen3.5-7B")
 
     return None
+
+
+TRANSCRIBE_FALLBACK_PROVIDERS = ("openai",)
+
+
+def get_transcriber(*, store: CredentialStore | None = None) -> AIProvider | None:
+    """Prefer the active provider, then a usable speech-capable fallback. Sync DB reads."""
+    store = store if store is not None else CredentialStore()
+    active = get_ai_provider(store=store)
+    if active is not None and active.can_transcribe:
+        return active
+    for name in TRANSCRIBE_FALLBACK_PROVIDERS:
+        provider = get_ai_provider(agent_provider=name, store=store)
+        if provider is not None and provider.can_transcribe:
+            return provider
+    return None

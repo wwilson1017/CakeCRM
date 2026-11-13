@@ -24,7 +24,9 @@ with **Approve** and **Deny**. Until you answer, the result Baker sees says the 
 pending your approval — which means nothing has happened yet, not that anything failed.
 
 In Telegram the same thing arrives as two inline buttons. Only the linked account can press
-them, and Baker waits until every pending change in a batch is answered before carrying on.
+them. A button answers that one action; replying with a plain **yes** (or "ok", "go ahead")
+approves every pending change. Any other message cancels the pending changes.
+Baker waits until every pending change in a batch is answered before carrying on.
 
 Approval is decided on the server: it reloads the tool and its arguments from its own record
 rather than trusting what comes back from the browser, marks the call as running before it
@@ -35,8 +37,11 @@ it already produced.
 
 - **Writing or deleting one of Baker's two protected knowledge files.** See
   `assistant/context-files`.
-- **A conversation that has read untrusted outside content.** Reading mail, or uploading a
-  file, brings in text somebody else wrote. From that point the conversation drops back to
+- **A conversation that has read untrusted outside content.** Reading mail, uploading a
+  file or a photo, or listing a todo that arrived through the capture link while no token was
+  configured (anyone could have posted it), brings in text somebody else wrote. A capture
+  through your tokened link is your own text and does not count. From that point the
+  conversation drops back to
   asking before every change, for the rest of its life — even after the message that brought
   the content in has aged out of view. The taint is recorded against the conversation itself,
   so it cannot be shaken off by talking for long enough.
@@ -57,3 +62,29 @@ Deleting a contact or a company is permanent — there is no recycle bin. Deals 
 at all: archiving is how one is removed, and it is recoverable (`pipeline/archived-deals`). A
 todo is never deleted: Baker drops it, and it stays recoverable. Deleting a contact keeps its
 todos, unlinked, and drops the open ones.
+
+## Baker looks a deal up before changing it
+
+Baker must find the deal in this conversation before changing it, and check that its
+title matches the deal you named. Looking it up and changing it in the same step does
+not count; Baker reads the result first, then makes the change. This also applies when
+you approve a change. After a CRM reset, Baker must look it up again.
+
+If the deal is lost or archived, the change can still go through, but Baker receives a
+warning to tell you which deal it changed and check that it is the one you meant.
+
+## When a reply doesn't finish
+
+If the AI service stops after starting a reply or completing a step, Baker saves a
+short note explaining why no complete reply arrived. This also covers an empty answer,
+a response cut off by its length limit, or too many tool rounds. Any partial reply is
+kept with the note. If steps already ran, check their results before asking again:
+a missing reply does not mean that no changes were made.
+
+For Anthropic, OpenAI and OpenAI-compatible providers, Baker waits briefly and retries
+the same model once per turn when a rate limit arrives before any output from that
+attempt. It uses the service's retry delay, capped at 10 seconds, or waits 2 seconds
+when no delay is supplied. If the rate limit persists, the error names the model.
+
+Stopping a reply yourself or a server restart does not add this note. A failure before
+any reply or completed step still shows an error without adding an assistant message.

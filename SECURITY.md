@@ -119,6 +119,33 @@ It returns nothing.
   conversation). Gmail bodies and threads are size-capped before they enter that
   context. Treat email content the assistant reads as data shared with your chosen
   AI provider.
+- **Voice and the AI provider.** A recording made with the mic is sent through the install
+  to the provider that transcribes it, which may be OpenAI even when another provider is
+  active for chat. CakeCRM never stores audio in a file, row or log. For a dictated chatter
+  note, the transcript also goes to the active provider's light-tier model for a best-effort
+  tidy. A conservative token guard rejects some changed names and numbers, but does not
+  guarantee unchanged meaning; the result is shown for review before saving. Reading replies
+  aloud uses the browser's speech engine: CakeCRM sends no speech request, though some browser
+  voices use a network service supplied by the browser vendor.
+
+- **Photos and the AI provider.** A JPEG, PNG or WebP photo attached in chat accompanies
+  requests to the configured AI provider for that turn, including tool steps and an
+  approval continuation. Later turns carry only a placeholder. Bytes are stored in
+  `assistant_message_images` with the conversation and deleted through its message FK
+  cascade. The browser normally shrinks photos and drops location metadata, but this
+  is best effort: a failed resize or animated image may retain original metadata.
+  The server verifies type by magic bytes and enforces 3.75 MB / 8000 px per side per photo.
+  Photos are untrusted content and tighten confirmation rules like uploaded documents.
+
+- **Live transcription (off by default, admin switch).** Live transcription shows your words
+  while you speak. To do that, your browser hands the microphone audio to its own speech
+  recognition service, which is usually run online by the browser maker (for example Google
+  for Chrome, Apple for Safari). That audio goes straight from the browser, not through this
+  install, under that company's terms, and cancelling a recording cannot take back audio it
+  has already heard. The text that is sent or saved still comes from the normal
+  transcription after you let go. When the switch is off (the default), audio goes only
+  through this install to your transcribing provider.
+
 - **Message bodies only, never your files.** Gmail stores an unusually large *text
   body* outside the message and behind an attachment id. Reading a thread will pull
   such a body back in, under a hard byte cap, so a long email doesn't silently
@@ -140,7 +167,7 @@ It returns nothing.
   during a turn, any write actions it proposes for the rest of that turn are routed
   through the human-confirmation gate in **every** mode — "power", and the routine tier
   that normal mode otherwise runs without asking. The same holds for a conversation
-  carrying an uploaded document, and it survives compaction: once a thread has seen
+  carrying an uploaded document or photo, and it survives compaction: once a thread has seen
   untrusted content, later turns keep confirming even after the message that carried it
   has aged out. So a malicious email — or an instruction a stranger files in your inbox —
   cannot silently drive the assistant to create a draft or change CRM data without your
@@ -189,7 +216,7 @@ asking, and so does filing either one to someday.
 Three rules override the tier entirely, in every mode:
 
 - a write to a protected context file always confirms (see below);
-- untrusted content in the conversation — an uploaded document, or email the assistant
+- untrusted content in the conversation — an uploaded document or photo, or email the assistant
   read, this turn or an earlier one — makes every write confirm;
 - the unattended assistant (heartbeat, proactive nudges) cannot reach any of
   these tools at all: its allowlist is read tools plus a single notification.

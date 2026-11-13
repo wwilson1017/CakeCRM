@@ -315,7 +315,8 @@
 
 - **Every row says who added it unless a person did** (#260). `todos.source` already
   recorded provenance; `crm/gtd/sourceLabel.ts` maps it to a visible word (`agent` →
-  Baker, `observer` → Observer, `capture_web` → Capture link, `telegram` → Telegram) and
+  Baker, `observer` → Observer, `capture_web`/`capture_token` → Capture link (#326),
+  `telegram` → Telegram) and
   returns null for `ui` and for any value it does not know, so a row never claims a
   provenance the server did not record. `components/SourceLabel.tsx` renders it on
   `TodoRow`'s meta line (so Today, To Do, Search, project pages, Someday and Done), the
@@ -480,8 +481,7 @@
   `todo_web_signin_tokens` (hash, seat, `expires_at`). Hashes only; `id BIGSERIAL` so every
   ORDER BY ends on `id`; FK `ON DELETE CASCADE` to `users`. They are auth state and sit in
   **neither** `_truncate_all` branch (like `saved_views`): a CRM reset does not sign phones
-  out. `crm_meta.todo_web_token` is kept but no longer read; dropping it is a follow-up once
-  no running revision reads it.
+  out. `crm_meta.todo_web_token` was dropped in #321.
   **Lifecycle:** a seat mints a code (`POST /api/crm/gtd/web-signin-link`, one hour, single
   use, at most 10 unspent per seat, QR rendered server-side by `core/qr.py`). `GET
   /todo/signin/{token}` is the page and redeems nothing; its button POSTs

@@ -17,9 +17,13 @@ Ported from Chatty's ``context_assembly.py``, dropping all ``json.loads`` (psyco
 oversized-row guard bounds any single row that would blow the live context;
 storage stays full. User-content truncation is delimiter-safe: it re-closes any
 ``<untrusted_file_content>`` block a cut would leave open, so an uploaded
-document's text can never escape its fence.
+document's text can never escape its fence. Photos are loaded by message id only
+for the newest user row, including approval continuations with assistant rows after
+it. Later user turns retain only the placeholder. Neutral image parts are translated
+by each provider adapter; no image bytes live in the stored row's content.
 """
 
+import base64
 import json
 import logging
 import re
@@ -114,9 +118,15 @@ def assemble_messages(provider, conversation_id: str) -> list[dict]:
     budget = getattr(provider, "context_window", None) or DEFAULT_BUDGET_TOKENS
     max_row_chars = int(_OVERSIZED_ROW_FRACTION * budget * CHARS_PER_TOKEN)
 
+    newest_user = next((row for row in reversed(rows) if row.get("role") == "user"), None)
+    last_images = []
+    if newest_user and newest_user.get("id") and getattr(provider, "supports_images", False):
+        last_images = history.get_message_images(newest_user["id"])
     messages: list[dict] = []
     for row in rows:
-        messages.extend(_row_to_messages(provider, row, max_row_chars))
+        messages.extend(_row_to_messages(
+            provider, row, max_row_chars, images=last_images if row is newest_user else None,
+        ))
     return _coalesce_consecutive(messages)
 
 
@@ -160,13 +170,22 @@ def _apply_compaction(rows, summary, first_kept_seq):
     }
     return head + [synthetic] + tail
 
-def _row_to_messages(provider, row, max_row_chars):
+def _image_part(img: dict) -> dict:
+    """Provider-neutral image part; adapters translate it (providers/base.py)."""
+    return {"type": "image", "media_type": img["mime_type"],
+            "data": base64.b64encode(img["data"]).decode("ascii")}
+
+
+def _row_to_messages(provider, row, max_row_chars, images=None):
     """Convert one DB row to provider-native message(s), applying the oversized guard."""
     role = row.get("role")
     content = row.get("content") or ""
 
     if role == "user":
-        return [{"role": "user", "content": _truncate_user_content(content, max_row_chars)}]
+        text = _truncate_user_content(content, max_row_chars)
+        if images:
+            return [{"role": "user", "content": [*map(_image_part, images), {"type": "text", "text": text}]}]
+        return [{"role": "user", "content": text}]
 
     tool_calls = row.get("tool_calls")  # JSONB → list | None (never a JSON string)
     if not tool_calls:

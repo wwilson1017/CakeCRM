@@ -22,7 +22,7 @@ import logging
 
 from core.localtime import tz
 from core.postgres import pg_fetchall, pg_fetchone
-from crm import gtd_common, provenance_service, scoring_service
+from crm import gtd_common, last_contact, provenance_service, scoring_service
 from crm.service import (
     LAST_TOUCH_SQL,
     LIVE_PREDICATE,
@@ -141,16 +141,9 @@ def get_contact_staleness(
 ) -> dict:
     """Active contacts with no logged interaction in ``stale_days`` days.
 
-    Contacts have no ``last_contacted_at`` column, so recency is derived from the
-    contact's own ``activity_log`` rows and un-archived notes. A contact who has NEVER
-    been contacted is included with ``days_since_contact: null`` and sorts first —
-    "never" is the most urgent case, not a missing value to skip.
-
-    Provenance housekeeping notes are excluded (#77): the assistant confirming an
-    AI-populated field writes a ``crm_chatter`` row, and counting it as contact meant a
-    record could stop looking stale without anyone having talked to the person.
-    ``scoring_service`` already excluded them from engagement; the Contacts list's derived
-    ``last_contact_at`` uses the same predicate, so all three now agree.
+    Recency is ``last_contact.last_contact_sql``, the same expression the Contacts
+    list and the pipeline read. A never-contacted contact has ``days_since_contact:
+    null`` and sorts first: never is the most urgent case.
 
     Archived/inactive contacts are excluded: deliberately parked, not neglected.
 
@@ -180,14 +173,8 @@ def get_contact_staleness(
         -- so a contact with notes but no logged activity still gets a real date, and
         -- one with neither correctly comes out NULL = "never contacted".
         WITH last_touch AS (
-            SELECT ct.id AS contact_id, GREATEST(
-                (SELECT MAX(a.created_at) FROM activity_log a
-                  WHERE a.contact_id = ct.id),
-                (SELECT MAX(ch.created_at) FROM crm_chatter ch
-                  WHERE ch.entity_type = 'contact' AND ch.entity_id = ct.id
-                    AND ch.archived = 0
-                    AND {scoring_service.not_housekeeping_sql('ch.message')})
-            ) AS touched_at
+            SELECT ct.id AS contact_id,
+                   {last_contact.last_contact_sql('contact', 'ct.id')} AS touched_at
               FROM contacts ct
         )
         SELECT ct.id, ct.name, ct.email, ct.company, ct.company_id, ct.status,

@@ -20,7 +20,7 @@ import { INK, INK_DIM, LINE_STRONG, mono } from '../../shared/styles';
 import { ScorePill, TouchCountPill } from './badges';
 import { isArchivedDeal } from '../pipelineFilters';
 import { DealTemperatureCell } from './DealTemperatureCell';
-import { parseUTC } from '../gtd/util';
+import { formatAge, parseUTC } from '../gtd/util';
 
 /** Every sortable field except the array order, plus the two display-only columns.
  *
@@ -42,19 +42,9 @@ interface PipelineColumn extends Omit<ListColumn<CrmDeal>, 'key' | 'sortValue'> 
  * west of UTC — the same off-by-a-day `pipelineFilters.ymd` exists to avoid on the filtering
  * side. So a date-only string is rebuilt from its calendar parts.
  *
- * `last_activity_at` is a full TIMESTAMPTZ, and it goes through `parseUTC` rather than the bare
- * constructor — but NOT for the reason this change was originally filed under, which the
- * evidence run disproved and which is worth recording so nobody re-derives it. Postgres returns
- * SIX fractional digits (the column is written from `datetime.now(timezone.utc).isoformat()`)
- * where ECMA-262 defines three, and the claim was that JavaScriptCore rejects the extra ones and
- * so this column showed "—" in Safari. Measured on WebKit 26.5 and the system `jsc`, it does
- * not: the bare constructor parses that string correctly, and the column was never broken there.
- *
- * What IS true, and is why the call stands: more than three digits is implementation-DEFINED
- * rather than guaranteed, so the bare constructor is a bet on engine behaviour the spec does not
- * require; and a zone-LESS timestamp is read as LOCAL by the constructor and as UTC by
- * `parseUTC`, which is a real divergence on every engine. `parseUTC` also matches what the GTD
- * surfaces already do with the same kind of value.
+ * `last_contact_at` is a TIMESTAMPTZ rendered through `formatAge` → `parseUTC`,
+ * matching the Contacts column. Zone-less timestamps must be read as UTC, and
+ * Postgres's six fractional digits are normalized before parsing.
  */
 function shortDate(value: string | null | undefined): string {
   if (!value) return '—';
@@ -180,9 +170,13 @@ export function buildPipelineListColumns(
     },
     {
       key: 'lastActivity',
-      header: 'Last activity',
+      header: 'Last contact',
       className: 'hidden lg:table-cell',
-      render: d => shortDate(d.last_activity_at),
+      render: d => (
+        <span className="text-muted" title={d.last_contact_at ?? 'No customer contact logged'}>
+          {d.last_contact_at ? formatAge(d.last_contact_at) : 'Never'}
+        </span>
+      ),
     },
     {
       key: 'owner',

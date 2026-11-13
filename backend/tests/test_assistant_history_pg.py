@@ -185,6 +185,14 @@ def test_claim_pending_tool_is_once_only(pg_db):
         def __init__(self):
             self.n = 0
 
+        conversation_id = None
+
+        def next_tool_batch(self):
+            pass
+
+        def deal_write_refusal(self, name, args):
+            return None
+
         def is_write(self, name):
             return True
 
@@ -534,3 +542,31 @@ def test_the_bootstrap_claims_legacy_conversations_on_a_skipped_version_upgrade(
                            (later["id"],))["user_id"] is None
     finally:
         pg_execute("DELETE FROM users")
+
+
+def test_photo_round_trip_and_conversation_cascade(pg_db):
+    from assistant import history
+    from core.postgres import pg_fetchone
+
+    cid = history.create_conversation(user_id=None)["id"]
+    mid = str(uuid.uuid4())
+    photos = [{"filename": "one.png", "mime": "image/png", "data": b"first"},
+              {"filename": "two.jpg", "mime": "image/jpeg", "data": b"second"}]
+    history.save_message(cid, mid, "user", "photos", images=photos)
+    rows = history.get_message_images(mid)
+    assert [(r["ordinal"], r["filename"], r["mime_type"], r["data"]) for r in rows] == [
+        (i, p["filename"], p["mime"], p["data"]) for i, p in enumerate(photos)]
+    assert history.delete_conversation(cid, user_id=None)
+    assert pg_fetchone("SELECT count(*) AS n FROM assistant_message_images")["n"] == 0
+
+
+def test_photo_insert_failure_rolls_back_message(pg_db):
+    from assistant import history
+
+    cid = history.create_conversation(user_id=None)["id"]
+    with pytest.raises(psycopg2.errors.CheckViolation):
+        history.save_message(cid, str(uuid.uuid4()), "user", "photos", images=[
+            {"filename": "one.png", "mime": "image/png", "data": b"first"},
+            {"filename": "two.gif", "mime": "image/gif", "data": b"second"},
+        ])
+    assert history.get_conversation(cid, user_id=None)["messages"] == []

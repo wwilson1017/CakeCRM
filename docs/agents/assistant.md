@@ -42,6 +42,7 @@
   #284's `todo_bulk_create` (an import of up to 500 todos) are bulk, `todo_delete_project`
   removes a record (#299 removed `todo_delete` and `crm_delete_todo`: a todo is never deleted;
   neither was routine, so the counts below are unchanged), and the reads cannot carry a tier at all.
+  #334 adds read `crm_preview_company_merge` and never-routine write `crm_merge_companies` (rule 3); routine counts are unchanged.
   #283's three reminder writes (`reminder_create`/`_update`/`_void`) are never routine
   either (rule 2: they notify someone later), pinned by
   `test_reminder_tools_are_never_routine`; see `reminders.md`.
@@ -123,6 +124,15 @@
   truncated oversized row otherwise handed the model an open fence, the one thing that
   function exists to prevent. The tokenless capture DEFAULT is unchanged: shrinking the
   on-ramp is a product question, not a fix to the read path.
+  **A capture from behind a configured token of minted strength is the owner's own text**
+  (#326): the token route stamps `source='capture_token'` when
+  `todo_tokens.is_minted_strength(configured)` (43+ chars, clamp-clean — `clamp_token`
+  itself has no minimum, and an admin may POST any string), which is in `TODO_SOURCES` but NOT in
+  `PUBLIC_CAPTURE_SOURCES`, so it is neither fenced nor tainting — the poster holds a secret
+  the todo web app already treats as the owner's. Only the bare `/capture` keeps
+  `capture_web`. Decided per ROW at write time, so rows written before the token existed
+  keep the stricter treatment; no backfill, because an old row cannot say whether a token
+  was configured when it arrived.
   **The assistant is named Baker and that name is a brand, not a setting** (#71):
   `identity.NAME` is the only source (the old `DEFAULT_NAME` spelling is gone — a
   "default" implies something may override it), `get_identity()` does not select the
@@ -634,3 +644,133 @@
   `test_assistant_turns.py` (memory twin), `test_assistant_turn_routes.py`,
   `test_assistant_turns_pg.py` (integration), `useAssistantChat.reattach.test.tsx`,
   `WorkingIndicator.test.tsx`.
+
+- **Photos (#345).** JPEG/PNG/WebP use the existing `/api/assistant/chat/upload`
+  route and its 5-file / 10 MB per-file cap; magic-byte validation plus header dimensions
+  enforce a hard 3.75 MB / 8000 px per-photo limit (Anthropic caps the base64 image at 5 MB). GIF and HEIC have dedicated refusals.
+  `history.save_message(images=...)` writes BYTEA rows in `assistant_message_images` in
+  the same conversation-locked transaction as the user row. The message FK cascades
+  deletion; assistant history and photos both survive CRM resets. No hash or thumbnails.
+  `wrap_untrusted_image` reuses the nonce upload fence with `kind="image"`, so ingress
+  taint, compaction taint, observer skipping and fence re-closing need no second marker.
+  Assembly loads images only for the newest USER row, scanning past assistant rows on
+  approval continuations. The attached turn's tool steps and continuations retain bytes;
+  later user turns retain only placeholders and ask for re-attachment if needed.
+  Neutral image parts are translated by all five adapters; `supports_images` defaults
+  false and `vision_ready` gates the camera and accepted extensions. Model-name capability
+  heuristics can miss custom models; the server also refuses uploads for unsupported models.
+  Readiness is the mount-time setup snapshot, so switching models needs a reload.
+  Staging stays synchronous; send-time `shrinkImage` normally reduces size and drops EXIF,
+  but failures/animated images can pass through intact. A live-turn check after resizing
+  prevents sending after Stop or switching threads. Bubbles show filenames, including
+  reloaded document uploads, never thumbnails. No engine-local image list is attached to
+  context: assembly reads stored rows, covering continuations. No compaction row-token
+  estimate is added because bytes are not row content and only accompany their attached
+  turn. Telegram photos and a look-again tool are out of scope.
+
+- **Voice (#338, port of cake_os #3832/#3820/#4019/#4020 — `backend/voice/`,
+  `frontend/src/shared/voice/`).** `AIProvider.can_transcribe` defaults false and
+  `transcribe` defaults to unsupported. Only OpenAI implements it, with a lazy SDK
+  import and fixed `gpt-4o-mini-transcribe` model; other endpoints are unverified.
+  `get_transcriber` prefers the active capable provider, then usable OpenAI.
+  `voice_ready = ai_ready and transcriber` comes from setup status; `VoiceReadyContext`
+  shares CrmLayout's existing fetch with both composers. Missing readiness or browser
+  recording support hides the mic.
+  `POST /api/voice/transcribe?tidy=true` accepts a raw audio body: auth, transcriber,
+  per-seat throttle (20/minute), MIME check, then bounded stream read (8 MiB), empty
+  check, transcription. Refusals before reading avoid even a multipart disk spool.
+  The Content-Length backstop includes the standard 64 KiB envelope; the stream cap
+  remains exactly 8 MiB. No audio file, row or log is written. Provider errors expose
+  only a generic response and exception class. The optional chatter tidy resolves the
+  ACTIVE provider's light tier inside the fail-open boundary, nonce-fences dictation,
+  bounds the reply/time, and uses `facts_preserved` to reject dropped digit tokens or
+  capitalised words. This is a conservative token guard, not a guarantee of meaning:
+  all dictated notes are reviewed before Post. The prompt joins the genericization guard.
+  Hold/release sends in Baker; slide left 80 px cancels; swipe up 60 px or tap under
+  250 ms locks; Stop and the three-minute/byte caps review. Chatter always reviews.
+  Tracks stop on every exit. New chat and conversation open increment `threadEpoch`
+  at their start to remount the mic, cancel recording and abort/drop stale uploads.
+  Read-aloud uses browser `speechSynthesis`, one page-wide generation-guarded player,
+  markdown-to-prose and utterances of at most 250 characters. Preference is local,
+  default off. Explicit `arm` on each local send enables automatic completed replies
+  and later approval continuations; `disarm` on thread changes keeps history silent.
+  New sends, disable, unmount and recording cancel playback. No voice key gate for
+  playback itself. SDK clients opened for transcription are closed after each request.
+  #348 adds an admin-only, default-off `crm_meta.voice_live_preview` switch and a
+  Web Speech display-only preview. The shared disclosure names the browser speech
+  service and its direct audio path. Batch remains the sole sent/saved transcript.
+  Setup gates preview on voice readiness; settings updates the current page's context.
+  Recognition is generation-guarded and stops without restart on error/end; Android
+  is excluded to protect MediaRecorder. Real-device coexistence is unverified in CI.
+  Realtime was not chosen because it needs key minting, websocket and PCM plumbing
+  for the same preview benefit. Still not ported: hold-key, Voice words, ElevenLabs,
+  speed, usage/cost rows. No new dependency.
+  Tests: backend `test_voice_provider`, `test_voice_router`, `test_voice_tidy`, setup
+  status in `test_router`, request limits, genericization, help and manual; frontend
+  shared voice tests cover gestures, recorder teardown, mic availability/upload races,
+  prose cleanup, segments, preference and player ownership; `useReadAloud.test.tsx`
+  pins arming/continuations/history, and `NoteComposer.test.tsx` pins review-only append.
+
+## Deal writes need a find first (#332, port of cake_os #3307)
+
+`crm/deal_write_guard.py` refuses a write naming a deal unless a CRM read or
+`crm_create_deal` returned that deal earlier in this conversation. It reuses
+`crm.links.deal_records` (canonical URL plus title); write echoes and non-CRM reads
+never establish finds. The engine checks before offering an Approve card or spending
+the write budget, and `ToolRegistry.execute_tool_sync` checks before every handler,
+including approved writes. Both attended and background loops advance a batch counter:
+a search sent alongside a write cannot license that write. Malformed deal ids refuse;
+optional null links carry no target. Lost or archived targets add `closed_deal_warning`
+to successful results, including approved writes.
+
+`assistant_deal_finds` is a set keyed by `(conversation_id, deal_id)`, cascading on
+conversation deletion. It has no deals FK, is excluded from export as owner-only
+bookkeeping, and joins both CRM reset branches because deal ids restart. Each find is
+stamped with the CRM epoch (`crm_meta.updated_at`, bumped by every reset) read before
+the finding tool runs, and counts only while that epoch is current, so neither a reset
+mid-turn nor a find saved just after a reset can license a write to a reused id. Registry state
+loads it once; load failures fail closed and save failures leave this run's finds usable.
+A fresh approval registry after a reset must find again. Conversationless runs remember
+finds only for that run. Finds survive compaction and are saved before the transcript;
+a failed transcript save can therefore leave a find whose result is no longer visible.
+Similar names can still lead to the wrong deal: the warning and write target echo help
+the user check intent. This is an assistant guard, not record access control.
+
+Tests: `test_deal_write_guard.py`, the pre-card case in `test_assistant_engine.py`, and
+`test_integration_deal_write_guard_pg.py` (persistence, isolation, cascade and reset).
+Future MCP dispatch (#323) must retain this guard and advance tool batches too.
+
+## Honest endings and 429 backoff (#340, port of cake_os #3831/#3855)
+
+Attended turns treat at least one completed provider round or streamed nonblank text
+as billed for the unfinished-reply note. Errors and cut streams then save unsaved text
+plus a note; exhausted tool rounds save a note on their own. Completed empty/refused
+answers and max_tokens replies fold the note into the existing iteration row (OpenAI and
+OpenAI-compatible `length` and Gemini `MAX_TOKENS` finishes are reported as `max_tokens`). Only
+executed tool calls count as progress; after tools ran the note, partial reply or not,
+asks the user to check the results rather than blindly resend. Persistence is best-effort, with warnings.
+The detached runner's stop/dead-turn endings, confirmation narration's honest note,
+and deliberate budget termination are unchanged.
+
+Anthropic, OpenAI and OpenAI-compatible 429 events name the actual model via the tier
+label rule and carry retry_after seconds. The engine retries only an attempt whose
+first event is that error, once per entire turn (including confirmation narration),
+on the same model: 2 seconds by default, supplied delays clamped to 0–10 seconds.
+The provider stream closes before the cancellable wait; tests patch _sleep.
+Not ported: fallback-model switching, background runner changes, or Google 429 handling.
+
+## Quick update's Baker preview is not a tool (#337)
+
+`quick_update.preview` is a member
+REST read using `get_ai_provider(agent_model_tier="light")` and `stream_turn` with
+`QUICK_UPDATE_SYSTEM_PROMPT` (covered by `test_prompt_genericization`). It never enters
+tool dispatch or the registry and writes nothing. Confirm posts the ordinary human
+write at `POST /api/crm/quick-update/deals/{id}`; a dispatch-level deal-write guard does
+not cover it and is not meant to. Note and lost reason must be whitespace-normalized,
+case-insensitive spans of the sentence; a missing note yields `needs: ["note"]`.
+Conflicting instructions return MIXED_UP, no changes return NO_CHANGE, provider/parse
+failures return UNAVAILABLE. Plain JSON with optional fence stripping, no structured
+output SDK; 20-second timeout and touch-count-style strict stream completion plus a
+4,000-character cap. Won carries the explicit local day shown in the preview; already
+won/lost flags are dropped with a warning. No provider hides the box, keeping the screen
+fully keyless. A confirmed preview is a member edit with no assistant provenance.

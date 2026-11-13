@@ -14,7 +14,7 @@ Workspace, Branding.
 - Accepted formats: **PNG, JPEG, GIF and WebP**.
 - SVG is deliberately refused. Browsers would not render it the way it is served here, and
   serving raw SVG from an address that needs no sign-in would be a security hole.
-- Maximum size: **2 MB**. A larger file is rejected with a message, not silently resized.
+- Large logos are shrunk in the browser before upload. The resulting file must be under **2 MB**; if shrinking is unavailable or the file is still too large, it is rejected with a message.
 
 Remove the logo from the same card and the wordmark stands alone.
 

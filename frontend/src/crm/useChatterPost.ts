@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { shrinkImage } from '../shared/shrinkImage';
 import { api } from '../core/api/client';
 import { uploadPath } from './chatterAttachments';
 import { postNoteWithAttachments, uploadAttachments } from './postNote';
@@ -20,9 +21,9 @@ export interface ChatterPost {
 }
 
 /** The real uploader: multipart through the shared client, which already sets the boundary. */
-const defaultUpload: UploadFn = (path, file) => {
+const defaultUpload: UploadFn = async (path, file) => {
   const form = new FormData();
-  form.append('file', file);
+  form.append('file', await shrinkImage(file));
   return api(path, { method: 'POST', body: form });
 };
 

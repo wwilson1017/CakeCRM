@@ -69,7 +69,7 @@ class Store:
         return (text or "")[:60]
 
     def save_message(self, cid, mid, role, content, tool_calls=None, model="",
-                     context_tokens=None, context_boundary_seq=None):
+                     context_tokens=None, context_boundary_seq=None, images=None):
         self.context_tokens.append(context_tokens)
         self.convs.setdefault(cid, {"id": cid, "messages": []})["messages"].append(
             {"id": mid, "role": role, "content": content, "tool_calls": tool_calls, "tool_results": None})
@@ -96,6 +96,14 @@ class Registry:
         self._routine = set(routine)
         self.descriptions = {}
         self.calls = []
+
+    conversation_id = None
+
+    def next_tool_batch(self):
+        pass
+
+    def deal_write_refusal(self, name, args):
+        return None
 
     def is_write(self, name):
         return name in self._writes

@@ -27,6 +27,10 @@ RESERVED_TODO_WEB_SLUGS = frozenset({
 })
 
 _TOKEN_BYTES = 32  # ~43 URL-safe chars
+# What a minted token is at least: token_urlsafe(32) is always 43 chars. The capture
+# route only trusts a configured token of this strength (#326); a caller-chosen short
+# one still works as a link but its captures stay in the public, fenced path.
+_MINTED_MIN_CHARS = 43
 
 
 def clamp_token(value: str) -> str:
@@ -51,3 +55,11 @@ def mint_token() -> str:
         # unchanged, but re-clamping keeps ONE definition of what a valid token is.
         if clamped and clamped == token:
             return token
+
+
+def is_minted_strength(token: str) -> bool:
+    """True when ``token`` is as unguessable as one ``mint_token`` makes: at least the
+    minted length and nothing the clamp would strip. ``clamp_token`` imposes no minimum
+    (an admin may still POST any string), so this is the one place that decides whether
+    a configured token is a real secret."""
+    return len(token) >= _MINTED_MIN_CHARS and clamp_token(token) == token

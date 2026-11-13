@@ -217,7 +217,7 @@
   `{"ok": true}`: a silent refetch can fail invisibly and leave the board still showing a
   deal as archived after a restore that happened. The board is also refreshed after the patch
   (a restore closes the sheet the way `onClose` does, which refreshes so an in-sheet note
-  reaches `last_activity_at`) — the patch is what makes the board *correct*, the refresh only
+  reaches `last_contact_at`) — the patch is what makes the board *correct*, the refresh only
   makes it *fresher*. `CrmDashboardPage` wires `onRestored` too: the banner renders on any
   host, since it reads the sheet's own re-fetched `archived_at`. Mark Won/Lost hide on an
   archived deal, and `DealForm` both disables its stage `<select>` **and omits `stage` from
@@ -233,7 +233,7 @@
   (`test_archive_route_writes_the_same_audit_as_the_assistant_tool`). `DealDetailBody` offers
   **Archive** on any live deal, open or closed, through `LostReasonModal variant="archive"`
   (reason required); the server row goes up via `onArchived` like Restore, and a failed archive
-  re-reads the deal since the write may have committed. Still no merge UI and no
+  re-reads the deal since the write may have committed. Still no deal merge UI and no
   archived-deals page. Note restoring a **merge source** is not an undo: the
   merge already repointed activity/todos, copied notes and gap-filled custom fields onto the
   target; restore only makes the source visible again.
@@ -255,14 +255,61 @@
   server-side (`_identity_executors`, the #190 rule) into `crm_archive_deal`,
   `crm_merge_deals`, `crm_update_contact` and `crm_update_company`; REST passes
   `user["id"]`. **The audit notes must never count as touches**, so
-  `scoring_service.HOUSEKEEPING_NOTE_LIKE` became a prefix FAMILY
-  (`HOUSEKEEPING_NOTE_PREFIXES`: provenance, archive, restore) rendered by
-  `not_housekeeping_sql()` as `%`-free `starts_with` literals — which is what lets it sit
-  inside the param-less `LAST_TOUCH_SQL`. That was a behaviour change on purpose: before
-  #239 `LAST_TOUCH_SQL` excluded no housekeeping note at all, so a provenance confirmation
-  on a DEAL reset its staleness clock (the deal-side twin of the contact bug #77 fixed).
-  Stale deals, the Today panel, the nudges and Weekly Touches now agree with the contact
-  side. A new housekeeping writer must build its text from those constants.
+  `crm_chatter.system_note` marks them explicitly (#352), read through
+  `last_contact.live_note_sql()`. Before #239 `LAST_TOUCH_SQL` excluded no housekeeping
+  note at all, so a provenance confirmation on a DEAL reset its staleness clock (the
+  deal-side twin of the contact bug #77 fixed). Stale deals, the Today panel, nudges,
+  Weekly Touches and the contact side now share the system-note exclusion.
+  **Automatic Last contact + Weekly Touches aligned — landed #333.**
+  `backend/crm/last_contact.py` is the shared leaf for four readers: the Contacts
+  list/search/detail join, contact staleness, both pipeline query twins, and Weekly
+  Touches. Customer contact means `lower(activity) IN ('call', 'email', 'meeting', 'note')`
+  or a live, non-housekeeping chatter note, dated by `created_at`; newest wins. `note`
+  is included because the deal sheet logs it as an activity. This narrows contact-side
+  recency too: `follow_up` and free-text activity kinds no longer move `last_contact_at`.
+  Pipeline wire field `last_activity_at` became `last_contact_at`; tools follow and
+  `WARM_SCHEMA_VERSION` is 3. The company rollup keeps its activity-only `last_activity_at`.
+  Facet/sort keys `lastActivity`/`lastActivityRange` stay unchanged, with labels and buckets
+  matching Contacts, so CollectionStorage stays version 1.
+  `TOUCH_AT_SQL` now uses the last contact at or before the latest journaled win for a
+  won deal, and the latest contact otherwise. No contact before the win, or no journaled
+  win, means no credit. The creation-time inequality is removed: a genuine contact counts
+  even when its timestamp equals creation. Edits, creation and stage moves earn nothing.
+  **Membership remains latest-contact-in-window**, not any-contact-in-window: another
+  contact later can remove a deal from an earlier custom range. Accepted cutoff edge:
+  a note logged while won can count after reopening and winning again, if it precedes
+  the latest win; this is not stage-history interval reconstruction.
+  `LAST_TOUCH_SQL` stays unchanged for stale deals, Today, health and analytics
+  `days_since_touch`, including its `updated_at` term. Scoring recency stays unchanged
+  too: its bound-parameter query needs COUNT and MAX together, so sharing the scalar
+  would require an engagement-count rewrite. No sent-mail match source exists here;
+  matched inbound email already creates email activity. No typed last-contact field,
+  migration or cutover: the v0.1 history change is accepted and old windows are re-read
+  under the new contact rule. `today-panel.md` needs no edit because its staleness clock
+  is deliberately unchanged.
+  **System notes carry a marker — landed #352.** `crm_chatter.system_note BOOLEAN NOT
+  NULL DEFAULT false` replaces text classification. The one leaf,
+  `last_contact.live_note_sql(alias)`, is `alias.archived = 0 AND NOT alias.system_note`.
+  People and Baker writing notes through REST / `crm_add_note` retain the false default.
+  Archive/restore, closed-on (single and bulk), lost reasons (`mark_deal_lost` and quick
+  update), merge announcements and provenance confirmations set true; deal/company merge
+  copies inherit their source's flag. A new system writer sets `system_note = true`;
+  never add a text prefix to a reader.
+  Every note reader switched: Contacts list/detail/search and staleness, both pipeline
+  twins, Weekly Touches, `LAST_TOUCH_SQL` (including Today, health and analytics), scoring
+  engagement and per-rep records touched. Excluding lost-reason and merge notes everywhere
+  is a deliberate behaviour change. `LAST_TOUCH_SQL` retains `d.updated_at`: marking lost
+  still moves the stale clock through the deal edit, only the NOTE's contribution is
+  excluded. Scoring's activity reads and AI `touch_count_service` evidence are unchanged.
+  `HOUSEKEEPING_NOTE_PREFIXES` / `not_housekeeping_sql` are gone; only writer text constants
+  remain. The migration strips the whole leading run
+  `^(\[Merged from (deal|company) #[0-9]+\] )+` before matching historical prefixes for
+  provenance, archive, restore, closed-on, lost reason and deal/company merge announcements.
+  It is idempotent, including nested copies; a historical human note starting with one of
+  those exact prefixes remains an accepted backfill ambiguity. New real notes with those
+  words count normally. The per-rep bound `NOT LIKE '[Merged from deal #%'` remains to
+  avoid double-credit for copies of REAL notes; extending it to company copies is out of
+  scope. No new index, frontend schema version or collection-storage version is needed.
   **Closed on (#279, port of cake_os #3642).** `deals.closed_on` is a nullable `DATE`: the
   day a Won deal actually closed, distinct from `expected_close_date` (the forecast, now
   labelled "Forecasted close date" everywhere; column, API field and the `closeDate` facet key
@@ -288,7 +335,8 @@
   `AT TIME ZONE` with zoneinfo's zone name) when present, else the move into won, and clamps a
   same-day/backdated win at 0 days. Stage conversion needed no change: it buckets entries into
   OPEN stages and reads the outcome from the current stage, so no win date enters it.
-  `get_analytics` and `TOUCH_AT_SQL` still date wins by the stage event (follow-ups).
+  `get_analytics` still dates wins by the stage event; `TOUCH_AT_SQL` uses that event
+  as the contact cutoff (#333), independently of `closed_on`.
   **Frontend:** Mark Won opens `ClosedOnModal` (inside `DealDetailBody`, so the board,
   dashboard and Weekly Touches share it); drags, bulk moves and the stage field don't prompt
   and get today. The dialog's "today" is the VIEWER's day while the server refuses after the
@@ -296,6 +344,9 @@
   is the optimistic mirror of the rule; the edit form edits the date only while Won and
   refuses a blank inline (`crm/closedOn.ts`). The List view gains a Closed on column and the
   facet panel a `closedOn` facet (no storage bump: adding a facet is not a shape change).
+  The dashboard Closed Sales card (#335) reuses `matchesClosedOnPreset` for Last 7 days,
+  fetching `GET /api/crm/deals?stage=won&sort_by=closed_on&limit=1000`; totals stay per
+  currency and a full in-window response marks the count with `+` and totals as "at least".
   Divergences: no admin backfill route or `date_closed` source (no Odoo here); only
   `crm_mark_deal_won` advertises `closed_on` (the stage-move and bulk tools refuse Won, #99);
   no agent "on behalf of" message (the seat is bound instead).
@@ -328,7 +379,7 @@
   **A Won card shows last contact instead of the open-deal nudges** (#129): the lead score asks
   "is this still alive" and the touch count asks "are we working it enough to close", and neither
   question survives the close — post-sale the board is read for which accounts have gone quiet.
-  `pipelineBoard.lastContactLabel` renders `last_activity_at` (#21's derivation, no new query),
+  `pipelineBoard.lastContactLabel` renders `last_contact_at` (#333's customer-contact derivation),
   keyed off the COLUMN so a card mid-drop reads right, and says "No contact logged" outright
   rather than rendering an empty slot.
   **The desktop board adapts to how focused the view is** (#182):
@@ -430,7 +481,9 @@
   custom field has done real work on that deal, and nothing in `LAST_TOUCH_SQL` now records
   it, so the deal keeps getting nudged until someone logs a note. It was arbitrary before
   (bumped from the edit modal, not from the detail page) and is consistently
-  **not-a-touch** now. Taking the other branch belongs in `set_field_values`, which already
+  **not a staleness reset** now. Since #333, all field edits are also excluded from
+  Weekly Touches; `LAST_TOUCH_SQL` still counts standard edits for stale/Today/health.
+  Taking the other branch belongs in `set_field_values`, which already
   holds the entity row `FOR UPDATE` — but it is a product call about what a "touch" means
   across contacts and companies too, and it needs its own change detection first: both UIs
   send only changed values, while the `crm_set_*_fields` tools can send unchanged ones, so
@@ -450,7 +503,7 @@
   single-deal path.
   In **bulk specifically**, a deal already in the target stage is dropped from the write
   plan after the locking `SELECT … FOR UPDATE` and before any write SQL is issued — so no
-  `updated_at` bump, which `LAST_TOUCH_SQL` would otherwise read as a touch and reset the
+  `updated_at` bump, which `LAST_TOUCH_SQL` would otherwise read and reset the
   staleness clock on a deal nothing changed. (The single-deal path reaches the same end
   state differently: it *issues* the UPDATE, which then matches no row.)
   Whole-request refusals come back as `ok:false` with HTTP 200, never a 4xx, because the
@@ -500,6 +553,14 @@
   term, since that string is built by dropping blank fields. Chatter now also attaches to
   **companies** (zero-migration: `entity_type` is
   free TEXT), cleaned in `delete_company`.
+  **Photo uploads (landed #339).** `shared/shrinkImage.ts` shrinks chatter attachments at
+  upload time and branding logos before their 2 MB check: oriented bitmap decode, 1600 px
+  long edge, quality/dimension ladder targeting 300 KB, WebP for PNG/WebP alpha and JPEG
+  otherwise. Canvas output strips EXIF location; failures, GIF, SVG and non-images retain
+  original bytes, as do animated WebP/APNG. PNG/WebP never grow; JPEG/HEIC/HEIF re-encode even if larger to strip EXIF.
+  Chatter still refuses originals over 10 MB during synchronous staging. **Take photo** on
+  `NoteComposer` uses the rear-camera capture input and timestamp filenames. Baker vision
+  remains #345; its composer is unchanged.
   **Chatter notes take attachments** (#57, `backend/crm/attachment_service.py` +
   `backend/core/thumbnails.py` + `frontend/src/crm/{chatterAttachments,chatterComposer,postNote,useChatterPost,useAuthedBlobUrl}.ts`
   + `components/{NoteComposer,NoteAttachments,AttachmentLightbox}.tsx`), keyless — nothing
@@ -1222,3 +1283,56 @@
   the snapshot back (pinned in `test_crm_export_integration.py`). Cells a spreadsheet would
   run as a formula (`= + - @`, tab, CR) get a leading apostrophe; JSON columns are written
   as JSON.
+
+- **Company merge (#334)** — `backend/crm/company_merge_service.py` provides an unlocked,
+  read-only `plan_merge` estimate and a gated, locked `merge_companies` transaction.
+  Contacts/deals (including archived deals) move; their todos/activity follow implicitly.
+  Company notes are copied with a source marker, without attachments/mentions; custom fields
+  and blank domain/industry/phone/address/source are gap-filled, and differing notes appended.
+  One survivor UPDATE applies the planned fields. Relinks use RETURNING ids for post-commit
+  rescoring without bumping contact/deal updated_at (a documented `_write_deal_update` exception).
+  The duplicate is archived with the #239 actor/reason housekeeping note; the survivor also
+  records the event. Archived absorbed rows are allowed; archived survivors are refused.
+  `merged_into_id` retains duplicate spellings; `company_follow_merge` resolves immutable,
+  acyclic chains (no compression) in the name resolver and every contact/deal assignment.
+  A merged company cannot be restored (locked service refusal plus DB CHECK), but may be
+  renamed. Deleting a survivor uses ON DELETE SET NULL: direct absorbed rows stay archived
+  and regain their own spelling. Earlier aliases then end at those archived rows.
+  **Concurrency gate:** `company_merge_gate()` is the FIRST statement for merge/delete,
+  taking the transaction advisory lock exclusively. `company_follow_merge` takes it shared,
+  then walks without row locks; update_contact/_write_status_audited and _write_deal_update
+  call it before any row lock, and create_contact/create_deal use it in INSERT VALUES.
+  A new writer of contacts.company_id / deals.company_id calls company_follow_merge as its
+  first statement, before row locks. The key is defined only by company_merge_gate_key().
+  Preview takes neither the gate nor row locks: current estimate, recomputed at merge.
+  Member routes: GET `/api/crm/companies/{id}/merge-preview?survivor_id=` and POST
+  `/api/crm/companies/{id}/merge` (path id is absorbed). `CompanyMergeDialog` picks an active
+  survivor, previews, requires a reason, guards stale responses/double submits, traps focus,
+  and refreshes the host after uncertain writes. The page shows a direct-successor link.
+  Baker gets read `crm_preview_company_merge` and never-routine write `crm_merge_companies`
+  with a server-bound actor. No undo, contact merge, or chain-end re-run sweep.
+- **Quick update (#337)** — `backend/crm/quick_update.py` + `quick_update_router.py`
+  mounted at `/api/crm/quick-update`; `frontend/src/crm/{QuickUpdatePage.tsx,quickUpdate.ts}`.
+  One transaction locks the live deal and composes `_write_deal_update_cur`,
+  `chatter_service.insert_note_cur` and `_create_todo_cur`. The first two are mechanical
+  extractions of the existing deal writer and note inserter; existing wrappers keep their
+  behavior. Lost uses the lifecycle verb's restricted field map and reason note on that
+  same cursor. Every write refuses an archived deal, including note-only writes. After
+  commit only the never-raising scoring and touch-count hooks run; the response is
+  `{deal_id, saved}`, with no post-commit read. A refused save saves nothing; a network or
+  server failure leaves the outcome uncertain, so the page asks the user to check the deal
+  before retrying. Search is re-fetched on returning to the picker. `search_deals(open_first=True)`
+  sorts open deals before the LIMIT 25; the existing unescaped LIKE behavior is retained.
+  Any member can edit any live deal. Lost reason is optional, following the existing CRM
+  rule rather than the source's required reason. Confirmed previews are human writes with
+  no assistant provenance, like smart import. No recent-notes thread, public phone link,
+  token table, owner restriction or migration is ported.
+
+## New contact details from a deal (#329)
+
+Both DealForm and the inline DealDetailBody editor show shared NewContactFields only for
+this form session's newly created contact. Fields appear after Create, because that row
+commits the contact immediately. Touched details are PUT before the deal write; both trimmed
+values (including blanks) are sent so retries can clear a previously saved value. Untouched
+fields and replacement contacts cause no contact write. Inline details join the close guard,
+and starting a fresh edit resets them. A failed deal write can leave the details saved.

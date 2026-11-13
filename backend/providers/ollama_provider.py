@@ -31,6 +31,20 @@ TOOL_CAPABLE_FAMILIES = [
 ]
 
 
+VISION_CAPABLE_FAMILIES = [
+    "llava", "llama3.2-vision", "llama4", "qwen2.5vl", "qwen3-vl", "qwen3.5",
+    "gemma3", "minicpm-v", "moondream", "mistral-small3.1", "granite3.2-vision",
+]
+
+
+def _is_vision_capable(model_name: str) -> bool:
+    low = model_name.lower()
+    if low.startswith(("gemma3:1b", "gemma3:270m")):
+        return False
+    return any(low == family or low.startswith((family + ":", family + "-"))
+               for family in VISION_CAPABLE_FAMILIES)
+
+
 def _is_tool_capable(model_name: str) -> bool:
     """Check if a model name matches a known tool-capable family."""
     base = model_name.split(":")[0].lower()
@@ -38,6 +52,10 @@ def _is_tool_capable(model_name: str) -> bool:
 
 
 class OllamaProvider(AIProvider):
+    @property
+    def supports_images(self) -> bool:
+        return _is_vision_capable(self.model)
+
     _tool_support_cache: dict[str, bool] = {}
 
     def __init__(self, base_url: str = "http://localhost:11434", model: str = ""):
