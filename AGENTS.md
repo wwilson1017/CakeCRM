@@ -29,6 +29,7 @@ not `@` imports (imports load eagerly).
 | Area | Doc |
 |---|---|
 | Gmail (`backend/gmail*/`, `GmailCard`) | `gmail.md` |
+| Connect your own AI: `/mcp`, its OAuth server, personal tokens (`backend/mcp_endpoint/`) | `mcp.md` |
 | Providers, assistant engine/prompt/confirm tiers, background turns, memory, context files, help library, playbooks | `assistant.md` |
 | Users, roles, auth, ownership, conversation access, Settings visibility | `accounts-and-ownership.md` |
 | Migrations, secrets, login credential, deploy storage | `database.md` |

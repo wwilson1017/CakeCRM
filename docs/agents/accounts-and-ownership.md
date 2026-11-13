@@ -233,3 +233,11 @@
   install-wide). The member card `todo_devices` (Personal) drives `get_current_user` routes
   that act on the caller's own devices; the on/off switch stays on the admin-only
   `todo_mode` card.
+- **Connected AI tools belong to a seat (#322).** A personal token or an OAuth sign-in is an
+  `mcp_connections` row keyed by `user_id`, carrying the seat's `token_epoch` from when it
+  was made: every `/mcp` request re-checks `is_active`, that epoch, expiry and, for a member,
+  the admin switch "Members may connect their own AI tools" (off by default; admins always
+  may). So password changes and deactivation end them with no cleanup code in
+  `users/service.py`. Members manage their own on the Personal card `connect_ai_tool`; the
+  switch and every seat's list are the admin-only Workspace card `ai_tool_connections`
+  (`/api/mcp/admin/*`, pinned in `test_route_authz.ADMIN_ONLY`). Full record: `mcp.md`.

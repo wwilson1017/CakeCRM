@@ -179,6 +179,7 @@ def test_maintenance_tick_is_keyless_and_drives_both_passes(monkeypatch):
     monkeypatch.setattr(service, "_maybe_refresh_scores",
                         lambda: calls.__setitem__("scores", calls["scores"] + 1) or {"refreshed": 0})
     monkeypatch.setattr(service, "_maybe_sweep_turns", lambda: {"judged": 0, "pruned": 0})
+    monkeypatch.setattr(service, "_maybe_sweep_mcp", lambda: {"audit": 0})
     monkeypatch.setattr(service, "maybe_run_heartbeat_turn",
                         lambda force=False: calls.__setitem__("turn", calls["turn"] + 1))
     monkeypatch.setattr(service.background, "run_background_turn",
@@ -188,7 +189,7 @@ def test_maintenance_tick_is_keyless_and_drives_both_passes(monkeypatch):
     out = service.maintenance_tick()
 
     assert out == {"dreaming": {"ran": True}, "score_refresh": {"refreshed": 0},
-                   "turn_sweep": {"judged": 0, "pruned": 0}}
+                   "turn_sweep": {"judged": 0, "pruned": 0}, "mcp_sweep": {"audit": 0}}
     assert calls["dreaming"] == 1 and calls["scores"] == 1
     assert calls["turn"] == 0                                          # …the tick runs no AI
     assert any("last_tick_at = now()" in q for q in calls["sql"])      # the clock stamp survived
@@ -252,3 +253,18 @@ def test_reminders_tick_returns_the_fire_summary(monkeypatch):
     monkeypatch.setattr(reminders_service, "fire_due",
                         lambda: {"fired": 1, "spawned": 0, "attempted": 2})
     assert service.reminders_tick() == {"fired": 1, "spawned": 0, "attempted": 2}
+
+
+def test_the_mcp_sweep_runs_on_the_tick_and_never_raises(monkeypatch):
+    """#322: the connected-AI-tool sweep rides the maintenance tick, and a failing sweep
+    costs the tick nothing."""
+    from mcp_endpoint import store
+
+    monkeypatch.setattr(store, "sweep", lambda: {"audit": 3})
+    assert service._maybe_sweep_mcp() == {"audit": 3}
+
+    def boom():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(store, "sweep", boom)
+    assert service._maybe_sweep_mcp() is None

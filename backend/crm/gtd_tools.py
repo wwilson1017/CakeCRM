@@ -43,7 +43,7 @@ from collections.abc import Callable
 # The routine confirmation tier (#180) and the rule for declaring it. An import-free
 # leaf, so this adds no cycle either.
 from assistant.confirm_tier import ROUTINE
-from crm import gtd_service, service
+from crm import gtd_service, provenance_service, service
 from crm.gtd_common import (
     MAX_BULK_IDS,
     PROJECT_STATUSES,
@@ -475,12 +475,15 @@ def get_gtd_tools(user: dict | None = None) -> tuple[list[dict], dict[str, Calla
     user_id = (user or {}).get("id")
     executors = {
         **GTD_TOOL_EXECUTORS,
-        # `source` is the server's to stamp, never the model's (#260).
+        # `source` is the server's to stamp, never the model's (#260): 'agent' for Baker,
+        # 'mcp' when a connected AI tool built this registry (#322).
         "todo_create": bind_server_args(
-            GTD_TOOL_EXECUTORS["todo_create"], owner_id=user_id, source="agent",
+            GTD_TOOL_EXECUTORS["todo_create"], owner_id=user_id,
+            source=provenance_service.todo_source(),
         ),
         "todo_bulk_create": bind_server_args(
-            GTD_TOOL_EXECUTORS["todo_bulk_create"], owner_id=user_id, source="agent",
+            GTD_TOOL_EXECUTORS["todo_bulk_create"], owner_id=user_id,
+            source=provenance_service.todo_source(),
         ),
         "todo_list": bind_owner_filter(GTD_TOOL_EXECUTORS["todo_list"], user),
     }

@@ -32,6 +32,8 @@ const LABELS: Record<string, TodoSourceLabel> = {
   // Behind a configured token the link is a secret only the owner holds (#326).
   capture_token: { text: 'Capture link', title: 'Added through your capture link' },
   telegram: { text: 'Telegram', title: 'Captured from Telegram' },
+  // #322: written by someone's own ChatGPT, Claude or coding tool, working as them.
+  mcp: { text: 'AI tool', title: 'Added by a connected AI tool' },
 };
 
 export function todoSourceLabel(source: Todo['source']): TodoSourceLabel | null {

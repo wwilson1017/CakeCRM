@@ -32,9 +32,9 @@ PROJECT_STATUSES = ("active", "someday", "completed", "dropped")
 # (#326): whoever holds that URL is the owner, so its rows are their own text and the
 # #204 fence leaves them alone. Never client-supplied — every write site passes its own
 # literal. `agent` is Baker acting on a request; `observer` is Baker filing something it
-# noticed in a conversation (#260). The GTD UI labels every value but `ui`
-# (gtd/sourceLabel.ts).
-TODO_SOURCES = ("capture_web", "capture_token", "telegram", "agent", "observer", "ui")
+# noticed in a conversation (#260); `mcp` is a connected AI tool working as a seat (#322).
+# The GTD UI labels every value but `ui` (gtd/sourceLabel.ts).
+TODO_SOURCES = ("capture_web", "capture_token", "telegram", "agent", "observer", "ui", "mcp")
 
 # The two statuses that mean "this is finished, stop showing it as work".
 FINISHED_STATUSES = ("done", "dropped")
