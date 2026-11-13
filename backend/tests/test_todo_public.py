@@ -507,6 +507,10 @@ def test_sign_out_ends_only_this_browser_and_leaves_its_cookie(client, on, sessi
     assert r.status_code == 200
     assert "set-cookie" not in r.headers
     assert client.get("/api/todo-web/session").status_code == 401
+    # Drop the jar's copies of `mine` first: the sign-in response stored one under the
+    # test client's own domain, and setting `other` by name would sit beside it, not
+    # replace it, so the request could still carry `mine`.
+    client.cookies.clear()
     client.cookies.set(COOKIE, other)
     assert client.get("/api/todo-web/session").status_code == 200
 
