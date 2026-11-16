@@ -16,6 +16,8 @@ The drawer's mode switch reads **Read / Ask / Auto**.
 - **Auto** — changes run straight away, with the exceptions below. You turn it on yourself.
 
 Read tools never ask, in any mode.
+Baker runs the lookups of one step side by side, and a lookup that has not answered within
+two minutes is stopped; Baker is told it timed out and carries on.
 
 ## What asking looks like
 
@@ -44,7 +46,9 @@ it already produced.
   conversation drops back to
   asking before every change, for the rest of its life — even after the message that brought
   the content in has aged out of view. The taint is recorded against the conversation itself,
-  so it cannot be shaken off by talking for long enough.
+  so it cannot be shaken off by talking for long enough. Within one step Baker's lookups
+  always finish before its changes run, so a change sent in the same step as an email read
+  asks too.
 
 That is the defence against prompt injection: text arriving from outside is wrapped and
 labelled as data, so it cannot pose as an instruction, and if it somehow steered Baker anyway
