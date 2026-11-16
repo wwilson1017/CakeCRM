@@ -108,7 +108,19 @@ it('keeps a non-preset interval and gap that Baker set', async () => {
   expect(selects[0].value).toBe('90');
   expect(selects[1].value).toBe('3');
   await click('Save');
-  expect(body()).toEqual({ interval_minutes: 90, quiet_hours: 'off', min_gap_hours: 3 });
+  // An unchanged interval is not resent, so it is never re-validated.
+  expect(body()).toEqual({ quiet_hours: 'off', min_gap_hours: 3 });
+});
+
+it('an operator default outside 30-1440 does not block saving quiet hours', async () => {
+  hb.interval_minutes = 15;
+  await render();
+  expect(container.querySelectorAll('select')[0].value).toBe('15');
+  const [start, end] = container.querySelectorAll<HTMLInputElement>('input[type="time"]');
+  await change(start, '22:00');
+  await change(end, '07:00');
+  await click('Save');
+  expect(body()).toEqual({ quiet_hours: '22:00-07:00', min_gap_hours: 4 });
 });
 
 it('toggles only the check-in and applies the returned settings', async () => {

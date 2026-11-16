@@ -89,7 +89,10 @@ export function NotificationSettings({ isMobile }: { isMobile: boolean }) {
       toast.error('Set both a start and an end for quiet hours, or clear both.');
       return;
     }
-    void saveHb({ interval_minutes: intervalMin,
+    // Send the interval only when it changed: an operator's env default outside
+    // 30-1440 is shown as-is and must not make every Save fail.
+    void saveHb({
+      ...(hb && intervalMin === hb.interval_minutes ? {} : { interval_minutes: intervalMin }),
       quiet_hours: quietStart ? `${quietStart}-${quietEnd}` : 'off', min_gap_hours: gap });
   }
 
