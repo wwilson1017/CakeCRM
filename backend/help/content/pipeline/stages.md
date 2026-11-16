@@ -1,7 +1,7 @@
 ---
 title: Pipeline stages
 description: The six deal stages, how a deal moves between them, and why Won and Lost are hidden by default.
-aliases: pipeline, stages, kanban, board, won, lost, close a deal, closed on, filters, hidden columns, stage criteria, stage checklist
+aliases: kanban, board, won, lost, close a deal, closed on, filters, hidden columns, stage criteria, stage checklist, hide header, collapse header
 admin: false
 ---
 ## The six stages
@@ -32,7 +32,7 @@ standard ones when the CRM is reset or its sample data is cleared.
 
 ## Won and Lost are hidden by default
 
-The board opens showing the four open stages. A header control always reads how many stages
+The board opens showing the four open stages. A header control reads how many stages
 are hidden with a **Show all** beside it, so nothing is ever secretly missing.
 
 Two separate things control this, and they answer different questions:
@@ -45,6 +45,11 @@ Two separate things control this, and they answer different questions:
 The tab's own choice wins while it exists, so revealing a column for a minute does not
 rewrite your default. Moving a deal into a hidden column automatically reveals that column,
 so a closed deal never vanishes without explanation.
+
+## Hiding the page header
+
+On desktop, the arrow at the right of the search row folds away the title and totals line to show more cards, with **Add Deal** moving into the search row; click the arrow again to restore the header and its recovery links, even on an empty board.
+This browser remembers the choice for you; phones keep the header visible.
 
 ## Moving a deal
 

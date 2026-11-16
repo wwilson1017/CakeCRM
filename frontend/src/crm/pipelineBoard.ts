@@ -125,6 +125,28 @@ export function loadShowClosedStages(): boolean {
   }
 }
 
+/** Per-viewer browser layout preference (#373, port of cake_os #3370). */
+export function headerCollapsedKey(viewer: string | null): string {
+  return 'cakecrm_pipeline_header_collapsed:' + (viewer ?? '');
+}
+
+export function loadHeaderCollapsed(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveHeaderCollapsed(key: string, collapsed: boolean): void {
+  try {
+    if (collapsed) localStorage.setItem(key, '1');
+    else localStorage.removeItem(key);
+  } catch {
+    /* Blocked storage still lets the page toggle for this mount. */
+  }
+}
+
 /**
  * Write the preference AND bring the current tab's stored set into line.
  *

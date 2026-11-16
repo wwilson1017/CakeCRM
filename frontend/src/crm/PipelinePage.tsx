@@ -10,7 +10,7 @@ import DealTemperatureIcon from './components/DealTemperatureIcon';
 import { DealTemperatureWriter } from './components/DealTemperatureCell';
 import { STAGE_COLORS, STAGE_ORDER } from './constants';
 import { movedDeal, stageWriteRequest } from './dealStageWrite';
-import { IconPlus } from '../shared/icons';
+import { IconChevron, IconPlus } from '../shared/icons';
 import { useIsMobile } from '../shared/useIsMobile';
 import { LoadError } from '../shared/LoadError';
 import { formatDate } from '../shared/formatDate';
@@ -27,8 +27,8 @@ import { CollectionView, denyEscapeBackdrop, useCollectionState } from '../share
 import type { CollectionMoveEvent, CollectionSelectionProps } from '../shared/collection';
 import { useUsers } from './useUsers';
 import {
-  boardColumnLayout, boardOrder, lastContactLabel, loadHiddenStages, openPipelineTotals,
-  saveHiddenStages, stageFromToggleKey, stageLabel, stageToggleKey, visibleStageKeys,
+  boardColumnLayout, boardOrder, headerCollapsedKey, lastContactLabel, loadHeaderCollapsed,
+  loadHiddenStages, openPipelineTotals, saveHeaderCollapsed, saveHiddenStages, stageFromToggleKey, stageLabel, stageToggleKey, visibleStageKeys,
 } from './pipelineBoard';
 import type { BoardDensity } from './pipelineBoard';
 import { isArchivedDeal } from './pipelineFilters';
@@ -356,6 +356,14 @@ export function PipelinePage() {
   // The email and the epoch are FROZEN at mount, as in `useCrmCorpus`: a sweep that started as one
   // user, or before a sign-out, is never saved afterwards.
   const viewerEmail = useContext(WarmViewerContext);
+  const headerKey = headerCollapsedKey(viewerEmail);
+  const [headerLocal, setHeaderLocal] = useState<{ key: string; collapsed: boolean } | null>(null);
+  const headerCollapsed = headerLocal?.key === headerKey ? headerLocal.collapsed : loadHeaderCollapsed(headerKey);
+  const headerHidden = headerCollapsed && !isMobile;
+  const toggleHeader = () => {
+    saveHeaderCollapsed(headerKey, !headerCollapsed);
+    setHeaderLocal({ key: headerKey, collapsed: !headerCollapsed });
+  };
   const [warmEmail] = useState(viewerEmail);
   const [warmEpochAtMount] = useState(warmEpoch);
   const viewerEmailRef = useRef(viewerEmail);
@@ -1501,9 +1509,37 @@ export function PipelinePage() {
   // ternary unmount it identically. And nothing can be selected before the board lands anyway —
   // `deepLinkVerdict` answers `idle` until a payload has been applied, precisely so a network
   // blip is never read as "that deal is gone".
+  const addDealButton = (inHeader: boolean) => (
+    <button onClick={() => setShowCreate(true)} style={{
+      ...btnPrimary, padding: '7px 14px', fontSize: 13,
+      flexShrink: 0, ...(inHeader ? { marginTop: 8 } : {}),
+    }}>
+      <IconPlus size={13} strokeWidth={2.25} /> {isMobile ? 'Add' : 'Add Deal'}
+    </button>
+  );
+  const toolbarExtras = isMobile ? undefined : (
+    <>
+      {headerCollapsed && addDealButton(false)}
+      <button
+        type="button"
+        aria-expanded={!headerCollapsed}
+        aria-label={headerCollapsed ? 'Show header' : 'Hide header'}
+        title={headerCollapsed ? 'Show header' : 'Hide header to fit more cards'}
+        onClick={toggleHeader}
+        style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: 34, height: 34, flexShrink: 0, border: `1px solid ${LINE_STRONG}`,
+          borderRadius: 6, background: 'transparent', color: INK_MUTE, cursor: 'pointer',
+        }}
+      >
+        <IconChevron aria-hidden="true" style={{ transform: headerCollapsed ? undefined : 'rotate(180deg)' }} />
+      </button>
+    </>
+  );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, padding: isMobile ? '20px 16px' : '32px 44px' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: isMobile ? 16 : 24 }}>
+      {!headerHidden && <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: isMobile ? 16 : 24 }}>
         <div>
           <h1 style={pageHeading(isMobile)}>Pipeline</h1>
           <p style={{ fontSize: isMobile ? 14 : 20, color: INK_MUTE, marginTop: 6 }}>
@@ -1514,8 +1550,8 @@ export function PipelinePage() {
                 {/* The way back is HERE, above CollectionView, and not inside it. Hiding every
                     stage empties `items`, and the layer answers an empty `items` with a bare
                     empty state rendered BEFORE its toolbar — so the visibility checkboxes that
-                    would undo it are gone at exactly the moment they are needed. This button is
-                    always mounted while anything is hidden, so no combination of hides (or a
+                    would undo it are gone at exactly the moment they are needed. Expanding the header
+                    makes this button reachable while anything is hidden, so no combination of hides (or a
                     restored all-hidden preference) can strand the board. */}
                 <button onClick={() => setHiddenStages(new Set())} style={headerLinkStyle}>Show all</button>
               </>
@@ -1537,14 +1573,8 @@ export function PipelinePage() {
             )}
           </p>
         </div>
-        <button onClick={() => setShowCreate(true)} style={{
-          ...btnPrimary,
-          padding: '7px 14px', fontSize: 13,
-          flexShrink: 0, marginTop: 8,
-        }}>
-          <IconPlus size={13} strokeWidth={2.25} /> {isMobile ? 'Add' : 'Add Deal'}
-        </button>
-      </div>
+        {addDealButton(true)}
+      </div>}
 
       <WarmStatus savedAt={warmBoard?.savedAt ?? null} failed={warmBoard?.failed ?? false} onRetry={() => void load(true)} />
 
@@ -1593,7 +1623,14 @@ export function PipelinePage() {
       {/* Supplies the List view's temperature cells with this page's writer. The board card takes
           the same callback as a plain prop — only the memoized columns need the indirection. */}
       <DealTemperatureWriter value={cycleDealTemperature}>
+      {/* CollectionView omits its toolbar for empty items; keep the way back reachable. */}
+      {!isMobile && items.length === 0 && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
+          {toolbarExtras}
+        </div>
+      )}
       <CollectionView<CrmDeal, StageColumn, 'column'>
+        toolbarExtras={toolbarExtras}
         config={config}
         state={state}
         items={items}

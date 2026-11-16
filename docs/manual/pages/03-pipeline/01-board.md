@@ -8,6 +8,10 @@ shots: [pipeline-board]
 
 {{shot:pipeline-board}}
 
+## Hiding the header
+
+On desktop, the arrow at the right of the search row folds away the title, totals line and top **Add Deal** button so the board shows more cards. **Add Deal** moves into the search row while folded. Click the arrow again to bring the header back, including **Show all** for hidden stages. The arrow stays available even on an empty board. This browser remembers the choice for you; phones keep the header as before.
+
 ## The columns
 
 There are six stages: lead, qualified, proposal, negotiation, won and lost. The board opens with the four open stages showing. Won and Lost are hidden by default, so the board is about work that is still live.
