@@ -106,6 +106,7 @@ ADMIN_ONLY = {
     # Assistant identity is install-wide (one assistant per install)
     ("/api/assistant/identity", "PUT"),
     # Heartbeat control
+    ("/api/heartbeat/settings", "PUT"),
     ("/api/heartbeat/run-now", "POST"),
     ("/api/heartbeat/proactive", "POST"),
     # Destructive / global CRM operations

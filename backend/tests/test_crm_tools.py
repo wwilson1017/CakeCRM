@@ -934,9 +934,8 @@ def test_crm_recompute_lead_scores_passes_scope_and_wraps_error(monkeypatch):
 # ── Install setup status (issue #200) ─────────────────────────────────────────
 
 def test_setup_status_is_a_read_with_no_arguments():
-    """A READ, and there is no settings WRITE tool beside it — an API key or an OAuth
-    secret must never flow through chat history, and a wrong settings write is
-    install-wide where a wrong record write is one record."""
+    """A READ; no settings write tool takes a key or a secret. Neither belongs in
+    chat history; the only settings write is the background check-in schedule."""
     d = next(t for t in CRM_TOOL_DEFS if t["name"] == "crm_get_setup_status")
     assert d["writes"] is False
     # Only a write may carry a confirmation tier; the registry fails loud otherwise.

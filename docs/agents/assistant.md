@@ -176,6 +176,32 @@
   `WRITE_BUDGET_BACKGROUND`, with untrusted CRM text kept in the user
   message, never the system prompt. So a prompt injection via CRM content
   can at worst send one notification, never create/log/update/delete a record.
+  **Heartbeat dedupe and settings (landed #360).** The turn stores its announced set in
+  `proactive_nudges` under kind `heartbeat`, reusing the existing polymorphic ledger and
+  CRM reset sweep. No new table; no whole-set hash, since removing one item must not
+  re-announce the rest. `heartbeat/dedupe.py` uses its own id+label queries with no LIMIT,
+  importing the dashboard/analytics predicates. Current minus announced wakes the model;
+  an empty delta prunes departed ids and finishes the claim without a model call. New
+  labels are nonce-fenced in the user message, never the static prompt. Ten per type
+  are listed with full counts; remembering the whole delta is an aggregate disposition.
+  All periodic gates (on/off, interval override, quiet window, pause and notification gap)
+  are read in the claim SQL. Local HH:MM comes from zoneinfo. The gap is in the claim,
+  not `notify_user`, so no tokens are spent during it and the digest is unaffected.
+  Defaults: 30-minute env interval, 4-hour gap; Settings accepts 30–1440 minutes and
+  0–24 hours. The env switch remains the operator's periodic hard-off. Force/run-now
+  bypasses settings, env, dedupe and gap, but keeps provider and in-flight guards.
+  Save the snapshot before releasing the claim after a clean decision, including
+  HEARTBEAT_OK, or a delivered notification; never after a clean send that delivered
+  nothing or another error. A failed save finishes as error. Simplification: an errored
+  turn that attempted delivery is remembered/stamped because the delivery thread may
+  outlive its timeout; joining that thread is the upgrade path. A CRM reset during the
+  model call may leave old ids announced until the next pruning pass.
+  `heartbeat_get_settings` is a keyless read, background-callable; the never-routine
+  `heartbeat_update_settings` executor refuses every non-admin seat, including no seat.
+  Ask and Telegram require approval; Auto applies it. No secrets pass through either.
+  REST: `/api/heartbeat/status` includes the shaped settings; admin-only
+  `PUT /api/heartbeat/settings` shares the strict validator. The Notifications card has
+  a provider-gated admin block beside the separate digest block.
   **Since #22 that ceiling is unchanged but the on-ramp is wider, deliberately:** the
   new read tools put raw per-record free text in front of the unattended turn for the
   first time — `crm_scan_gaps` returns `crm_field_provenance.value_snapshot` verbatim
@@ -518,7 +544,7 @@
   the English server-side from `_SETTINGS_SECTION_HELP` (section id → plain-words gloss +
   manual topic slugs) plus the validated id, never from client text, the same defence in
   depth `build_context_note` draws; the note names the section AND the topics covering it,
-  tying "where" to "how", and says the assistant cannot change settings itself. Those slugs
+  tying "where" to "how", and says the assistant cannot change settings itself except its admin-only background check-in schedule (#360). Those slugs
   are pinned against the real library by `test_help_library.py`, and the map's key set is
   pinned against the router's Literal, so a renamed topic or a drifted section fails CI
   rather than producing no note at all. **#193 landed between this branch's review and its

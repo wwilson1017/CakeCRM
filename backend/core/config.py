@@ -139,7 +139,7 @@ class Settings:
     frontend_url_is_default: bool = not _configured_base_url()
 
     # ── Heartbeat / notifications (issue #6) ────────────────────────────────
-    # The heartbeat AI turn is env-gated: unset → enabled on Railway, disabled
+    # Operator hard switch for the heartbeat AI turn: unset → enabled on Railway, disabled
     # locally (a local `python run.py` must not spam real background AI turns).
     # The maintenance tick and push delivery ALWAYS run (they are
     # keyless and cost-free), only the AI turn keys off this flag.
@@ -148,9 +148,8 @@ class Settings:
         if os.getenv("HEARTBEAT_ENABLED") is not None
         else bool(RAILWAY_PUBLIC_DOMAIN)
     )
-    # How stale last_turn_at must be before the tick runs another system heartbeat
-    # turn. The tick fires every 60s but a per-tick AI turn would be ~1,440/day of
-    # token burn, so the turn itself is throttled (Chatty's heartbeat cadence).
+    # Default minutes between heartbeat checks until an admin sets an override
+    # in Settings or through Baker. The scheduler polls; the claim enforces cadence.
     heartbeat_interval_minutes: int = _positive_int_env("HEARTBEAT_INTERVAL_MINUTES", 30)
 
     # Cadence of the read-only Gmail inbox touch scan (issue #17), driven by its own

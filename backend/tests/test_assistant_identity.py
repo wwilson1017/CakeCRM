@@ -404,6 +404,7 @@ def test_the_member_note_names_every_install_wide_control_a_member_might_ask_abo
         "the todo mode",         # POST /api/crm/todo-mode + todo-surfaces
         "connecting the telegram bot",
         "connecting gmail",
+        "background check-in schedule",  # PUT /api/heartbeat/settings
         "the daily digest and nudges",  # POST /api/heartbeat/proactive
     ):
         assert control in note, f"the member note never mentions {control!r}"
@@ -460,10 +461,10 @@ def test_the_page_note_names_the_section_and_its_manual_topics():
 
 
 def test_the_page_note_says_the_assistant_cannot_change_settings():
-    """There are no settings write tools and there must not be. Saying so in the note is
-    what stops the model proposing one it cannot call."""
+    """Settings stay human actions except for the explicit admin check-in schedule tool."""
     note = identity.build_page_note("settings", "workspace")
     assert "cannot change settings yourself" in note
+    assert "heartbeat_update_settings" in note
 
 
 @pytest.mark.parametrize("page,section", [

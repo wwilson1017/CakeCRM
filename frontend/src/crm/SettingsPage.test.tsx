@@ -74,7 +74,10 @@ const RESPONSES: Record<string, unknown> = {
   '/api/crm/fields': [],
   '/api/telegram/status': { connected: false, bot_username: '', linked: false, linked_name: '', link_code: '', link_url: '' },
   '/api/setup/status': { ai_ready: true },
-  '/api/heartbeat/status': { state: { proactive_enabled: true }, proactive_digest_hour: 8 },
+  '/api/heartbeat/status': { state: { proactive_enabled: true }, proactive_digest_hour: 8,
+    provider_ready: true, enabled: true,
+    heartbeat_settings: { enabled: true, interval_minutes: 30, quiet_hours: 'off', min_gap_hours: 4,
+      paused_until: null, timezone: 'UTC', operator_enabled: true } },
   '/api/gmail/status': {
     connected: false, email: '', connection_status: '', client_id: '',
     client_secret_present: false, scopes: [], redirect_uri: 'https://example.test/api/gmail/oauth/callback',
@@ -205,6 +208,20 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     auth.isAdmin = true;
     await render();
     expect(container.textContent).toContain('Daily digest and nudges');
+  });
+
+  it('hides the background check-in controls from a member and from an install with no AI provider', async () => {
+    await render();
+    expect(container.textContent).not.toContain('background check-in');
+    auth.isAdmin = true;
+    await render();
+    expect(container.textContent).toContain('background check-in');
+    await clickTab('Assistant');
+    api.mockImplementation((path: string) => Promise.resolve(path === '/api/heartbeat/status'
+      ? { ...(RESPONSES[path] as object), provider_ready: false }
+      : RESPONSES[path.split('?')[0]] ?? {}));
+    await clickTab('Personal');
+    expect(container.textContent).not.toContain('background check-in');
   });
 
   it('sends a member deep-linked to an admin section back to Personal', async () => {

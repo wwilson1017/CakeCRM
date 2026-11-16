@@ -10,24 +10,37 @@
  * where it goes: the daily pipeline digest and the stale-record nudges. That one IS
  * server-side state (heartbeat_state.proactive_enabled), read from the existing
  * /api/heartbeat/status payload so the column has a single source of truth.
+ * The third part (#360) controls Baker's background check-in, also server-side state.
  */
 
 import { useEffect, useState } from 'react';
-import { api } from '../../core/api/client';
+import { api, ApiError } from '../../core/api/client';
 import { useAuth } from '../../core/auth/AuthContext';
 import { toast } from '../../shared/toast';
-import { INK_MUTE, FONT_SANS, LINE } from '../../shared/styles';
+import { INK_MUTE, FONT_SANS, LINE, inputStyle, labelStyle } from '../../shared/styles';
 import { btnPrimary, btnSecondary, settingsSubheading } from '../styles';
+import { parseUTC } from '../gtd/util';
 import { SettingsCard } from './SettingsCard';
 import {
   isPushSupported, getPushPermissionState, isSubscribed,
   subscribeToPush, unsubscribeFromPush,
 } from '../../core/notifications/pushSubscription';
 
+type HeartbeatSettings = {
+  enabled: boolean;
+  interval_minutes: number;
+  quiet_hours: string;
+  min_gap_hours: number;
+  paused_until: string | null;
+  timezone: string;
+  operator_enabled: boolean;
+};
+const INTERVALS = [30, 60, 120, 240, 480, 720, 1440];
+const GAPS = [0, 1, 2, 4, 8, 12, 24];
+
 export function NotificationSettings({ isMobile }: { isMobile: boolean }) {
-  // The Web Push half configures this browser and is everyone's. The digest half below
-  // configures the INSTALL (`heartbeat_state.proactive_enabled`) and its route is
-  // `require_admin`, so it is admin-only — the card is member-visible, the toggle is not.
+  // Web Push configures this browser. Digest and check-in blocks configure the install
+  // through admin-only routes, inside this member-visible card.
   const { isAdmin } = useAuth();
   const [supported] = useState(isPushSupported());
   const [permission, setPermission] = useState<NotificationPermission | 'unsupported'>(() => getPushPermissionState());
@@ -39,14 +52,58 @@ export function NotificationSettings({ isMobile }: { isMobile: boolean }) {
   const [digestHour, setDigestHour] = useState(8);
   const [proactiveBusy, setProactiveBusy] = useState(false);
 
+  const [hb, setHb] = useState<HeartbeatSettings | null>(null);
+  const [providerReady, setProviderReady] = useState(false);
+  const [intervalMin, setIntervalMin] = useState(30);
+  const [quietStart, setQuietStart] = useState('');
+  const [quietEnd, setQuietEnd] = useState('');
+  const [gap, setGap] = useState(4);
+  const [hbBusy, setHbBusy] = useState(false);
+
+  function applyHb(s: HeartbeatSettings) {
+    setHb(s);
+    setIntervalMin(s.interval_minutes);
+    const [start, end] = s.quiet_hours === 'off' ? ['', ''] : s.quiet_hours.split('-');
+    setQuietStart(start);
+    setQuietEnd(end);
+    setGap(s.min_gap_hours);
+  }
+
+  async function saveHb(body: Record<string, boolean | number | string>) {
+    setHbBusy(true);
+    try {
+      const res = await api<{ settings: HeartbeatSettings }>('/api/heartbeat/settings', {
+        method: 'PUT', body: JSON.stringify(body),
+      });
+      applyHb(res.settings);
+      toast.success('Check-in settings saved.');
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.detail : 'Could not save those settings.');
+    } finally {
+      setHbBusy(false);
+    }
+  }
+
+  function saveSchedule() {
+    if (Boolean(quietStart) !== Boolean(quietEnd)) {
+      toast.error('Set both a start and an end for quiet hours, or clear both.');
+      return;
+    }
+    void saveHb({ interval_minutes: intervalMin,
+      quiet_hours: quietStart ? `${quietStart}-${quietEnd}` : 'off', min_gap_hours: gap });
+  }
+
   useEffect(() => {
     let active = true;
     isSubscribed().then(v => { if (active) setSubscribed(v); });
-    api<{ state: { proactive_enabled?: boolean }; proactive_digest_hour: number }>('/api/heartbeat/status')
+    api<{ state: { proactive_enabled?: boolean }; proactive_digest_hour: number;
+      provider_ready?: boolean; heartbeat_settings?: HeartbeatSettings }>('/api/heartbeat/status')
       .then(res => {
         if (!active) return;
         setProactive(res.state?.proactive_enabled ?? true);
         setDigestHour(res.proactive_digest_hour ?? 8);
+        setProviderReady(res.provider_ready ?? false);
+        if (res.heartbeat_settings) applyHb(res.heartbeat_settings);
       })
       .catch(() => { /* leave the row hidden rather than guess the server's state */ });
     return () => { active = false; };
@@ -156,6 +213,71 @@ export function NotificationSettings({ isMobile }: { isMobile: boolean }) {
           >
             {proactiveBusy ? 'Working…' : proactive ? 'Turn off' : 'Turn on'}
           </button>
+        </div>
+      )}
+      {isAdmin && providerReady && hb !== null && (
+        <div style={{ marginTop: 24, paddingTop: 20, borderTop: `1px solid ${LINE}` }}>
+          <h3 style={settingsSubheading}>Baker's background check-in</h3>
+          <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, lineHeight: 1.6, maxWidth: 460 }}>
+            Baker looks for newly overdue todos, deals going cold and contacts nobody has followed
+            up with, and sends one notification when something is new. It does not repeat what it
+            has already told you. Needs an AI provider. Separate from the daily digest above.
+          </p>
+          {!hb.operator_enabled && (
+            <p style={{ color: INK_MUTE, fontSize: 13 }}>
+              Background check-ins are switched off for this server (HEARTBEAT_ENABLED).
+              These settings take effect once it is on.
+            </p>
+          )}
+          {hb.paused_until && (
+            <p style={{ color: INK_MUTE, fontSize: 13 }}>
+              Paused until {parseUTC(hb.paused_until).toLocaleString()}{' '}
+              <button style={btnSecondary} disabled={hbBusy} onClick={() => saveHb({ pause_days: 0 })}>Resume</button>
+            </p>
+          )}
+          <button style={hb.enabled ? btnSecondary : btnPrimary} disabled={hbBusy}
+            onClick={() => saveHb({ enabled: !hb.enabled })}>
+            {hb.enabled ? 'Turn off' : 'Turn on'}
+          </button>
+          <div style={{ display: 'grid', gap: 16, marginTop: 16, maxWidth: 460 }}>
+            <label style={labelStyle}>
+              Check every
+              <select style={inputStyle} value={intervalMin} disabled={hbBusy}
+                onChange={e => setIntervalMin(Number(e.target.value))}>
+                {!INTERVALS.includes(intervalMin) && <option value={intervalMin}>{intervalMin} minutes</option>}
+                {INTERVALS.map(n => <option key={n} value={n}>
+                  {n === 30 ? '30 minutes' : n === 1440 ? 'Once a day' : `${n / 60} ${n === 60 ? 'hour' : 'hours'}`}
+                </option>)}
+              </select>
+            </label>
+            <div>
+              <div style={labelStyle}>Quiet hours ({hb.timezone} time)</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input type="time" aria-label="Quiet hours start" style={{ ...inputStyle, width: 'auto' }}
+                  value={quietStart} disabled={hbBusy} onChange={e => setQuietStart(e.target.value)} />
+                <span style={{ color: INK_MUTE }}>to</span>
+                <input type="time" aria-label="Quiet hours end" style={{ ...inputStyle, width: 'auto' }}
+                  value={quietEnd} disabled={hbBusy} onChange={e => setQuietEnd(e.target.value)} />
+                <button disabled={hbBusy} onClick={() => { setQuietStart(''); setQuietEnd(''); }}
+                  style={{ background: 'none', border: 'none', padding: 0, color: INK_MUTE, cursor: 'pointer', textDecoration: 'underline' }}>Clear</button>
+              </div>
+              <p style={{ color: INK_MUTE, fontSize: 12 }}>
+                No check-ins between these times. The window can cross midnight.
+              </p>
+            </div>
+            <label style={labelStyle}>
+              At most one notification every
+              <select style={inputStyle} value={gap} disabled={hbBusy} onChange={e => setGap(Number(e.target.value))}>
+                {!GAPS.includes(gap) && <option value={gap}>{gap} hours</option>}
+                {GAPS.map(n => <option key={n} value={n}>
+                  {n === 0 ? 'No minimum' : `${n} ${n === 1 ? 'hour' : 'hours'}`}
+                </option>)}
+              </select>
+            </label>
+            <div><button style={btnPrimary} disabled={hbBusy} onClick={saveSchedule}>
+              {hbBusy ? 'Saving…' : 'Save'}
+            </button></div>
+          </div>
         </div>
       )}
     </SettingsCard>

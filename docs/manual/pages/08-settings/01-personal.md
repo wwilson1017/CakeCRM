@@ -17,6 +17,8 @@ Push works with no AI keys. See [Notifications](../01-getting-started/06-notific
 
 **Daily digest and nudges** is shown to admins only, because it is one setting for the whole team. It sends a pipeline summary each morning, plus a nudge when a deal goes cold or a contact with open business has not been spoken to. It also works with no AI keys.
 
+**Baker's background check-in** is a separate admin-only block, shown when an AI provider is ready. It reports newly overdue todos, cold deals and untouched contacts without repeating unchanged records. Set on/off, **Check every** (30 minutes to once a day), **Quiet hours** in the displayed install timezone, and **At most one notification every** (four hours by default). Quiet hours can cross midnight. Save applies the schedule; **Resume** ends a pause. Admins can also ask Baker to change these settings or pause for a number of days.
+
 ## Change password
 
 Enter your **Current password**, a **New password** of at least 8 characters, and confirm it. If two-step sign-in is on for your account, the form also asks for a code.
