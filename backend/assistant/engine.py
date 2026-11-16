@@ -35,7 +35,15 @@ import uuid
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
 
-from assistant import assembly, compaction, confirm_tier, delimiters, history, identity
+from assistant import (
+    assembly,
+    compaction,
+    confirm_tier,
+    delimiters,
+    history,
+    identity,
+    read_batch,
+)
 from assistant.write_budget import WRITE_BUDGET_PER_TURN, BudgetAction, BudgetState
 from context_files import prompt as context_prompt, tools as context_file_tools
 from memory import context as memory_context
@@ -554,7 +562,19 @@ async def _chat_impl(
         terminated = False
 
         registry.next_tool_batch()
-        for tc in tool_calls:
+        # Reads first (#372): every read in this batch has answered — the audited CRM and
+        # todo ones side by side, each under a timeout — before any write below is gated
+        # or run, whatever order the model listed them in. Their taint is applied HERE,
+        # ahead of the walk, so a write listed BEFORE a third-party read confirms too.
+        # The walk then records and emits everything in the model's order.
+        reads = await read_batch.run_reads(registry, tool_calls)
+        fenced = {
+            i: delimiters.fence_tool_result(tool_calls[i].get("name"), outcome.result)
+            for i, outcome in reads.items()
+        }
+        if any(tainted for _, tainted in fenced.values()):
+            turn_has_untrusted_reads = True
+        for i, tc in enumerate(tool_calls):
             name = tc.get("name")
             tool_use_id = tc.get("id")
             args = tc.get("args", {}) or {}
@@ -650,12 +670,18 @@ async def _chat_impl(
                 })
                 continue
 
-            # Execute (reads in any mode; writes in power mode).
-            t0 = time.monotonic()
+            # Execute (writes in power mode) or pick up the read that already ran.
             tool_count += 1
             last_tool = name
-            result = await registry.execute_tool(name, args)
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            if i in reads:
+                # Deals are recorded only now, as the result is recorded for the model: a
+                # read dropped by a timeout or an early exit above never becomes a find.
+                await read_batch.accept(registry, reads[i])
+                result, elapsed_ms = reads[i].result, reads[i].elapsed_ms
+            else:
+                t0 = time.monotonic()
+                result = await registry.execute_tool(name, args)
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
             # ONE call decides what the model is shown and whether this result carried
             # THIRD-PARTY text — shared with the background runner so the two loops can
             # never disagree (delimiters.fence_tool_result). It covers three fences: a
@@ -667,7 +693,7 @@ async def _chat_impl(
             #
             # `result` itself is untouched and is what the browser gets as `tool_end`, so
             # the tool-call preview shows the record rather than a wall of nonce tags.
-            content, tainted = delimiters.fence_tool_result(name, result)
+            content, tainted = fenced[i] if i in reads else delimiters.fence_tool_result(name, result)
             # Third-party text taints the rest of the turn and, via the nonce-fenced
             # marker persisted below, later turns too — so a prompt injection in an email
             # or in a stranger's capture can't silently drive an unconfirmed write. The

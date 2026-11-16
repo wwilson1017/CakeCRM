@@ -107,9 +107,28 @@ def _todo_bulk_create(todos: list[dict], **server_args) -> dict:
     return _with_targets(result, "todo", result["ids"])
 
 
-def _todo_list(**kwargs) -> dict:
-    todos = gtd_service.list_todos(**kwargs)
-    return {"todos": todos, "count": len(todos), "note": _UNTRUSTED_NOTE}
+def _compact(row: dict) -> dict:
+    # source is unconditional: the per-row public-capture fence needs it (#204).
+    compact = {key: row[key] for key in ("id", "title", "status", "source")}
+    for key in ("context", "project_name", "due_date", "bring_back_on", "star", "tags", "repeat"):
+        if row.get(key):
+            compact["project" if key == "project_name" else key] = row[key]
+    if row.get("notes"):
+        compact["has_notes"] = True
+    return compact
+
+
+def _todo_list(offset=0, detail=False, **filters) -> dict:
+    offset = offset or 0  # a model may send an explicit null
+    todos = gtd_service.list_todos(**filters, offset=offset)
+    total = gtd_service.count_todos(**{k: v for k, v in filters.items() if k != "limit"})
+    return {
+        "todos": todos if detail else [_compact(row) for row in todos],
+        "count": len(todos),
+        "total": total,
+        "next_offset": offset + len(todos) if todos and offset + len(todos) < total else None,
+        "note": _UNTRUSTED_NOTE,
+    }
 
 
 def _todo_get(todo_id: int) -> dict:
@@ -216,7 +235,9 @@ GTD_TOOL_DEFS: list[dict] = [
         "writes": False,
         "description": (
             "List todos with filters. Use to review a status list, a project, a context, "
-            "or to find what is due. " + _UNTRUSTED_NOTE
+            "or to find what is due. Rows are compact by default; total is how many match; "
+            "call again with next_offset while it is not null. todo_get reads one todo in full. "
+            + _UNTRUSTED_NOTE
         ),
         "input_schema": {
             "type": "object",
@@ -229,7 +250,9 @@ GTD_TOOL_DEFS: list[dict] = [
                 "due_before": {"type": "string", "description": "YYYY-MM-DD"},
                 "due_after": {"type": "string", "description": "YYYY-MM-DD"},
                 "search": {"type": "string", "description": "Free-text across title, notes, context, tags, project"},
-                "limit": {"type": "integer", "default": 100},
+                "limit": {"type": "integer", "default": 100, "description": "Rows per call (default 100, max 500)"},
+                "offset": {"type": "integer", "default": 0, "description": "How many to skip: pass next_offset from the previous call"},
+                "detail": {"type": "boolean", "default": False, "description": "true for every field of each todo; the default compact rows are much smaller"},
                 "owner": owner_filter_property(),
             },
             "required": [],

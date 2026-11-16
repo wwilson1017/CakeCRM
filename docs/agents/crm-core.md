@@ -1380,3 +1380,8 @@ and starting a fresh edit resets them. A failed deal write can leave the details
   updates/diffs, vCard, company domain/industry/phone mapping or domain matching,
   provenance badges, deal-find guard credit, a Settings/Import page, Telegram card summaries,
   file TTLs or a timed preview sweep. The Baker flow is the entry point.
+- **Collapsible Pipeline header (#373):** desktop-only, page-local (no shared hook), with
+  localStorage key `cakecrm_pipeline_header_collapsed:<viewer>`. The toolbar arrow hides the
+  title/totals and relocates Add Deal; an empty-board row keeps the arrow reachable so the
+  header's recovery links can be restored. `useBoardScroller` absorbs the height change.
+  Saved views and their storage version are unchanged.

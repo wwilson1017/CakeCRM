@@ -94,3 +94,4 @@ Populated by port PRs from here on.
 | Todo GTD triage card: labelled step-2 fields and a Tags field with known-tag suggestions | todo-gtd PR #75 (`0538a85`) | #328 | — |
 | Reminder pause/resume in Baker and the Reminders page; paused rows stay editable and skip firing, overdue repeats resume at the next future occurrence | PR #4492 (`079c6510e`), reminders only | #336 | — |
 | Lead import in one step: an attached CSV/XLSX or pasted list becomes companies, contacts and deals behind one approval, with an optional note on every deal | PR #4746 (`211fe70dd`) | #370 | — |
+| Baker lookups in one step run side by side, changes wait for them, and a lookup that hangs times out | PR #5269 (`52b2c1851`) | #372 | — |
