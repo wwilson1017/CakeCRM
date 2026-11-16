@@ -677,7 +677,9 @@
   seat's conversations. `crm_preview_lead_import` joins `UNTRUSTED_SOURCE_TOOLS`: its
   uploaded/pasted row results are fenced and durably taint the conversation, including
   pasted-text previews in Auto, and are excluded from unattended turns.
-  `engine._SUMMARY_WRITE_TOOLS` and `_card_summary` keep a server-built `summary` on the
+  `engine._SUMMARY_WRITE_TOOLS` also always confirms in the gate, every mode: a batch
+  outlives its preview's conversation, so the taint alone cannot promise the card.
+  It and `_card_summary` keep a server-built `summary` on the
   pending placeholder and the `confirm` event. `mapServerMessages` reads it back after
   reload. The summary's pending JSON must stay under `_UI_RESULT_PREVIEW_CAP` or the
   reloaded result no longer parses as pending; `_summary` budgets 1500 serialized

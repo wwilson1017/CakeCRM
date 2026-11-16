@@ -221,9 +221,10 @@ its card too; clearing one does not. Finishing something is
 not the same as removing it, so marking a todo done or a project completed runs without
 asking, and so does filing either one to someday.
 
-Three rules override the tier entirely, in every mode:
+Four rules override the tier entirely, in every mode:
 
 - a write to a protected context file always confirms (see below);
+- a lead import always confirms, whichever conversation it is approved from;
 - untrusted content in the conversation — an uploaded document or photo, or email the assistant
   read, this turn or an earlier one — makes every write confirm;
 - the unattended assistant (heartbeat, proactive nudges) cannot reach any of

@@ -600,6 +600,8 @@ async def _chat_impl(
 
             # Confirmation gate (issues #4, #8, #72, #180). A write confirms when ANY of
             # these holds:
+            #   * it is a lead import (#370): a batch outlives its preview's conversation,
+            #     so the preview's taint alone cannot promise a card — every mode;
             #   * it is a write to a PROTECTED context file (soul.md / MEMORY.md) —
             #     every mode, power included. `writes: True` alone is not enough there:
             #     a poisoned soul is not one bad record, it is a permanent system
@@ -618,7 +620,7 @@ async def _chat_impl(
             # never reaches here.
             # Persist the pending placeholder BEFORE emitting confirm (so /confirm can
             # find it), then wait for approval.
-            always_confirms = context_file_tools.requires_confirmation(name, args)
+            always_confirms = name in _SUMMARY_WRITE_TOOLS or context_file_tools.requires_confirmation(name, args)
             # Routine by name, minus the call shapes that take a record out of view
             # (see confirm_tier.removes_from_view) — normal mode only; power is untouched.
             routine_exempt = registry.is_routine_write(name) and not confirm_tier.removes_from_view(name, args)

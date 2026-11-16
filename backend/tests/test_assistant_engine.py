@@ -1647,3 +1647,19 @@ async def test_lead_preview_forces_approval_in_power_mode(store, monkeypatch):
     assert any(e["type"] == "confirm" and e["tool"] == "crm_execute_lead_import" for e in events)
     assert marks == ["conv1"]
     assert store.merges[0]["content"].startswith("<untrusted_external_content")
+
+
+async def test_lead_import_execute_confirms_in_a_clean_power_mode_turn(store, monkeypatch):
+    """A batch is claimable from any of the seat's conversations, so the card must not
+    depend on the preview's taint (#370)."""
+    from crm import lead_import
+
+    monkeypatch.setattr(lead_import, "pending_binding", lambda *args: None)
+    reg = Registry(writes={"crm_execute_lead_import"})
+    prov = FakeProvider([
+        [_complete([_tc("crm_execute_lead_import", args={"batch_id": "b"})], stop="tool_use")],
+        [{"type": "text", "text": "Please approve"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "import"}], tool_mode="power", user={"id": 7})
+    assert reg.calls == []
+    assert any(e["type"] == "confirm" and e["tool"] == "crm_execute_lead_import" for e in events)
