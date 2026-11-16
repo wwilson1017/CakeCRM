@@ -61,14 +61,14 @@ export function InstallSteps({ devices = ['iphone', 'android', 'computer'], open
   open?: Device;
 }) {
   return (
-    <div style={{ ...text, display: 'grid', gap: 8, marginTop: 12 }}>
+    <div style={{ ...text, display: 'grid', gap: 8, marginTop: 8 }}>
       {devices.map(device => (
         <details key={device} open={device === open} style={{
           border: '1px solid var(--color-ck-line)', borderRadius: 8,
           background: 'var(--color-ck-bg)', padding: '10px 12px',
         }}>
           <summary style={{ cursor: 'pointer', fontWeight: 600 }}>{STEPS[device].label}</summary>
-          <ol style={{ margin: '8px 0 0', paddingLeft: 20 }}>
+          <ol style={{ margin: '8px 0 0', paddingLeft: 20, listStyle: 'decimal' }}>
             {STEPS[device].steps.map(step => <li key={step}>{step}</li>)}
           </ol>
         </details>
@@ -121,19 +121,19 @@ export function InstallAppCard({ isMobile }: { isMobile: boolean }) {
       description="CakeCRM works best as an app on your phone's home screen. It opens full screen like any other app, and there is nothing to download from an app store."
       isMobile={isMobile}
     >
-      <div style={text}>
-        {isInstalled && <p>✓ You're using the installed app on this device.</p>}
+      <div style={{ ...text, display: 'grid', gap: 10 }}>
+        {isInstalled && <p style={{ margin: 0 }}>✓ You're using the installed app on this device.</p>}
         {prompt && !isInstalled && (
-          <button type="button" style={btnPrimary} onClick={() => void install()}>Install CakeCRM</button>
+          <button type="button" style={{ ...btnPrimary, justifySelf: 'start' }} onClick={() => void install()}>Install CakeCRM</button>
         )}
         {device === 'computer' ? (
-          <ol style={{ paddingLeft: 20 }}>
+          <ol style={{ margin: 0, paddingLeft: 20, listStyle: 'decimal' }}>
             <li>Open CakeCRM on your phone: go to <strong style={{ overflowWrap: 'anywhere' }}>{location.origin}</strong> in its browser and sign in.</li>
             <li>On your phone, add it to your home screen:</li>
           </ol>
-        ) : <p>On this phone, add it to your home screen:</p>}
+        ) : <p style={{ margin: 0 }}>On this phone, add it to your home screen:</p>}
         <InstallSteps open={device} />
-        <p style={{ color: INK_MUTE, marginBottom: 0 }}>From then on, open it from its icon on your home screen, not from the browser.</p>
+        <p style={{ color: INK_MUTE, margin: 0 }}>From then on, open it from its icon on your home screen, not from the browser.</p>
       </div>
     </SettingsCard>
   );
