@@ -24,7 +24,9 @@ Neither one cares which todo mode is active.
    press **Show a sign-in code**. You get a QR code and a link.
 2. Scan the code with the phone, or open the link there.
 3. Press **Open my list on this device**. That browser is now signed in and stays signed in.
-4. Add the page to the phone's home screen if you like.
+4. Add the signed-in todo page to the phone's home screen:
+- **iPhone or iPad (Safari):** tap Share (the square with an upward arrow; tap **•••** first if hidden), then **Add to Home Screen**. Leave **Open as Web App** on if shown, then tap **Add**.
+- **Android (Chrome):** tap **⋮** beside the address bar → **Install and create shortcut** → **Install**. Older Chrome calls the menu item **Add to Home screen** or **Install app**.
 
 The code works **once, for one hour**. Opening the link does nothing by itself; only the
 button signs the device in. Anyone who uses the code gets your whole todo list, so show it

@@ -19,6 +19,7 @@ import { FONT_SANS, INK, INK_MUTE } from '../../shared/styles';
 import { toast } from '../../shared/toast';
 import { parseUTC } from '../gtd/util';
 import { btnPrimary, btnSecondary } from '../styles';
+import { InstallSteps } from './InstallAppCard';
 import { SettingsCard } from './SettingsCard';
 
 interface Devices { enabled: boolean; count: number }
@@ -124,9 +125,14 @@ export function TodoDevicesCard({ isMobile }: { isMobile: boolean }) {
                 Scan it with your phone, or open the link there, and press "Open my list on
                 this device". It works once and expires at{' '}
                 {parseUTC(link.expires_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.
-                Once the phone is signed in, add the page to its home screen. Anyone who
-                opens this code gets your whole todo list, so show it only to your own devices.
               </p>
+              <p style={{ ...text, marginTop: 8 }}>
+                Anyone who opens this code gets your whole todo list, so show it only to your own devices.
+              </p>
+              <p style={{ ...text, marginTop: 8 }}>
+                Once the phone is signed in, add the page to its home screen:
+              </p>
+              <InstallSteps devices={['iphone', 'android']} />
             </div>
           )}
         </div>

@@ -621,3 +621,10 @@
   `TodoEditSheet` and `bootSplit.test.ts` keeps `react-dom` and CRM code out of that download.
   Its keydown listener is capture-phase on `document` and stops propagation, so Esc closes the
   editor and never the sheet underneath.
+
+- **Install on your phone (#375)** ports todo-gtd `809a1f8` into the member-visible Personal
+  Settings card `InstallAppCard`; `TodoDevicesCard` reuses its phone steps after code creation.
+  The shared shell now links the CRM manifest and existing mark PNG as Apple touch icon.
+  `todo_web._page()` swaps the manifest href to `/todo/manifest.webmanifest`, preserving one manifest and Todos' own launch address. The inline shell listener
+  defers and stashes `beforeinstallprompt` for lazy Settings; `appinstalled` clears it. No
+  service worker or offline mode was added, and `/capture` is unchanged.
