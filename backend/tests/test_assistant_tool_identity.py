@@ -211,9 +211,13 @@ def test_todo_tools_carry_the_same_identity(todo_mode):
     with patch("crm.gtd_tools.gtd_service.create_todo", return_value={"id": 1}) as m:
         ex["todo_create"](title="Call Acme", owner_id=999)
     assert m.call_args.kwargs["owner_id"] == 7
-    with patch("crm.gtd_tools.gtd_service.list_todos", return_value=[]) as m:
+    with (
+        patch("crm.gtd_tools.gtd_service.list_todos", return_value=[]) as m,
+        patch("crm.gtd_tools.gtd_service.count_todos", return_value=0) as count,
+    ):
         ex["todo_list"](owner="unassigned")
     assert m.call_args.kwargs["owner_id"] == service.UNASSIGNED
+    assert count.call_args.kwargs["owner_id"] == service.UNASSIGNED
 
 
 # ── 4. Identity does not move the tool surface ─────────────────────────────────

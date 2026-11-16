@@ -328,8 +328,8 @@ def test_the_sweep_walks_by_id_after_the_cursor(rec):
     """#295: a list past the 500-row window is read in id order, page after page."""
     gtd_service.list_todos(status="inbox", sort="id", after_id=40)
     sql = rec.sql("FROM todos")
-    assert "t.id > %s" in sql and sql.endswith("ORDER BY t.id ASC LIMIT %s")
-    assert rec.calls[-1][1][-2:] == [40, 100]
+    assert "t.id > %s" in sql and sql.endswith("ORDER BY t.id ASC LIMIT %s OFFSET %s")
+    assert rec.calls[-1][1][-3:] == [40, 100, 0]
 
 
 def test_a_cursor_is_refused_under_any_other_order(rec):
@@ -347,9 +347,9 @@ def test_lists_exclude_todos_on_archived_deals(rec):
 
 def test_limit_is_clamped_and_an_explicit_zero_is_not_treated_as_unset(rec):
     gtd_service.list_todos(limit=0)
-    assert rec.calls[-1][1][-1] == 1
+    assert rec.calls[-1][1][-2] == 1
     gtd_service.list_todos(limit=99999)
-    assert rec.calls[-1][1][-1] == 500
+    assert rec.calls[-1][1][-2] == 500
 
 
 def test_tag_filter_uses_jsonb_exists_not_a_like(rec):

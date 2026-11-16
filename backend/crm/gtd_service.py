@@ -237,7 +237,7 @@ def bulk_update(ids: list[int], fields: dict) -> dict:
     return {"updated": updated, "not_found": not_found}
 
 
-def list_todos(
+def _todo_filters(
     status: str | None = None,
     project: str | int | None = None,
     context: str | None = None,
@@ -246,22 +246,9 @@ def list_todos(
     due_before: str | None = None,
     due_after: str | None = None,
     search: str | None = None,
-    limit: int = 100,
     owner_id: int | str | None = None,
     include_deferred: bool = False,
-    sort: str | None = None,
-    after_id: int | None = None,
-) -> list[dict]:
-    """``include_deferred`` keeps todos waiting on a bring-back date (#261) in the result.
-    The working lists leave it off; a record view or a project-health check turns it on,
-    because a scheduled return is still that project's next action.
-
-    ``sort='id'`` with ``after_id`` is the keyset sweep (#295) a client walks to read a
-    list past the 500-row window — the same contract as `service.list_todos`."""
-    try:
-        service._check_assembly_cursor(after_id, sort or "")
-    except ValueError as e:
-        raise ValidationError(str(e)) from None
+) -> tuple[list[str], list] | None:
     where: list[str] = []
     params: list = []
     # Same three values as every other owner filter (#190): an id, None for everyone, or
@@ -282,7 +269,7 @@ def list_todos(
                 "SELECT id FROM todo_projects WHERE lower(name) = lower(%s)", (term,)
             )
             if not row:
-                return []
+                return None
             pid = row["id"]
         where.append("t.project_id = %s")
         params.append(pid)
@@ -321,6 +308,73 @@ def list_todos(
             "(t.status IN ('done','dropped') OR "
             f"{service.brought_back_sql('t.bring_back_on', params)})"
         )
+    return where, params
+
+
+def count_todos(
+    status: str | None = None,
+    project: str | int | None = None,
+    context: str | None = None,
+    tag: str | None = None,
+    starred: bool | None = None,
+    due_before: str | None = None,
+    due_after: str | None = None,
+    search: str | None = None,
+    owner_id: int | str | None = None,
+    include_deferred: bool = False,
+) -> int:
+    """Count the matching corpus, independently of any page window."""
+    filters = _todo_filters(
+        status, project, context, tag, starred, due_before, due_after, search,
+        owner_id, include_deferred,
+    )
+    if filters is None:
+        return 0
+    where, params = filters
+    row = pg_fetchone(
+        "SELECT COUNT(*) AS total FROM todos t "
+        "LEFT JOIN todo_projects p ON p.id = t.project_id "
+        "LEFT JOIN deals d ON d.id = t.deal_id WHERE " + " AND ".join(where),
+        params,
+    )
+    return row["total"]
+
+
+def list_todos(
+    status: str | None = None,
+    project: str | int | None = None,
+    context: str | None = None,
+    tag: str | None = None,
+    starred: bool | None = None,
+    due_before: str | None = None,
+    due_after: str | None = None,
+    search: str | None = None,
+    limit: int = 100,
+    owner_id: int | str | None = None,
+    include_deferred: bool = False,
+    sort: str | None = None,
+    after_id: int | None = None,
+    offset: int = 0,
+) -> list[dict]:
+    """``include_deferred`` keeps todos waiting on a bring-back date (#261) in the result.
+    The working lists leave it off; a record view or a project-health check turns it on,
+    because a scheduled return is still that project's next action.
+
+    ``sort='id'`` with ``after_id`` is the keyset sweep (#295) a client walks to read a
+    list past the 500-row window — the same contract as `service.list_todos`."""
+    try:
+        service._check_assembly_cursor(after_id, sort or "")
+    except ValueError as e:
+        raise ValidationError(str(e)) from None
+    if offset < 0:
+        raise ValidationError("offset must be non-negative")
+    filters = _todo_filters(
+        status, project, context, tag, starred, due_before, due_after, search,
+        owner_id, include_deferred,
+    )
+    if filters is None:
+        return []
+    where, params = filters
     if after_id is not None:
         where.append("t.id > %s")
         params.append(after_id)
@@ -328,21 +382,22 @@ def list_todos(
     if sort == "id":
         # Immutable and append-only: a row inserted mid-sweep sorts past the window
         # instead of displacing it.
-        sql += " ORDER BY t.id ASC LIMIT %s"
+        sql += " ORDER BY t.id ASC"
     elif status in gtd_common.FINISHED_STATUSES:
         # Finished lists grow forever — newest-finished first, or the LIMIT window
         # would freeze on the oldest rows and hide new completions. (Dropped rows
         # have no completed_at; updated_at marks the drop.)
-        sql += " ORDER BY COALESCE(t.completed_at, t.updated_at) DESC, t.id DESC LIMIT %s"
+        sql += " ORDER BY COALESCE(t.completed_at, t.updated_at) DESC, t.id DESC"
     elif search and not status:
         # Global search spans every status, and repeating todos accumulate done
         # copies with identical titles — open todos must win the LIMIT window or the
         # live occurrence vanishes behind finished ones.
-        sql += " ORDER BY (t.status IN ('done','dropped')) ASC, t.id DESC LIMIT %s"
+        sql += " ORDER BY (t.status IN ('done','dropped')) ASC, t.id DESC"
     else:
-        sql += " ORDER BY t.created_at ASC, t.id ASC LIMIT %s"
+        sql += " ORDER BY t.created_at ASC, t.id ASC"
+    sql += " LIMIT %s OFFSET %s"
     n = 100 if limit is None else int(limit)  # `or` would turn an explicit 0 into 100
-    params.append(max(1, min(n, 500)))
+    params.extend([max(1, min(n, 500)), offset])
     return [_todo_dict(r) for r in pg_fetchall(sql, params)]
 
 
