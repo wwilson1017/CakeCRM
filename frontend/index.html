@@ -12,8 +12,11 @@
     <meta name="theme-color" content="#f1f1e8" />
     <title>CakeCRM</title>
     <script>
-      // Hold the native prompt for the lazily loaded InstallAppCard.
+      // Hold the native prompt for the lazily loaded InstallAppCard. The no-login /todo app
+      // shares this shell but has no card, so it keeps Chrome's own install banner.
       window.addEventListener('beforeinstallprompt', function (e) {
+        var p = window.location.pathname;
+        if (p === '/todo' || p.indexOf('/todo/') === 0) return;
         e.preventDefault();
         window.__installPrompt = e;
       });

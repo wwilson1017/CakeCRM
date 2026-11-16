@@ -99,15 +99,27 @@ describe('InstallAppCard', () => {
     const shells = import.meta.glob('../../../index.html', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
     const shell = shells['../../../index.html'];
     const script = shell.match(/<script>([\s\S]*?)<\/script>/)![1];
-    const target = new EventTarget() as EventTarget & { __installPrompt?: unknown };
-    // Execute the real boot listener against an isolated window; the theme script needs matchMedia.
-    Object.assign(target, { matchMedia: () => ({ matches: false }) });
-    new Function('window', 'document', 'localStorage', script)(target, document, { getItem: () => null });
+    const boot = (pathname: string) => {
+      const target = new EventTarget() as EventTarget & { __installPrompt?: unknown };
+      // Execute the real boot listener against an isolated window; the theme script needs matchMedia.
+      Object.assign(target, { matchMedia: () => ({ matches: false }), location: { pathname } });
+      new Function('window', 'document', 'localStorage', script)(target, document, { getItem: () => null });
+      return target;
+    };
+    const target = boot('/crm/todos');
     const event = nativePrompt();
     target.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
     expect(target.__installPrompt).toBe(event);
     target.dispatchEvent(new Event('appinstalled'));
     expect(target.__installPrompt).toBeNull();
+    // The no-login todo app has no Install card, so Chrome keeps its own banner there.
+    for (const path of ['/todo', '/todo/inbox']) {
+      const todo = boot(path);
+      const held = nativePrompt();
+      todo.dispatchEvent(held);
+      expect(held.defaultPrevented).toBe(false);
+      expect(todo.__installPrompt).toBeUndefined();
+    }
   });
 });
