@@ -3,6 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Mobile browser chrome. Kept in sync with the app theme by the script below
          and by applyTheme() in src/core/theme/useTheme.ts; a prefers-color-scheme
@@ -10,6 +12,17 @@
     <meta name="theme-color" content="#f1f1e8" />
     <title>CakeCRM</title>
     <script>
+      // Hold the native prompt for the lazily loaded InstallAppCard. The no-login /todo app
+      // shares this shell but has no card, so it keeps Chrome's own install banner.
+      window.addEventListener('beforeinstallprompt', function (e) {
+        var p = window.location.pathname;
+        if (p === '/todo' || p.indexOf('/todo/') === 0) return;
+        e.preventDefault();
+        window.__installPrompt = e;
+      });
+      window.addEventListener('appinstalled', function () {
+        window.__installPrompt = null;
+      });
       // Apply the theme before React loads so a dark-mode reload never flashes white.
       // Key must match THEME_KEY in src/core/theme/useTheme.ts.
       (function () {

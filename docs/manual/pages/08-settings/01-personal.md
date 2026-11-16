@@ -1,6 +1,6 @@
 ---
 title: Personal settings
-summary: Notifications, your password, how the pipeline board opens, and linking your own Telegram.
+summary: Notifications, your password, how the pipeline board opens, linking your own Telegram, and installing CakeCRM on your phone.
 shots: [settings-personal]
 ---
 
@@ -41,6 +41,19 @@ Chat with Baker from your own phone. Once an admin has connected a Telegram bot:
 4. **Unlink my Telegram** ends your link. It affects nobody else.
 
 If no bot is connected yet, the card says so. See [Telegram](../09-integrations/02-telegram.md).
+
+## Install on your phone
+
+Everyone sees this card under **Personal**, on a computer or a phone. On a computer it shows this site's address: open it on your phone and sign in first. Expand the steps for your device.
+
+- **iPhone or iPad (Safari):** tap Share (the square with an upward arrow; tap **•••** first if hidden), then **Add to Home Screen**. Leave **Open as Web App** on if shown, then tap **Add**.
+- **Android (Chrome):** tap **⋮** beside the address bar → **Install and create shortcut** → **Install**. Older Chrome calls the menu item **Add to Home screen** or **Install app**.
+
+On **Chrome or Edge on a computer**, click the install icon at the right end of the address bar, then **Install**. If the browser offers a native prompt, the card also shows an **Install CakeCRM** button.
+
+Open CakeCRM from its home-screen icon from then on. There is nothing to download from an app store; the card confirms when you are using the installed app. If installation is missing, use an **https://** address and, on iPhone, Safari rather than an in-app browser.
+
+The [no-login todo app](../05-todos/11-no-login-links.md) can have its own home-screen icon: sign the phone in through **Todo app devices**, then follow the same steps on the todo page.
 
 ## Light and dark
 

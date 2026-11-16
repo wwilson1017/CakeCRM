@@ -557,6 +557,7 @@ def test_the_marker_detector_bites():
 # settingsSections.ts declares; parsing that file is what makes a real gating change fail
 # here, where two hand-written lists in this repo would just agree with each other.
 _TOPIC_TO_CARD = {
+    "settings/install-on-phone": "install_app",
     "settings/gmail": "gmail",
     "settings/telegram": "telegram",
     # #193 split Telegram in two: the bot is install configuration (admin), a linked chat

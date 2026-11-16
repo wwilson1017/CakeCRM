@@ -418,6 +418,8 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <article data-route="pipeline/board" data-title="The pipeline board" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/pipeline/board">Pipeline</a></p><h1>The pipeline board</h1><p class="lead">Every deal as a card in its stage&#x27;s column; drag a card to move it, click it to open it.</p><p><strong>Pipeline</strong> shows your deals as cards in columns, one column per stage. Under the page title a line reads how much is open and how many open deals there are.</p>
 <figure class="shot"><img data-shot="pipeline-board" width="1400" height="954" alt="The pipeline board screenshot"></figure>
 
+<h2>Hiding the header</h2>
+<p>On desktop, the arrow at the right of the search row folds away the title, totals line and top <strong>Add Deal</strong> button so the board shows more cards. While folded, a <strong>+</strong> button beside the arrow adds a deal. Click the arrow again to bring the header back, including <strong>Show all</strong> for hidden stages. The arrow stays available even on an empty board. This browser remembers the choice for you; phones keep the header as before.</p>
 <h2>The columns</h2>
 <p>There are six stages: lead, qualified, proposal, negotiation, won and lost. The board opens with the four open stages showing. Won and Lost are hidden by default, so the board is about work that is still live.</p>
 <p>When any stage is hidden, the line under the title says how many, with a <strong>Show all</strong> link beside it. Nothing is ever secretly missing. To hide or show a single column, use the stage checkboxes in the toolbar above the board. See <a href="#/pipeline/stages-and-closing">Stages and closing a deal</a> for how to make Won and Lost show by default.</p>
@@ -1417,7 +1419,7 @@ There is no undo, and a merged duplicate cannot be restored. Baker can do this t
 <p><strong>Sort</strong> offers Open first, then due (the default), Due date, Priority, Title and Recently added. <strong>Clear filters</strong> resets them. <strong>Views</strong> saves a search and filters for the whole team.</p>
 <h2>Repeating todos</h2>
 <p>A repeating todo still repeats in this mode. Ticking it creates the next one.</p><nav class="pn"><a href="#/todos/contexts-and-search"><small>Previous</small>Contexts and search</a><a class="next" href="#/todos/no-login-links"><small>Next</small>No-login links</a></nav></article>
-<article data-route="todos/no-login-links" data-title="No-login links" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>No-login links</h1><p class="lead">Add todos, or work your whole list, from a phone without signing in.</p><p>Two links let you reach your todos with no sign-in. They are <strong>not equally open</strong>, so read this before you turn them on. An admin sets both up in <strong>Settings → Assistant → Todo mode</strong>, under <strong>No-login links</strong>. See <a href="#/settings/assistant">Assistant settings</a>.</p>
+<article data-route="todos/no-login-links" data-title="No-login links" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>No-login links</h1><p class="lead">Capture todos or sign a phone in once to work your whole list without logging in to CakeCRM.</p><p>Two surfaces let you reach your todos without logging in to CakeCRM. They are <strong>not equally open</strong>: capture uses a public or secret address; the full todo app uses a separate device sign-in. An admin configures them in <strong>Settings → Assistant → Todo mode</strong>, under <strong>No-login links</strong>. See <a href="#/settings/assistant">Assistant settings</a>.</p>
 <h2>Quick capture (write-only)</h2>
 <p>A phone bookmark that drops text straight into your inbox. It cannot read anything back.</p>
 <ul>
@@ -1427,19 +1429,23 @@ There is no undo, and a merged duplicate cannot be restored. Baker can do this t
 </ul>
 <p>Items that arrive this way carry a <strong>Capture link</strong> label. Read them before acting on them.</p>
 <h2>Full todo app (read and write)</h2>
-<p>The whole todo app, sized for a phone, with no login. It is <strong>off by default</strong>.</p>
+<p>The whole todo app, sized for a phone, at <code>/todo</code>. It is <strong>off by default</strong>. An admin turns on <strong>Enable the no-login todo app</strong> in Todo mode. Then each person signs in their own devices:</p>
+<ol>
+<li>Open <strong>Settings → Personal → Todo app devices</strong> and press <strong>Show a sign-in code</strong>.</li>
+<li>Scan the QR code with your phone or open the link there. The code is <strong>single-use and expires after one hour</strong>.</li>
+<li>Press <strong>Open my list on this device</strong>. Opening the link alone does not sign you in.</li>
+<li>Once signed in, add the todo page to your home screen:</li>
+</ol>
 <ul>
-<li>Tick <strong>Enable the no-login todo app</strong>. A secret link is made in the same step, so it is never published at a guessable address.</li>
-<li>On a phone, the lists sit in a bar along the bottom: <strong>Inbox</strong>, <strong>Today</strong>, <strong>To Do</strong>, <strong>Projects</strong> and <strong>More</strong> (Contexts, Waiting, Someday, Review and Done).</li>
-<li>Renaming contexts and saved Views are not available here.</li>
+<li><strong>iPhone or iPad (Safari):</strong> tap Share (the square with an upward arrow; tap <strong>•••</strong> first if hidden), then <strong>Add to Home Screen</strong>. Leave <strong>Open as Web App</strong> on if shown, then tap <strong>Add</strong>.</li>
+<li><strong>Android (Chrome):</strong> tap <strong>⋮</strong> beside the address bar → <strong>Install and create shortcut</strong> → <strong>Install</strong>. Older Chrome calls the menu item <strong>Add to Home screen</strong> or <strong>Install app</strong>.</li>
 </ul>
-<h2>Treat these links like passwords</h2>
-<p>Anyone holding the todo app link can read and change every todo. The link is not tied to any account, so deactivating the person who shared it does not stop it.</p>
-<ul>
-<li><strong>Copy</strong> puts a link on your clipboard. Open it on the device that needs it, rather than pasting it into a chat or ticket.</li>
-<li><strong>New secret link</strong> replaces the link at once. The old one stops working, including any home-screen app installed from it. This is how you revoke access.</li>
-</ul>
-<p>Neither link reaches anything else in the CRM: no contacts, deals, settings or assistant. Both work in either todo mode.</p>
+<p>On a phone, the lists sit in a bar along the bottom: <strong>Inbox</strong>, <strong>Today</strong>, <strong>To Do</strong>, <strong>Projects</strong> and <strong>More</strong> (Contexts, Waiting, Someday, Review and Done). Renaming contexts and saved Views are not available here.</p>
+<h2>Protect your codes and capture link</h2>
+<p>Anyone who uses a todo sign-in code can read and change the whole todo list. Show it only to your own devices; do not paste it into a chat or ticket. Each phone stays signed in after using its code. <strong>Sign out</strong> in the todo app ends that device's session. <strong>Sign out everywhere</strong> in Todo app devices ends all devices you signed in and cancels your unused codes. Deactivating your account also signs your devices out.</p>
+<p>Treat the <strong>capture link</strong> like a password too: anyone holding it can add to the inbox. <strong>New secret link</strong> replaces it and stops the old one working. This capture control does not revoke todo app sessions.</p>
+<p>Old secret links to the full todo app are no longer used. Sign the phone in with a fresh code and replace any old home-screen icon with the signed-in <code>/todo</code> page.</p>
+<p>Neither surface reaches anything else in the CRM: no contacts, deals, settings or assistant. Both work in either todo mode.</p>
 <h2>Capture from Telegram</h2>
 <p>If your phone is linked to the team's Telegram bot, in GTD mode a message starting with <code>capture</code> adds an inbox todo instantly, with no AI involved. See <a href="#/integrations/telegram">Telegram</a>.</p><nav class="pn"><a href="#/todos/simple-list"><small>Previous</small>The simple list</a><a class="next" href="#/todos/reminders"><small>Next</small>Reminders</a></nav></article>
 <article data-route="todos/reminders" data-title="Reminders" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>Reminders</h1><p class="lead">A fixed note sent to chosen teammates at a date and time, once or on repeat. Pause one to hold it, resume it to pick up again.</p><p>A reminder is a note you write once that is delivered, word for word, to the people you choose at a date and optional time. It is not a todo: it never appears in todo lists and there is nothing to finish. Use a todo for work you need to do; use a reminder for "tell these people this, then". Reminders live on the <strong>Reminders</strong> page.</p>
@@ -1654,7 +1660,8 @@ one is data, and every proposed change asks for approval for the rest of that co
 </tr>
 </tbody>
 </table></div>
-<p>Looking things up never asks, in any mode.</p>
+<p>Looking things up never asks, in any mode.
+Baker runs the lookups of one step side by side. If a lookup has not answered within two minutes, Baker stops waiting, is told it timed out, and carries on.</p>
 <h2>What Ask runs straight away</h2>
 <p>In Ask mode, a change runs without a card only when it stays inside a CakeCRM record, notifies nobody, removes nothing from view, is not a bulk change, and sends nothing outside your install. In practice that means:</p>
 <ul>
@@ -1670,7 +1677,7 @@ one is data, and every proposed change asks for approval for the rest of that co
 <h2>What asks even in Auto</h2>
 <ul>
 <li><strong>Writing Baker's protected files</strong>, soul.md and MEMORY.md. These always ask, in every mode, and only an admin can change them. See <a href="#/baker/memory">Memory</a>.</li>
-<li><strong>A conversation that has read outside content.</strong> Once Baker has read an email, an uploaded file, a photo, or a todo that came in through the public quick-capture link while no token was set, every change it proposes asks for approval for the rest of that conversation, even after that message has scrolled out of view. Text someone else wrote can never quietly steer Baker into changing your data. The Telegram chat is one long conversation, so once it has read such outside content it asks before every change from then on.</li>
+<li><strong>A conversation that has read outside content.</strong> Once Baker has read an email, an uploaded file, a photo, or a todo that came in through the public quick-capture link while no token was set, every change it proposes asks for approval for the rest of that conversation, even after that message has scrolled out of view. Text someone else wrote can never quietly steer Baker into changing your data. The Telegram chat is one long conversation, so once it has read such outside content it asks before every change from then on. Within one step, Baker finishes its lookups before running changes, so a change proposed alongside an email read asks for approval too.</li>
 </ul>
 <h2>Approving a change</h2>
 <p>When Baker wants to make a change that needs approval, its message carries a card naming the action and showing exactly what it will do, with <strong>Approve</strong> and <strong>Deny</strong>. Until you answer, nothing has happened.</p>
@@ -1857,7 +1864,7 @@ tell you which deal it changed and check that it is the one you meant.</p><nav c
 <p>Models are grouped into three tiers: top, mid and light. Cheap background work uses the light tier, so routine automation does not cost top-tier prices. Each connected card except Ollama's lets an admin override which model sits in each tier, or leave it on <strong>Use inferred default</strong>.</p>
 <h2>Disconnecting</h2>
 <p><strong>Disconnect</strong> deletes that provider's stored key. If it was the active provider, the active provider and model are cleared too, and AI features hide again.</p><nav class="pn"><a href="#/baker/playbooks"><small>Previous</small>Sales playbooks and help</a><a class="next" href="#/settings/personal"><small>Next</small>Personal settings</a></nav></article>
-<article data-route="settings/personal" data-title="Personal settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Personal settings</h1><p class="lead">Notifications, your password, how the pipeline board opens, and linking your own Telegram.</p><p>Open <strong>Settings</strong> at the top right. Settings has four tabs: <strong>Personal</strong>, <strong>Assistant</strong>, <strong>Workspace</strong> and <strong>Integrations</strong>. Everyone sees Personal and Assistant. Workspace and Integrations are for admins only, and members do not see those tabs at all.</p>
+<article data-route="settings/personal" data-title="Personal settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Personal settings</h1><p class="lead">Notifications, your password, how the pipeline board opens, linking your own Telegram, and installing CakeCRM on your phone.</p><p>Open <strong>Settings</strong> at the top right. Settings has four tabs: <strong>Personal</strong>, <strong>Assistant</strong>, <strong>Workspace</strong> and <strong>Integrations</strong>. Everyone sees Personal and Assistant. Workspace and Integrations are for admins only, and members do not see those tabs at all.</p>
 <figure class="shot"><img data-shot="settings-personal" width="1400" height="1829" alt="Personal settings screenshot"></figure>
 
 <h2>Notifications</h2>
@@ -1883,6 +1890,15 @@ tell you which deal it changed and check that it is the one you meant.</p><nav c
 <li><strong>Unlink my Telegram</strong> ends your link. It affects nobody else.</li>
 </ol>
 <p>If no bot is connected yet, the card says so. See <a href="#/integrations/telegram">Telegram</a>.</p>
+<h2>Install on your phone</h2>
+<p>Everyone sees this card under <strong>Personal</strong>, on a computer or a phone. On a computer it shows this site's address: open it on your phone and sign in first. Expand the steps for your device.</p>
+<ul>
+<li><strong>iPhone or iPad (Safari):</strong> tap Share (the square with an upward arrow; tap <strong>•••</strong> first if hidden), then <strong>Add to Home Screen</strong>. Leave <strong>Open as Web App</strong> on if shown, then tap <strong>Add</strong>.</li>
+<li><strong>Android (Chrome):</strong> tap <strong>⋮</strong> beside the address bar → <strong>Install and create shortcut</strong> → <strong>Install</strong>. Older Chrome calls the menu item <strong>Add to Home screen</strong> or <strong>Install app</strong>.</li>
+</ul>
+<p>On <strong>Chrome or Edge on a computer</strong>, click the install icon at the right end of the address bar, then <strong>Install</strong>. If the browser offers a native prompt, the card also shows an <strong>Install CakeCRM</strong> button.</p>
+<p>Open CakeCRM from its home-screen icon from then on. There is nothing to download from an app store; the card confirms when you are using the installed app. If installation is missing, use an <strong>https://</strong> address and, on iPhone, Safari rather than an in-app browser.</p>
+<p>The <a href="#/todos/no-login-links">no-login todo app</a> can have its own home-screen icon: sign the phone in through <strong>Todo app devices</strong>, then follow the same steps on the todo page.</p>
 <h2>Light and dark</h2>
 <p>The light and dark switch is in the top bar, not in Settings. See <a href="#/getting-started/light-and-dark">Light and dark mode</a>.</p><nav class="pn"><a href="#/baker/ai-setup"><small>Previous</small>AI setup</a><a class="next" href="#/settings/assistant"><small>Next</small>Assistant settings</a></nav></article>
 <article data-route="settings/assistant" data-title="Assistant settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Assistant settings</h1><p class="lead">Open Baker&#x27;s memory, choose the todo mode, and manage the no-login todo links.</p><p>The <strong>Assistant</strong> tab has three cards. Everyone sees <strong>Assistant memory</strong>. <strong>Todo mode</strong> and <strong>Live transcription</strong> are for admins only.</p>

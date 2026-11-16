@@ -800,3 +800,50 @@ output SDK; 20-second timeout and touch-count-style strict stream completion plu
 4,000-character cap. Won carries the explicit local day shown in the preview; already
 won/lost flags are dropped with a warning. No provider hides the box, keeping the screen
 fully keyless. A confirmed preview is a member edit with no assistant provenance.
+
+## Reads of one batch run first, side by side (#372, port of cake_os #4697)
+
+Within one tool batch of an attended turn, `engine._chat_impl` calls
+`read_batch.run_reads` before it gates or runs any write, then walks the model's order
+to record results, so `results` and `tool_end` keep that order. Two lanes:
+
+- `ToolRegistry.parallel_reads` — the non-write defs of the CRM and todo sources, chosen
+  by source so a connection read cannot join by accident — run concurrently on one
+  process-wide 4-thread pool (`MAX_PARALLEL_READS`): at most 4 of the Postgres pool's 10
+  connections, and a hung read never occupies the default executor that history saves use.
+- Every other read (Gmail, memory, context files, help, reminders) runs one at a time in
+  the model's order through `registry.execute_tool_sync` in a worker thread. A per-registry
+  lock stays held for the handler's whole run, including after a timeout. The next ordered
+  read waits for that lane within its own deadline; if the lane stays busy, it times out
+  without starting. Once the handler returns, the lane is usable again.
+
+Every read gets `READ_TIMEOUT_S` (120 s); a timeout is an ordinary error result
+(`status: "timeout"`) and the turn continues. Writes have no timeout. Threads cannot be
+killed: a timed-out read keeps its worker and connection until its handler returns, and
+four hung reads make later parallel reads time out unstarted (the `simplification:` note
+in `read_batch.py` names the upgrade).
+
+The #332 guard is exact because bookkeeping is deferred: the worker thread runs only
+`registry.run_read_sync` (epoch, then handler), and `registry.record_deals` runs later
+on the collector, one result at a time, when the engine records that result
+(`read_batch.accept`). So guard state is never touched by two threads, and a read that
+timed out, or was dropped by a write-budget stop, never becomes a find. Finds are still
+stamped with the current batch, so a search in the same batch as a write refuses it in
+either order. Every find-recording read must stay in `parallel_reads`
+(`test_read_batch.py` pins it).
+
+Taint from every read of the batch applies before any of its writes reach the
+confirmation gate, so a write the model listed before a Gmail read now confirms too
+(stricter than before). Reads listed after a write that stops the turn on the write
+budget have already run; their results are dropped and record nothing.
+
+Unchanged: background turns (`background._run_turn` keeps the model's order, no
+timeout), `resolve_confirmation`, and `ToolRegistry.execute_tool(name, args)` — which a
+future MCP dispatch (#323) calls directly and so gets neither lane nor timeout. Not
+ported: upstream's generic same-batch id provenance, per-turn parallel lanes, per-tool timeouts
+and order-kept kinds.
+
+Tests: `test_read_batch.py` (lanes, the process-wide bound across two registries, blocked
+synchronous ordered handlers and lane recovery, Stop, the audited set, background order),
+the #372 block in `test_assistant_engine.py` (overlap barrier, write-after-read, hung
+read, same-batch find) and `test_gmail_engine_taint.py`.

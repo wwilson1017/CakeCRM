@@ -237,10 +237,15 @@ def _page() -> HTMLResponse:
     shell = _index_html()
     if not shell:
         return HTMLResponse(_UNBUILT_HTML, status_code=503, headers=_PAGE_HEADERS)
+    # Installability: the shared shell links the CRM's manifest; /todo swaps it for its own
+    # (own name and icon, opens at /todo). A browser takes the FIRST manifest link, so this
+    # is a swap, never a second link. A shell without the CRM link still gets one.
+    manifest_fallback = ""
+    if 'href="/manifest.webmanifest"' in shell:
+        shell = shell.replace('href="/manifest.webmanifest"', 'href="/todo/manifest.webmanifest"')
+    else:
+        manifest_fallback = '<link rel="manifest" href="/todo/manifest.webmanifest">\n'
     inject = (
-        # Installability: the manifest makes Add to Home Screen produce a standalone
-        # app (own icon, no browser chrome, opens at /todo).
-        '<link rel="manifest" href="/todo/manifest.webmanifest">\n'
         # The sign-in page's URL carries a code; keep it out of any Referer.
         '  <meta name="referrer" content="no-referrer">\n'
         # Pre-16.4 iOS ignores the manifest; these metas are its equivalent.
@@ -256,6 +261,7 @@ def _page() -> HTMLResponse:
         shell = shell.replace(
             '<meta name="viewport" content="', '<meta name="viewport" content="viewport-fit=cover, ', 1
         )
+    inject = manifest_fallback + inject
     if "</head>" in shell:
         shell = shell.replace("</head>", f"  {inject}\n  </head>", 1)
     else:
