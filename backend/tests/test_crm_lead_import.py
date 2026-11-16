@@ -185,3 +185,10 @@ def test_contact_lookup_uses_the_callers_cursor(monkeypatch):
     assert imp._existing_contacts([], cur=cursor) == {}
     assert cursor.execute.call_count == 1
     forbidden.assert_not_called()
+
+
+def test_summary_headline_counts_read_in_the_singular():
+    one = {"contacts_new": 1, "contacts_existing": 0, "companies_new": 1, "companies_existing": 2}
+    headline = imp._summary([{"name": "Ana", "company": "Northwind"}], one)["headline"]
+    assert headline == ("Import 1 lead: 1 new deal, 1 new contact (0 already in the CRM), "
+                        "1 new company (2 already in the CRM)")

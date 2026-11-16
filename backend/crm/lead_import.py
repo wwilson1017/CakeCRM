@@ -178,10 +178,16 @@ def _leads(rows: list[dict], mapping: dict[str, str], source: str) -> list[dict]
 def _summary(leads: list[dict], counts: dict) -> dict:
     """Bound the serialized placeholder, including escaped Unicode, for history reload."""
     n = len(leads)
+
+    def many(count: int, one: str, more: str) -> str:
+        return f"{count} {one if count == 1 else more}"
+
     headline = (
-        f"Import {n} lead{'' if n == 1 else 's'}: {n} new deal{'' if n == 1 else 's'}, "
-        f"{counts['contacts_new']} new contacts ({counts['contacts_existing']} already in the CRM), "
-        f"{counts['companies_new']} new companies ({counts['companies_existing']} already in the CRM)"
+        f"Import {many(n, 'lead', 'leads')}: {many(n, 'new deal', 'new deals')}, "
+        f"{many(counts['contacts_new'], 'new contact', 'new contacts')} "
+        f"({counts['contacts_existing']} already in the CRM), "
+        f"{many(counts['companies_new'], 'new company', 'new companies')} "
+        f"({counts['companies_existing']} already in the CRM)"
     )
     lines: list[str] = []
     for lead in leads[:3]:
