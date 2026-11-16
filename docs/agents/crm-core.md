@@ -1336,3 +1336,9 @@ commits the contact immediately. Touched details are PUT before the deal write; 
 values (including blanks) are sent so retries can clear a previously saved value. Untouched
 fields and replacement contacts cause no contact write. Inline details join the close guard,
 and starting a fresh edit resets them. A failed deal write can leave the details saved.
+
+- **Collapsible Pipeline header (#373):** desktop-only, page-local (no shared hook), with
+  localStorage key `cakecrm_pipeline_header_collapsed:<viewer>`. The toolbar arrow hides the
+  title/totals and relocates Add Deal; an empty-board row keeps the arrow reachable so the
+  header's recovery links can be restored. `useBoardScroller` absorbs the height change.
+  Saved views and their storage version are unchanged.
