@@ -336,6 +336,8 @@ def test_a_cursor_is_refused_under_any_other_order(rec):
     """`after_id` under created_at or newest-finished order would skip and repeat rows."""
     with pytest.raises(gtd_service.ValidationError, match="after_id is only valid with sort='id'"):
         gtd_service.list_todos(status="inbox", after_id=40)
+    with pytest.raises(gtd_service.ValidationError, match="non-zero offset"):
+        gtd_service.list_todos(status="inbox", sort="id", after_id=40, offset=5)
     assert not rec.calls
 
 

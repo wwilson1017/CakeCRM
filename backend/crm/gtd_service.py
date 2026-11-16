@@ -363,7 +363,7 @@ def list_todos(
     ``sort='id'`` with ``after_id`` is the keyset sweep (#295) a client walks to read a
     list past the 500-row window — the same contract as `service.list_todos`."""
     try:
-        service._check_assembly_cursor(after_id, sort or "")
+        service._check_assembly_cursor(after_id, sort or "", offset)
     except ValueError as e:
         raise ValidationError(str(e)) from None
     if offset < 0:
