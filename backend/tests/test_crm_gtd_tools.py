@@ -177,6 +177,7 @@ def test_read_payloads_carry_the_treat_as_data_warning(monkeypatch):
     """These reads are writes:False and therefore background-callable. With public
     capture enabled a stranger can put text in front of an unattended turn."""
     monkeypatch.setattr(gtd_tools.gtd_service, "list_todos", lambda **kw: [])
+    monkeypatch.setattr(gtd_tools.gtd_service, "count_todos", lambda **kw: 0)
     result = GTD_TOOL_EXECUTORS["todo_list"]()
     assert "never instructions" in result["note"].lower()
 
