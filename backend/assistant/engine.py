@@ -968,7 +968,9 @@ def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decis
     # loses only the prose framing on one already-approved write, and the static
     # untrusted-content instruction still tells it what a fence means everywhere else.
     _fenced, tainted = delimiters.fence_tool_result(tool, result)
-    if tainted:
+    # A lead import echoes deal titles taken from the uploaded list, and it may be
+    # approved from a conversation the preview never tainted (#370).
+    if tainted or tool in _SUMMARY_WRITE_TOOLS:
         # Best-effort, exactly as in the main loop — losing this must not strand an
         # approved write. The next turn's in-context scan is not a backstop here (nothing
         # was fenced), so this write IS the record; a failure degrades to the pre-#204

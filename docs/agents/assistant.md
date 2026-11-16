@@ -679,6 +679,9 @@
   pasted-text previews in Auto, and are excluded from unattended turns.
   `engine._SUMMARY_WRITE_TOOLS` also always confirms in the gate, every mode: a batch
   outlives its preview's conversation, so the taint alone cannot promise the card.
+  Approving one also taints the approving conversation (`resolve_confirmation`): its result
+  echoes deal titles from the list. The preview stays out of #372's parallel read lane
+  (`registry.parallel_reads` drops `UNTRUSTED_SOURCE_TOOLS`) and records no deal finds.
   It and `_card_summary` keep a server-built `summary` on the
   pending placeholder and the `confirm` event. `mapServerMessages` reads it back after
   reload. The summary's pending JSON must stay under `_UI_RESULT_PREVIEW_CAP` or the
