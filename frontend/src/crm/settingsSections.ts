@@ -22,7 +22,7 @@
 export type SettingsSectionId = 'personal' | 'assistant' | 'workspace' | 'integrations';
 
 export type SettingsCardId =
-  | 'notifications' | 'change_password' | 'pipeline_board' | 'telegram_link' | 'todo_devices'
+  | 'notifications' | 'change_password' | 'pipeline_board' | 'telegram_link' | 'todo_devices' | 'install_app'
   | 'memory' | 'todo_mode' | 'voice_live'
   | 'branding' | 'team' | 'custom_fields' | 'export'
   | 'telegram' | 'gmail';
@@ -59,6 +59,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
       // (/api/crm/gtd/web-{signin-link,sessions,signout-all}) are `get_current_user` and act
       // on the caller's own devices. The on/off switch stays on the admin-only todo_mode card.
       { id: 'todo_devices', adminOnly: false },
+      // Member-visible: browser installation calls no route.
+      { id: 'install_app', adminOnly: false },
     ],
   },
   {

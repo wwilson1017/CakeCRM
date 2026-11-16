@@ -89,6 +89,9 @@ describe('TodoDevicesCard', () => {
     expect(img.getAttribute('src')).toBe(LINK.qr);
     expect(container.textContent).toContain(LINK.url);
     expect(button('Make a new code')).toBeDefined();
+    expect(container.textContent).toContain('Add to Home Screen');
+    expect(container.textContent).toContain('Install and create shortcut');
+    expect(container.querySelectorAll('details')).toHaveLength(2);
   });
 
   it('signs out everywhere only after confirming, and resets the count', async () => {

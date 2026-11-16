@@ -90,7 +90,7 @@ const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Export data', '
 // above stays admin-only.
 const MEMBER_TITLES = [
   'Notifications', 'Change password', 'Pipeline board', 'Link my Telegram', 'Todo app devices',
-  'Assistant memory',
+  'Assistant memory', 'Install on your phone',
 ];
 
 let container: HTMLDivElement;
@@ -183,13 +183,13 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     }
   });
 
-  it('reaches an admin all fourteen cards, across four sections', async () => {
+  it('reaches an admin all fifteen cards, across four sections', async () => {
     auth.isAdmin = true;
     await render();
     expect(navLabels()).toEqual(['Personal', 'Assistant', 'Workspace', 'Integrations']);
 
     const reachable = await allReachableTitles();
-    expect(reachable).toHaveLength(14);
+    expect(reachable).toHaveLength(15);
     expect(reachable.sort()).toEqual([...MEMBER_TITLES, ...ADMIN_ONLY_TITLES].sort());
   });
 
@@ -212,7 +212,7 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     expect(navLabels()).not.toContain('Workspace');
     expect(container.querySelector('[aria-current="page"]')!.textContent).toBe('Personal');
     expect(cardTitles()).toEqual([
-      'Notifications', 'Change password', 'Pipeline board', 'Link my Telegram', 'Todo app devices',
+      'Notifications', 'Change password', 'Pipeline board', 'Link my Telegram', 'Todo app devices', 'Install on your phone',
     ]);
   });
 

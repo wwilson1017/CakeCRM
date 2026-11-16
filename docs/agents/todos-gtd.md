@@ -631,3 +631,12 @@
   count share `_todo_filters`, including ownership, live deals and bring-back rules.
   The count and page are not one snapshot: concurrent writes can change the total,
   and offset paging can repeat or skip rows between calls. The UI keeps its id sweep.
+
+- **Install on your phone (#375)** ports todo-gtd `809a1f8` into the member-visible Personal
+  Settings card `InstallAppCard`; `TodoDevicesCard` reuses its phone steps after code creation.
+  The shared shell now links the CRM manifest and existing mark PNG as Apple touch icon.
+  `todo_web._page()` swaps the manifest href to `/todo/manifest.webmanifest`, so the page keeps
+  one manifest and Todos' own launch address. The inline shell listener defers and stashes
+  `beforeinstallprompt` for lazy Settings (`appinstalled` clears it), but skips `/todo` and
+  `/todo/...`, which have no card and keep Chrome's own banner. No service worker or offline
+  mode was added, and `/capture` is unchanged.
