@@ -137,6 +137,14 @@ It returns nothing.
   The server verifies type by magic bytes and enforces 3.75 MB / 8000 px per side per photo.
   Photos are untrusted content and tighten confirmation rules like uploaded documents.
 
+- **Spreadsheet uploads.** A CSV or XLSX file attached in chat is stored in
+  `assistant_message_files` with the conversation, so the assistant can import it by id,
+  and is deleted through its message FK cascade. Other document types are text-only:
+  their bytes are not stored. A lead-import preview keeps parsed rows in
+  `assistant_lead_import_previews`, readable only by the seat that made it and usable for
+  60 minutes. Execute consumes it atomically; the next preview sweeps expired rows.
+  Preview results are untrusted content and tighten confirmation rules, Auto included.
+
 - **Live transcription (off by default, admin switch).** Live transcription shows your words
   while you speak. To do that, your browser hands the microphone audio to its own speech
   recognition service, which is usually run online by the browser maker (for example Google

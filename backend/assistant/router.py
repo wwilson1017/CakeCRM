@@ -37,6 +37,7 @@ import html
 import json
 import logging
 import re
+import secrets
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -244,6 +245,7 @@ async def chat_upload(
 
     blocks: list[str] = []
     images: list[dict] = []
+    stored: list[dict] = []
     for f in files:
         name = f.filename or "upload"
         if uploads.is_image_name(name) and not provider.supports_images:
@@ -263,7 +265,10 @@ async def chat_upload(
                 images.append(await asyncio.to_thread(uploads.read_image, name, raw))
                 blocks.append(delimiters.wrap_untrusted_image(name))
             else:
-                blocks.append(await asyncio.to_thread(uploads.extract_upload, name, raw))
+                file_id = secrets.token_hex(8) if uploads.is_stored_name(name) else None
+                blocks.append(await asyncio.to_thread(uploads.extract_upload, name, raw, file_id))
+                if file_id:
+                    stored.append({"id": file_id, "filename": name, "data": raw})
         except uploads.UploadError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -287,7 +292,7 @@ async def chat_upload(
         provider, registry, messages,
         tool_mode=tool_mode, conversation_id=conversation_id,
         title_hint=original_text or " ".join(i["filename"] for i in images),
-        context=context, page=page, images=images or None, user=user,
+        context=context, page=page, images=images or None, files=stored or None, user=user,
     ))
 
 

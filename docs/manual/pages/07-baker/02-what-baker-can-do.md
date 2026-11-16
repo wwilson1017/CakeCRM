@@ -33,7 +33,7 @@ Use **Attach a file** in the drawer to give Baker a file to read:
 - up to 5 files per message, 10 MB each;
 - CSV, XLSX, MD, TXT, PDF or DOCX.
 
-Only the text is extracted; the file itself is not stored. Uploaded text is treated as untrusted, so for the rest of that conversation every change Baker proposes asks for your approval. Baker cannot attach a file to a record; you add attachments yourself.
+The text is extracted for Baker to read. A CSV or XLSX file is also kept with the conversation, so Baker can import it as a lead list (see [Importing](../04-contacts-and-companies/06-importing.md)); deleting the conversation deletes it. Other file types are not stored. Uploaded text is treated as untrusted, so for the rest of that conversation every change Baker proposes asks for your approval. Baker cannot attach a file to a record; you add attachments yourself.
 
 ## Photos
 

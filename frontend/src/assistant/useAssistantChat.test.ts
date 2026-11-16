@@ -15,7 +15,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useAssistantChat } from './useAssistantChat';
+import { mapServerMessages, useAssistantChat } from './useAssistantChat';
 import { shrinkImage } from '../shared/shrinkImage';
 vi.mock('../shared/shrinkImage', () => ({ shrinkImage: vi.fn(async (file: File) => file) }));
 import type { PageContext } from './types';
@@ -211,4 +211,26 @@ it.each(['clear', 'stop', 'unmount'] as const)('does not upload if %s happens du
   });
   await act(async () => { finish(photo); });
   expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/chat/upload'))).toHaveLength(0);
+});
+
+
+it('keeps a server summary on the streamed and reloaded pending card', async () => {
+  const summary = { headline: 'Import 2 leads', lines: ['Ana', 'Bo'] };
+  fetchMock.mockResolvedValueOnce(sse([
+    { type: 'conversation_id', id: 'c1' },
+    { type: 'confirm', tool: 'crm_execute_lead_import', tool_use_id: 't1', msg_id: 'm1', args: { batch_id: 'b' }, summary },
+    { type: 'done' },
+  ]));
+  render(null);
+  await act(async () => { chat.sendMessage('import'); });
+  const pending = chat.messages.find(m => m.role === 'assistant')!.pendingConfirmations![0];
+  expect(pending.summary).toEqual(summary);
+  const mapped = mapServerMessages([{
+    id: 'm1', role: 'assistant', content: '',
+    tool_calls: [{ tool: 'crm_execute_lead_import', tool_use_id: 't1', args: { batch_id: 'b' },
+      result: { status: 'pending_user_approval', summary } }],
+  }]);
+  expect(mapped[0].pendingConfirmations![0].summary).toEqual(summary);
+  expect(mapped[0].pendingConfirmations![0].status).toBe('pending');
+  expect(mapped[0].toolCalls).toEqual([]);
 });

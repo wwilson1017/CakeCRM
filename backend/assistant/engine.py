@@ -223,6 +223,7 @@ async def chat(
     context: dict | None = None,
     page: dict | None = None,
     images: list[dict] | None = None,
+    files: list[dict] | None = None,
     *,
     user: dict | None,
 ) -> AsyncGenerator[str, None]:
@@ -230,6 +231,7 @@ async def chat(
 
     ``images`` are photos uploaded with this message, persisted beside its row;
     the assembler attaches them to the provider request.
+    ``files`` are CSV/XLSX uploads stored beside the user row so a tool can re-read them.
 
     ``messages`` carries only the newest user message (history lives server-side).
     An EMPTY ``messages`` with a ``conversation_id`` is a *continuation* — used to
@@ -259,7 +261,7 @@ async def chat(
     stop).
     """
     try:
-        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint, context, page, images, user):
+        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint, context, page, images, files, user):
             yield line
     except Exception:
         logger.exception("assistant.chat crashed mid-stream")
@@ -276,6 +278,7 @@ async def _chat_impl(
     context: dict | None = None,
     page: dict | None = None,
     images: list[dict] | None = None,
+    files: list[dict] | None = None,
     user: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     if tool_mode not in _VALID_MODES:
@@ -324,7 +327,7 @@ async def _chat_impl(
             # Fail-closed: if we can't record the user's message we can't assemble
             # reliable history, so don't proceed.
             await asyncio.to_thread(
-                history.save_message, conversation_id, user_msg_id, "user", user_text, images=images
+                history.save_message, conversation_id, user_msg_id, "user", user_text, images=images, files=files
             )
             # Durable half of the untrusted-content taint (#72 Phase 3). The scan below
             # reads the ASSEMBLED context, which compaction can empty of this row; the
@@ -625,7 +628,7 @@ async def _chat_impl(
                 or turn_has_untrusted_reads
                 or (tool_mode == "normal" and not routine_exempt)
             ):
-                placeholder = await _pending_placeholder(name, args)
+                placeholder = await _pending_placeholder(name, args, user_id)
                 try:
                     await asyncio.to_thread(
                         history.merge_tool_result, iter_msg_id, tool_use_id, name,
@@ -641,6 +644,7 @@ async def _chat_impl(
                     "type": "confirm", "tool": name, "args": args,
                     "tool_use_id": tool_use_id, "msg_id": iter_msg_id,
                     "description": registry.descriptions.get(name, name),
+                    **_card_summary(placeholder),
                 })
                 continue
 
@@ -781,13 +785,19 @@ _CONNECTION_BOUND_WRITE_TOOLS = frozenset({"gmail_create_draft"})
 _VERSION_BOUND_WRITE_TOOLS = frozenset({"write_context_file"})
 
 
-async def _pending_placeholder(tool_name: str, args: dict | None) -> str:
+# The batch id alone cannot describe an import. Keep the server's summary on the
+# placeholder so both a live confirm event and a reloaded card show it (#370).
+_SUMMARY_WRITE_TOOLS = frozenset({"crm_execute_lead_import"})
+
+
+async def _pending_placeholder(tool_name: str, args: dict | None, user_id: int | None = None) -> str:
     """The pending-approval result to persist for a gated write.
 
     Plain PENDING_RESULT_JSON, except for a bound write, which also carries what it was
     proposed against — the live connection for Gmail, the row version for a context
-    file. Extra keys are safe: history's status helpers read only "status". Both binding
-    reads touch Postgres, so they are offloaded — this runs on the SSE event loop.
+    file, or the server's summary for a lead import. Extra keys are safe: history's
+    status helpers read only "status". Binding reads touch Postgres, so they are
+    offloaded — this runs on the SSE event loop.
     """
     if tool_name in _CONNECTION_BOUND_WRITE_TOOLS:
         from gmail import tools as gmail_tools  # lazy: keeps gmail out of engine import
@@ -795,11 +805,21 @@ async def _pending_placeholder(tool_name: str, args: dict | None) -> str:
         binding = await asyncio.to_thread(gmail_tools.pending_binding)
     elif tool_name in _VERSION_BOUND_WRITE_TOOLS:
         binding = await asyncio.to_thread(context_file_tools.pending_binding, args)
+    elif tool_name in _SUMMARY_WRITE_TOOLS:
+        from crm import lead_import
+
+        binding = await asyncio.to_thread(lead_import.pending_binding, args, user_id)
     else:
         return history.PENDING_RESULT_JSON
     if not binding:
         return history.PENDING_RESULT_JSON
     return json.dumps({"status": history.PENDING_STATUS, **binding})
+
+
+def _card_summary(placeholder: str) -> dict:
+    """The pending placeholder's summary, as an extra confirm-event key."""
+    summary = _parse_pending(placeholder).get("summary")
+    return {"summary": summary} if summary else {}
 
 
 def _parse_pending(pending_content: str | dict | None) -> dict:

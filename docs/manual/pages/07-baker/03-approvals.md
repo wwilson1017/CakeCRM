@@ -30,7 +30,7 @@ A few of those calls still ask, because of what they would do: archiving a conta
 
 ## What always asks in Ask mode
 
-Deleting, archiving, merging, bulk moves and bulk todo updates, recomputing lead scores, creating a Gmail draft, sending a notification, recording a memory fact, and any change to Baker's protected files. Anything new that has not been classified asks too.
+Deleting, archiving, merging, bulk moves, lead imports and bulk todo updates, recomputing lead scores, creating a Gmail draft, sending a notification, recording a memory fact, and any change to Baker's protected files. Anything new that has not been classified asks too.
 
 ## What asks even in Auto
 

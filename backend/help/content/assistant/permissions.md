@@ -66,10 +66,12 @@ or open a thread, not that it can see nothing mail-derived.
 
 ## Uploads
 
-Up to 5 files per message, 10 MB each, from this list: CSV, XLSX, MD, TXT, PDF and DOCX. Only
-the text is extracted — the original bytes are never stored — and it is wrapped as untrusted
-content, which tightens the confirmation rules for the rest of that conversation. Baker has no
-way to upload a file to a record; note attachments are added by you.
+Up to 5 files per message, 10 MB each, from this list: CSV, XLSX, MD, TXT, PDF and DOCX.
+The text is extracted and wrapped as untrusted content, which tightens the confirmation rules
+for the rest of that conversation. A CSV or XLSX file is also kept with the conversation so
+Baker can import it as a lead list; deleting the conversation deletes it. Other documents
+are not stored. Baker has no way to upload a file to a record; note attachments are added by you.
+Baker always asks for your approval before a lead import writes anything.
 
 Photos (JPEG, PNG, WebP) are accepted when the active model can see images. The photo
 is kept with the conversation and accompanies the provider requests for its attached turn,

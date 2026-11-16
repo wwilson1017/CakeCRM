@@ -190,8 +190,8 @@
   **Since #114 the allowlist is no longer derived from `writes` alone**, because
   `writes:False` means "changes nothing", not "safe unattended": `background_allowlist()`
   now subtracts `background.BACKGROUND_EXCLUDED_TOOLS`, which IS
-  `delimiters.UNTRUSTED_SOURCE_TOOLS` (the live external-account reads — today
-  `gmail_search`/`gmail_read_thread`) rather than a second hand-maintained list. For a
+  `delimiters.UNTRUSTED_SOURCE_TOOLS` (`gmail_search`/`gmail_read_thread` and, since #370,
+  `crm_preview_lead_import`'s uploaded/pasted rows) rather than a second hand-maintained list. For a
   future *Gmail* reader that is automatic: `test_gmail_guard`'s existing pin fails CI
   until the new tool is added to that set, and adding it excludes it here with no second
   edit. **It is NOT automatic for a future non-Gmail external read** (some other
@@ -667,6 +667,21 @@
   context: assembly reads stored rows, covering continuations. No compaction row-token
   estimate is added because bytes are not row content and only accompany their attached
   turn. Telegram photos and a look-again tool are out of scope.
+
+- **Stored spreadsheet uploads and card summaries (#370).** `uploads.STORED_EXTENSIONS`
+  limits retained documents to CSV/XLSX. `chat_upload` mints the id and places it on the
+  nonce fence as `attachment_id`; `save_message(files=)` stores bytes in the user row's
+  transaction. `history.get_message_file` joins through the conversation owner, so another
+  seat cannot read them. The message FK cascades deletion; like photos, files stay outside
+  `_truncate_all`. Batches are seat-scoped, so a tool can read a file from another of that
+  seat's conversations. `crm_preview_lead_import` joins `UNTRUSTED_SOURCE_TOOLS`: its
+  uploaded/pasted row results are fenced and durably taint the conversation, including
+  pasted-text previews in Auto, and are excluded from unattended turns.
+  `engine._SUMMARY_WRITE_TOOLS` and `_card_summary` keep a server-built `summary` on the
+  pending placeholder and the `confirm` event. `mapServerMessages` reads it back after
+  reload. The summary's pending JSON must stay under `_UI_RESULT_PREVIEW_CAP` or the
+  reloaded result no longer parses as pending; `_summary` budgets 1500 serialized
+  characters with default ASCII escaping, reserving space for the omitted-row count.
 
 - **Voice (#338, port of cake_os #3832/#3820/#4019/#4020 — `backend/voice/`,
   `frontend/src/shared/voice/`).** `AIProvider.can_transcribe` defaults false and

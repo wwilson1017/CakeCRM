@@ -305,6 +305,11 @@ def _normalize_tags(raw: str) -> str:
 
 # ── Contacts ──────────────────────────────────────────────────────────────────
 
+# Shared with crm/lead_import.py so single and bulk creation cannot drift.
+_CONTACT_INSERT_SQL = """INSERT INTO contacts (name, email, phone, company, title, source, status, tags, notes, company_id, owner_id)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, company_follow_merge(%s), %s) RETURNING id"""
+
+
 def create_contact(
     name: str, email: str = "", phone: str = "", company: str = "",
     title: str = "", source: str = "", status: str = "active",
@@ -341,8 +346,7 @@ def create_contact(
     # check the leading columns) stay valid; a bad FK raises ForeignKeyViolation
     # which the router maps to 400.
     row = pg_fetchone(
-        """INSERT INTO contacts (name, email, phone, company, title, source, status, tags, notes, company_id, owner_id)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, company_follow_merge(%s), %s) RETURNING id""",
+        _CONTACT_INSERT_SQL,
         (name, email, phone, company, title, source, status, _normalize_tags(tags), notes,
          company_id, owner_id),
     )
@@ -747,7 +751,7 @@ def get_company(company_id: int) -> dict | None:
     return pg_fetchone("SELECT * FROM companies WHERE id = %s", (company_id,))
 
 
-def resolve_or_create_company_ids(names: list[str]) -> dict[str, int]:
+def resolve_or_create_company_ids(names: list[str], *, cur=None) -> dict[str, int]:
     """Batch-resolve raw company-name spellings to company ids, auto-creating any
     that don't exist yet (issue #35).
 
@@ -774,8 +778,9 @@ def resolve_or_create_company_ids(names: list[str]) -> dict[str, int]:
     database's ``LOWER()``, which would strand a name we just created. (Same
     class of drift the migration's whitespace comment guards against.)
 
-    The two statements are autocommit, so a company created here survives even if
-    the caller's contact write later fails. Accepted: the name genuinely appeared
+    With ``cur``, both statements share the caller's transaction (#370).
+    Without it, the two statements are autocommit, so a company created here survives
+    even if the caller's contact write later fails. Accepted: the name genuinely appeared
     in the input, and a company with no contacts is valid, visible, deletable
     data — not corruption.
 
@@ -808,7 +813,8 @@ def resolve_or_create_company_ids(names: list[str]) -> dict[str, int]:
     #    batch; WITH ORDINALITY makes first-seen-wins deterministic. Race-safe
     #    against a concurrent import by construction (no SELECT-then-INSERT
     #    window). Raw strings: the E'' escapes are Postgres syntax, not Python.
-    pg_execute(
+    execute = cur.execute if cur is not None else pg_execute
+    execute(
         r"""INSERT INTO companies (name)
             SELECT DISTINCT ON (LOWER(btrim(n, E' \t\n\r\f\x0b')))
                    btrim(n, E' \t\n\r\f\x0b')
@@ -819,7 +825,8 @@ def resolve_or_create_company_ids(names: list[str]) -> dict[str, int]:
     )
     # 2) Map every raw spelling back to its id. The co.name side is exactly the
     #    uq_companies_name_ci expression, so the join is index-assisted.
-    rows = pg_fetchall(
+    fetch = cur.execute if cur is not None else pg_fetchall
+    rows = fetch(
         r"""SELECT t.n AS raw, company_follow_merge(co.id) AS id
             FROM unnest(%s::text[]) AS t(n)
             JOIN companies co
@@ -827,6 +834,8 @@ def resolve_or_create_company_ids(names: list[str]) -> dict[str, int]:
                = LOWER(btrim(t.n, E' \t\n\r\f\x0b'))""",
         (unique,),
     )
+    if cur is not None:
+        return dict(cur.fetchall())
     return {row["raw"]: row["id"] for row in rows}
 
 
@@ -1039,6 +1048,11 @@ def get_company_detail(company_id: int) -> dict | None:
 
 # ── Deals ─────────────────────────────────────────────────────────────────────
 
+# Shared with crm/lead_import.py so single and bulk creation cannot drift.
+_DEAL_INSERT_SQL = """INSERT INTO deals (title, contact_id, stage, value, notes, expected_close_date, probability, currency, company_id, owner_id, deal_temperature, closed_on)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, company_follow_merge(%s), %s, %s, %s) RETURNING id"""
+
+
 def create_deal(
     title: str, contact_id: int | None = None, stage: str = "lead",
     value: float = 0, notes: str = "", expected_close_date: str = "",
@@ -1070,8 +1084,7 @@ def create_deal(
     )
     # company_id appended last (see create_contact); a bad FK -> ForeignKeyViolation.
     row = pg_fetchone(
-        """INSERT INTO deals (title, contact_id, stage, value, notes, expected_close_date, probability, currency, company_id, owner_id, deal_temperature, closed_on)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, company_follow_merge(%s), %s, %s, %s) RETURNING id""",
+        _DEAL_INSERT_SQL,
         (title, contact_id, stage, value, notes, expected_close_date, probability, currency,
          company_id, owner_id, deal_temperature, closed_on_day),
     )
@@ -4053,6 +4066,7 @@ def dismiss_ai_prompt() -> dict:
 
 
 def _truncate_all(cur, include_definitions: bool = False) -> None:
+    # Pending lead-import previews hold lead names/emails, so CRM resets clear them (#370).
     # todo_web_sessions / todo_web_signin_tokens (#293) are deliberately in NEITHER
     # branch: they are auth state, like saved_views, and a CRM reset must not sign the
     # todo app's devices out.
@@ -4124,14 +4138,14 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
             "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_definitions, "
             "crm_field_values, "
             "crm_field_provenance, deal_stage_events, proactive_nudges, "
-            "deal_ai_touch_evidence, crm_stage_criteria, reminders, assistant_deal_finds RESTART IDENTITY"
+            "deal_ai_touch_evidence, crm_stage_criteria, reminders, assistant_deal_finds, assistant_lead_import_previews RESTART IDENTITY"
         )
     else:
         cur.execute(
             "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
             "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_values, "
             "crm_field_provenance, deal_stage_events, proactive_nudges, deal_ai_touch_evidence, "
-            "crm_stage_criteria, reminders, assistant_deal_finds RESTART IDENTITY"
+            "crm_stage_criteria, reminders, assistant_deal_finds, assistant_lead_import_previews RESTART IDENTITY"
         )
 
 

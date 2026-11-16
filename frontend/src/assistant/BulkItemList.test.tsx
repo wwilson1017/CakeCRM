@@ -7,7 +7,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { BulkItemList } from './BulkItemList';
-import { COLLAPSED_ROWS, bulkItems } from './bulkItems';
+import { COLLAPSED_ROWS, bulkItems, confirmSummary } from './bulkItems';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -33,6 +33,14 @@ function render(items: unknown[]) {
 }
 
 describe('bulkItems', () => {
+  it('validates server summaries and drops non-string sample lines', () => {
+    const summary = { headline: 'Import 2 leads', lines: ['Ana', 'Bo'] };
+    expect(confirmSummary(summary)).toEqual(summary);
+    expect(confirmSummary({ ...summary, lines: ['Ana', 3, null] })).toEqual({ headline: summary.headline, lines: ['Ana'] });
+    for (const bad of [undefined, 'summary', { headline: 'No lines' }, { headline: 3, lines: [] }]) {
+      expect(confirmSummary(bad)).toBeNull();
+    }
+  });
   it('reads a todos array and ignores every other call shape', () => {
     expect(bulkItems({ todos: [{ title: 'a' }] })).toEqual([{ title: 'a' }]);
     expect(bulkItems({ title: 'a' })).toBeNull();

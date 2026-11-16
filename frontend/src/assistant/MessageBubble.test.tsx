@@ -37,3 +37,21 @@ it.each(['read this', ''])('shows filename chips with user text %j', content => 
   expect(bubble.children).toHaveLength(content ? 2 : 1);
   expect(container.querySelector('img')).toBeNull();
 });
+
+
+it.each([true, false])('renders the server summary only when present: %s', withSummary => {
+  const summary = { headline: 'Import 2 leads', lines: ['Ana · Northwind', 'Bo · Harbor'] };
+  render({ id: 'a', role: 'assistant', content: '', pendingConfirmations: [{
+    tool: 'crm_execute_lead_import', toolUseId: 't1', args: { batch_id: 'b', note: 'Met them' },
+    status: 'pending', summary: withSummary ? summary : undefined,
+  }] });
+  const card = container.querySelector('[data-testid="confirm-summary"]');
+  if (withSummary) {
+    expect(card?.textContent).toContain(summary.headline);
+    expect([...card!.querySelectorAll('li')].map(li => li.textContent)).toEqual(summary.lines);
+  } else {
+    expect(card).toBeNull();
+  }
+  expect(container.textContent).toContain('batch_id: b');
+  expect(container.textContent).toContain('note: Met them');
+});

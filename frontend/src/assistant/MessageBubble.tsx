@@ -120,6 +120,14 @@ function ConfirmationCard({
           <span> · {args.map(([k, v]) => `${k}: ${summarize(v)}`).join(', ')}</span>
         )}
       </div>
+      {confirm.summary && (
+        <div data-testid="confirm-summary" style={{ fontSize: 12, color: INK, marginBottom: 10 }}>
+          <div>{confirm.summary.headline}</div>
+          <ul style={{ margin: '4px 0 0', paddingLeft: 20, color: INK_MUTE }}>
+            {confirm.summary.lines.map((line, i) => <li key={i}>{line}</li>)}
+          </ul>
+        </div>
+      )}
       {items && <BulkItemList items={items} />}
       <div style={{ display: 'flex', gap: 8 }}>
         <button
