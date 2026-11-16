@@ -8,6 +8,7 @@ run — plus the security-relevant read-only and idempotent-confirm behaviors.
 """
 
 import json
+import threading
 
 import pytest
 
@@ -1581,3 +1582,165 @@ async def test_uploaded_images_reach_history_and_taint(store, monkeypatch, with_
     assert "done" in _types(events)
     assert store.saved[0]["images"] == images
     assert marks == ([store.saved[0]["cid"]] if with_photo else [])
+
+
+# ── Reads of one batch run first and side by side (#372) ──────────────────────
+
+def _real_registry(monkeypatch, **handlers):
+    """The real ToolRegistry with probe handlers and no database behind the deal guard."""
+    from assistant.registry import ToolRegistry
+    from crm import deal_write_guard
+
+    monkeypatch.setattr(deal_write_guard, "pg_fetchall", lambda *a: [])
+    monkeypatch.setattr(deal_write_guard, "pg_execute", lambda *a: 1)
+    monkeypatch.setattr(deal_write_guard, "pg_fetchone", lambda *a: None)
+    reg = ToolRegistry()
+    reg.executors.update(handlers)
+    return reg
+
+
+def _tool_ends(events):
+    return [(e["tool_use_id"], e["result"]) for e in events if e["type"] == "tool_end"]
+
+
+async def test_two_slow_reads_in_one_batch_overlap(store, monkeypatch):
+    both_inside = threading.Barrier(2)  # a lone caller waits 5 s, then the barrier breaks
+
+    def slow(**kw):
+        both_inside.wait(5)
+        return {"ok": True}
+
+    reg = _real_registry(monkeypatch, crm_dashboard=slow, crm_get_pipeline=slow)
+    prov = FakeProvider([
+        [_complete([_tc("crm_dashboard", "r1"), _tc("crm_get_pipeline", "r2")], "tool_use")],
+        [_complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "How are we doing?"}])
+    assert _tool_ends(events) == [("r1", {"ok": True}), ("r2", {"ok": True})]
+
+
+async def test_a_write_listed_before_a_read_runs_after_it(store, monkeypatch):
+    order = []
+    reg = _real_registry(
+        monkeypatch,
+        crm_create_contact=lambda **kw: order.append("write") or {"ok": True},
+        crm_dashboard=lambda **kw: order.append("read") or {"stats": 1},
+    )
+    prov = FakeProvider([
+        [_complete([_tc("crm_create_contact", "w1", {"name": "X"}), _tc("crm_dashboard", "r1")], "tool_use")],
+        [_complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "go"}], tool_mode="power")
+    assert order == ["read", "write"]
+    # ...while the browser and the model both still get the model's own order.
+    assert [tid for tid, _ in _tool_ends(events)] == ["w1", "r1"]
+    assert [r["tool_use_id"] for r in prov.captured_messages[1][-1]["results"]] == ["w1", "r1"]
+
+
+async def test_a_hung_read_times_out_and_its_late_answer_is_never_a_find(store, monkeypatch):
+    from test_read_batch import idle_pool
+
+    from assistant import read_batch
+    from crm.links import with_deal_url
+
+    monkeypatch.setattr(read_batch, "READ_TIMEOUT_S", 0.3)
+    release = threading.Event()
+
+    def hung(**kw):
+        release.wait(5)
+        return with_deal_url({"id": 7, "title": "Renewal"})
+
+    writes = []
+    reg = _real_registry(
+        monkeypatch, crm_get_deal=hung, crm_dashboard=lambda **kw: {"stats": 1},
+        crm_update_deal=lambda **kw: writes.append(kw) or {"ok": True},
+    )
+    prov = FakeProvider([
+        [_complete([_tc("crm_get_deal", "r1", {"deal_id": 7}), _tc("crm_dashboard", "r2")], "tool_use")],
+        [_complete([_tc("crm_update_deal", "w1", {"deal_id": 7, "value": 5})], "tool_use")],
+        [{"type": "text", "text": "It timed out."}, _complete()],
+    ])
+    try:
+        events = await _run(prov, reg, [{"role": "user", "content": "Bump the renewal"}], tool_mode="power")
+    finally:
+        release.set()
+    idle_pool()  # the hung handler has now returned its deal, late
+    ends = dict(_tool_ends(events))
+    assert ends["r1"]["status"] == "timeout" and "Renewal" not in json.dumps(events)
+    assert ends["r2"] == {"stats": 1}
+    assert next(e for e in events if e.get("tool_use_id") == "r1" and e["type"] == "tool_end")["elapsed_ms"] == 300
+    # The turn carried on to a second step, where the deal — never found in time — is refused.
+    assert ends["w1"]["ok"] is False and writes == []
+    assert events[-1]["type"] == "done"
+    assert reg.found_deals == {} and reg.deal_refs == {}
+
+
+@pytest.mark.parametrize("write_first", [True, False])
+async def test_a_find_in_the_same_batch_never_licenses_the_write(store, monkeypatch, write_first):
+    from crm.links import with_deal_url
+
+    writes = []
+    reg = _real_registry(
+        monkeypatch,
+        crm_get_deal=lambda **kw: with_deal_url({"id": 7, "title": "Renewal"}),
+        crm_update_deal=lambda **kw: writes.append(kw) or {"ok": True},
+    )
+    batch = [_tc("crm_update_deal", "w1", {"deal_id": 7, "value": 5}), _tc("crm_get_deal", "r1", {"deal_id": 7})]
+    prov = FakeProvider([
+        [_complete(batch if write_first else batch[::-1], "tool_use")],
+        [_complete([_tc("crm_update_deal", "w2", {"deal_id": 7, "value": 5})], "tool_use")],
+        [_complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "Bump the renewal"}], tool_mode="power")
+    ends = dict(_tool_ends(events))
+    assert "same batch" in ends["w1"]["error"]
+    assert ends["w2"] == {"ok": True} and writes == [{"deal_id": 7, "value": 5}]  # the next step may
+
+
+async def test_a_read_after_a_budget_stop_runs_but_records_no_find(store, monkeypatch):
+    from crm.links import with_deal_url
+
+    monkeypatch.setattr(engine, "WRITE_BUDGET_PER_TURN", 1)
+    order = []
+    reg = _real_registry(
+        monkeypatch,
+        crm_create_contact=lambda **kw: order.append("write") or {"ok": True},
+        crm_get_deal=lambda **kw: order.append("read") or with_deal_url({"id": 7, "title": "Renewal"}),
+    )
+    prov = FakeProvider([[_complete([
+        _tc("crm_create_contact", "w1"),
+        _tc("crm_create_contact", "w2"),
+        _tc("crm_create_contact", "w3"),
+        _tc("crm_get_deal", "r1", {"deal_id": 7}),
+    ], "tool_use")]])
+    events = await _run(prov, reg, [{"role": "user", "content": "go"}], tool_mode="power")
+    assert order == ["read", "write"]
+    assert [tid for tid, _ in _tool_ends(events)] == ["w1", "w2", "w3"]
+    assert "stopping" in dict(_tool_ends(events))["w3"]["error"]
+    assert "Renewal" not in json.dumps(events)
+    assert not reg.found_deals and reg.deal_refs == {}
+    assert events[-1]["type"] == "done"
+
+
+@pytest.mark.parametrize("tool_mode", ["normal", "power"])
+@pytest.mark.parametrize("source", ["capture_web", "ui"])
+async def test_a_later_public_capture_read_gates_the_write_by_result(store, monkeypatch, tool_mode, source):
+    marks, writes = [], []
+    monkeypatch.setattr(history, "mark_untrusted_seen", marks.append)
+    reg = _real_registry(
+        monkeypatch,
+        crm_create_contact=lambda **kw: writes.append(kw) or {"ok": True},
+        todo_list=lambda **kw: {"todos": [{"id": 7, "title": "Call tomorrow", "source": source}]},
+    )
+    prov = FakeProvider([
+        [_complete([_tc("crm_create_contact", "w1"), _tc("todo_list", "r1")], "tool_use")],
+        [{"type": "text", "text": "Ready."}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "go"}], tool_mode=tool_mode)
+    confirms = [e for e in events if e["type"] == "confirm"]
+    if source == "capture_web":
+        assert [e["tool_use_id"] for e in confirms] == ["w1"]
+        assert writes == [] and marks
+    else:
+        assert confirms == [] and marks == []
+        assert writes == [{}]
