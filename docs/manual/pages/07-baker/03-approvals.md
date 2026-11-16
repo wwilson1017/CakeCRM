@@ -35,6 +35,7 @@ Deleting, archiving, merging, bulk moves, lead imports and bulk todo updates, re
 ## What asks even in Auto
 
 - **Writing Baker's protected files**, soul.md and MEMORY.md. These always ask, in every mode, and only an admin can change them. See [Memory](04-memory.md).
+- **Importing a lead list.** A lead import always shows one Approve card with the count and a sample, in every mode and from any conversation. See [Importing](../04-contacts-and-companies/06-importing.md).
 - **A conversation that has read outside content.** Once Baker has read an email, an uploaded file, a photo, or a todo that came in through the public quick-capture link while no token was set, every change it proposes asks for approval for the rest of that conversation, even after that message has scrolled out of view. Text someone else wrote can never quietly steer Baker into changing your data. The Telegram chat is one long conversation, so once it has read such outside content it asks before every change from then on.
 
 ## Approving a change
