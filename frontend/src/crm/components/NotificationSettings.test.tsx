@@ -125,10 +125,11 @@ it('an operator default outside 30-1440 does not block saving quiet hours', asyn
 
 it('toggles only the check-in and applies the returned settings', async () => {
   await render();
-  const buttons = [...container.querySelectorAll('button')].filter(b => b.textContent === 'Turn off');
-  await act(async () => { buttons.at(-1)!.click(); });
+  const buttons = [...container.querySelectorAll('button')].filter(b => b.textContent === 'Turn off check-ins');
+  expect(buttons).toHaveLength(1);
+  await act(async () => { buttons[0].click(); });
   expect(body()).toEqual({ enabled: false });
-  expect(container.textContent).toContain('Turn on');
+  expect(container.textContent).toContain('Turn on check-ins');
 });
 
 it('shows validation errors and releases the save button after a failed request', async () => {

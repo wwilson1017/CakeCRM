@@ -76,7 +76,7 @@ touched and then goes cold again. Closing one overdue todo does not repeat the o
 This is **install-wide and admin-only**, and needs an AI provider. In Settings, Personal,
 Notifications, admins with a provider see **Baker's background check-in**:
 
-- **Turn on / Turn off** controls these check-ins separately from the daily digest.
+- **Turn on check-ins / Turn off check-ins** controls these check-ins separately from the daily digest.
 - **Check every** ranges from 30 minutes to once a day.
 - **Quiet hours** use the install's local timezone, shown beside the controls. A window such
   as 22:00–07:00 can cross midnight. Clear both times to remove it.

@@ -221,26 +221,26 @@ export function NotificationSettings({ isMobile }: { isMobile: boolean }) {
       {isAdmin && providerReady && hb !== null && (
         <div style={{ marginTop: 24, paddingTop: 20, borderTop: `1px solid ${LINE}` }}>
           <h3 style={settingsSubheading}>Baker's background check-in</h3>
-          <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, lineHeight: 1.6, maxWidth: 460 }}>
+          <p style={{ fontFamily: FONT_SANS, fontSize: 13, color: INK_MUTE, lineHeight: 1.6, maxWidth: 460, margin: '0 0 12px' }}>
             Baker looks for newly overdue todos, deals going cold and contacts nobody has followed
             up with, and sends one notification when something is new. It does not repeat what it
             has already told you. Needs an AI provider. Separate from the daily digest above.
           </p>
           {!hb.operator_enabled && (
-            <p style={{ color: INK_MUTE, fontSize: 13 }}>
+            <p style={{ color: INK_MUTE, fontSize: 13, margin: '0 0 12px' }}>
               Background check-ins are switched off for this server (HEARTBEAT_ENABLED).
               These settings take effect once it is on.
             </p>
           )}
           {hb.paused_until && (
-            <p style={{ color: INK_MUTE, fontSize: 13 }}>
+            <p style={{ color: INK_MUTE, fontSize: 13, margin: '0 0 12px' }}>
               Paused until {parseUTC(hb.paused_until).toLocaleString()}{' '}
               <button style={btnSecondary} disabled={hbBusy} onClick={() => saveHb({ pause_days: 0 })}>Resume</button>
             </p>
           )}
           <button style={hb.enabled ? btnSecondary : btnPrimary} disabled={hbBusy}
             onClick={() => saveHb({ enabled: !hb.enabled })}>
-            {hb.enabled ? 'Turn off' : 'Turn on'}
+            {hb.enabled ? 'Turn off check-ins' : 'Turn on check-ins'}
           </button>
           <div style={{ display: 'grid', gap: 16, marginTop: 16, maxWidth: 460 }}>
             <label style={labelStyle}>
