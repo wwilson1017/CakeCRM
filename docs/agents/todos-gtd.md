@@ -621,3 +621,13 @@
   `TodoEditSheet` and `bootSplit.test.ts` keeps `react-dom` and CRM code out of that download.
   Its keydown listener is capture-phase on `document` and stops propagation, so Esc closes the
   editor and never the sheet underneath.
+
+- **Model-facing todo pages are compact by default** (landed #374, port of todo-gtd
+  `04cbe9e`). `todo_list` accepts `offset` and returns `total` and `next_offset` (null
+  at the end). The default limit stays 100, clamped to 1..500. `detail: true` (not
+  upstream's `full`) returns the old full rows; `todo_get` stays full. Compact rows
+  always keep `source` for the per-row public-capture fence (#204), plus identity,
+  status and set optional fields, with `has_notes` instead of note bodies. List and
+  count share `_todo_filters`, including ownership, live deals and bring-back rules.
+  The count and page are not one snapshot: concurrent writes can change the total,
+  and offset paging can repeat or skip rows between calls. The UI keeps its id sweep.
