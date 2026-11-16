@@ -104,6 +104,9 @@ class ToolRegistry:
         self.tool_batch = 0
         self.found_deals: dict[int, int] | None = None
         self.found_epoch = None
+        # The staged change list an approval is resolving (#371). Set only by
+        # engine.resolve_confirmation, from the pending placeholder the server wrote.
+        self.change_batch_id: str | None = None
 
         # ``{deal_id: (title, url)}`` for every deal record a tool returned through this
         # registry (#238). A registry is built per turn, so the map never outlives the
@@ -119,7 +122,9 @@ class ToolRegistry:
 
         # Ordered tool sources — the extension point. Each is a (defs, executors)
         # pair. Features append here; second-to-land resolves keep-both.
-        crm_source, gtd_source = get_crm_tools(user=user), get_gtd_tools(user=user)
+        # The CRM source is handed this registry for one executor: the change list reads
+        # the approved batch id and the deal finds off it (#371).
+        crm_source, gtd_source = get_crm_tools(user=user, registry=self), get_gtd_tools(user=user)
         sources: list[tuple[list[dict], dict[str, Callable[..., dict]]]] = [
             crm_source,
             gtd_source,

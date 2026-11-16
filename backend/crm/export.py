@@ -75,6 +75,7 @@ NOT_EXPORTED: dict[str, str] = {
     "assistant_identity": "assistant configuration",
     "assistant_conversations": "owner-only by rule; an admin export must not read other seats' chats",
     "assistant_messages": "owner-only by rule; an admin export must not read other seats' chats",
+    "assistant_change_batches": "owner-only like its conversation: one seat's staged bulk edit and its undo record",
     "assistant_message_images": "photos on owner-only assistant messages; same rule as assistant_messages",
     "chat_turns": "owner-only conversation bookkeeping",
     "chat_turn_events": "owner-only conversation bookkeeping",

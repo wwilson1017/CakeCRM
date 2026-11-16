@@ -29,6 +29,7 @@ import { getToken, TOKEN_KEY } from '../core/auth/tokenUtils';
 import { parseUTC } from '../crm/gtd/util';
 import { shrinkImage } from '../shared/shrinkImage';
 import { toast } from '../shared/toast';
+import { changeBatchId, confirmSummary } from './bulkItems';
 import type {
   ActiveRecordContext,
   ChatMessage,
@@ -134,13 +135,15 @@ function addConfirm(m: ChatMessage, evt: SSEEvent): ChatMessage {
         args: (evt.args as Record<string, unknown>) ?? {},
         description: evt.description ? String(evt.description) : undefined,
         status: 'pending',
+        summary: confirmSummary(evt.summary) ?? undefined,
+        changeBatchId: changeBatchId(evt) ?? undefined,
       },
     ],
   };
 }
 
 /** Server rows → chat messages: a still-pending write reloads as a re-approvable card. */
-function mapServerMessages(serverMsgs: ServerMessage[]): ChatMessage[] {
+export function mapServerMessages(serverMsgs: ServerMessage[]): ChatMessage[] {
   const isPending = (r: unknown): boolean =>
     !!r && typeof r === 'object' && (r as { status?: string }).status === 'pending_user_approval';
   return serverMsgs.map((sm) => {
@@ -159,6 +162,8 @@ function mapServerMessages(serverMsgs: ServerMessage[]): ChatMessage[] {
           msgId: sm.id,
           args: tc.args ?? {},
           status: 'pending' as const,
+          summary: confirmSummary((tc.result as { summary?: unknown } | null)?.summary) ?? undefined,
+          changeBatchId: changeBatchId(tc.result) ?? undefined,
         })),
       toolCalls: calls
         .filter((tc) => !isPending(tc.result))

@@ -35,10 +35,12 @@ rather than trusting what comes back from the browser, marks the call as running
 runs it so a crash cannot double-execute it, and answers a repeated approval with the result
 it already produced.
 
-## Two things that ask even in Auto
+## Three things that ask even in Auto
 
 - **Writing or deleting one of Baker's two protected knowledge files.** See
   `assistant/context-files`.
+- **A change list.** One edit across many deals or todos always shows one card listing
+  every change, old value to new, with Undo afterwards. See `assistant/change-lists`.
 - **A conversation that has read untrusted outside content.** Reading mail, uploading a
   file or a photo, or listing a todo that arrived through the capture link while no token was
   configured (anyone could have posted it), brings in text somebody else wrote. A capture

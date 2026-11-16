@@ -34,6 +34,7 @@ from assistant.confirm_tier import ROUTINE
 from core.postgres import pg_fetchall
 from crm import (
     analytics_service,
+    change_list,
     chatter_service,
     company_merge_service,
     field_service,
@@ -41,6 +42,7 @@ from crm import (
     scoring_service,
     service as crm,
 )
+from crm.gtd_common import TODO_STATUSES
 from crm.links import with_deal_url
 
 # Resolving an `owner` the model named as an email address. `users.service` imports only
@@ -399,7 +401,8 @@ CRM_TOOL_DEFS = [
             "crm_mark_deal_won or crm_mark_deal_lost one deal at a time; they capture "
             "the lost reason, which this tool does not. Deals already in the target "
             "stage are skipped, and deals that cannot move (archived, or no longer "
-            "present) are reported individually while the rest still move."
+            "present) are reported individually while the rest still move. To change other "
+            "fields in the same request (a close date, a value), use crm_apply_change_list."
         ),
         "input_schema": {
             "type": "object",
@@ -1023,6 +1026,61 @@ CRM_TOOL_DEFS = [
                 "reason": {"type": "string", "description": "Why — REQUIRED, recorded with who did it"},
             },
             "required": ["survivor_id", "absorbed_id", "reason"],
+        },
+        "kind": "integration",
+    },
+    # ── Change list (1 tool, #371) ────────────────────────────────────────────
+    {
+        "name": "crm_apply_change_list",
+        # Never routine: a bulk write. The engine stages it before its card, and that
+        # card shows in every mode (engine._CHANGE_LIST_TOOL).
+        "writes": True,
+        "description": (
+            "Change several deals and/or todos in ONE approval. Use it whenever one request "
+            "changes more than a couple of records or sets more than one field on several "
+            "(for example: move these 40 deals to proposal and set their close date). Do "
+            "not loop over crm_update_deal or todo_update for that. Give one row per record "
+            "and field. The user gets a single card listing every change, old value to new "
+            "value, read by the server, and approves once; the card then has an Undo button "
+            "that restores the whole batch (you cannot undo it yourself). Rows the server "
+            "refuses are listed on the card as not changed and are never written; a record "
+            "edited after the card appeared is skipped. "
+            f"Deal fields: {', '.join(change_list.FIELDS['deal'])}. `stage` takes open stages "
+            f"only ({', '.join(crm.OPEN_STAGES)}) and never a won or lost deal; `value` is a "
+            "number in the deal's own currency; `expected_close_date` is YYYY-MM-DD or '' to "
+            f"clear; `deal_temperature` is {', '.join(crm.DEAL_TEMPERATURES)} or null. "
+            f"Todo fields: {', '.join(change_list.FIELDS['todo'])}. `status` is one of "
+            f"{', '.join(TODO_STATUSES)} (a repeating todo is completed by itself, not here); "
+            "`due_date` and `bring_back_on` are YYYY-MM-DD or '' to clear; `star` is true or "
+            "false; `tags` replaces the whole list of strings; `owner_id` is an existing user id "
+            "or null to unassign. Every deal must have been found by a CRM search earlier in this chat. "
+            f"Up to {change_list.MAX_ROWS} rows. Do not repeat the rows in your reply."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "changes": {
+                    "type": "array",
+                    "maxItems": change_list.MAX_ROWS,
+                    "description": "One row per record and field",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "record_type": {"type": "string", "enum": list(change_list.FIELDS)},
+                            "id": {"type": "integer", "description": "The deal or todo id"},
+                            "field": {"type": "string", "description": "The field to set"},
+                            "value": {
+                                "type": ["string", "number", "boolean", "null", "array"],
+                                "items": {"type": "string"},
+                                "description": "The new value (tags replaces the whole list)",
+                            },
+                        },
+                        "required": ["record_type", "id", "field", "value"],
+                    },
+                },
+                "reason": {"type": "string", "description": "Why, in one sentence; shown on the card"},
+            },
+            "required": ["changes"],
         },
         "kind": "integration",
     },
@@ -1969,6 +2027,15 @@ def crm_merge_companies(survivor_id: int, absorbed_id: int, reason: str = "",
     return _with_target({"ok": True, "merged_from": absorbed_id, "plan": plan}, "company", survivor_id)
 
 
+# ── Change list (#371) ────────────────────────────────────────────────────────
+
+def crm_apply_change_list(registry=None, **_model_args) -> dict:
+    # Deliberately blind to the model's arguments: the engine staged and validated them
+    # before the card, and this applies the batch that card showed. `registry` is bound in
+    # _identity_executors; it carries the approved batch id and the deal finds.
+    return change_list.apply(registry)
+
+
 # ── Install setup status (issue #200) ─────────────────────────────────────────
 
 def crm_get_setup_status(user_id: int | None = None) -> dict:
@@ -2299,6 +2366,7 @@ TOOL_EXECUTORS = {
     "crm_update_company": crm_update_company,
     "crm_preview_company_merge": crm_preview_company_merge,
     "crm_merge_companies": crm_merge_companies,
+    "crm_apply_change_list": crm_apply_change_list,
     # Custom fields
     "crm_get_contact_fields": crm_get_contact_fields,
     "crm_set_contact_fields": crm_set_contact_fields,
@@ -2445,7 +2513,7 @@ def bind_owner_assignment(
     return _run
 
 
-def _identity_executors(user: dict | None) -> dict[str, Callable[..., dict]]:
+def _identity_executors(user: dict | None, registry=None) -> dict[str, Callable[..., dict]]:
     """``TOOL_EXECUTORS`` with the identity-bearing tools bound to ``user``.
 
     ``user`` is the ``get_current_user`` row (id/email/name/role) or None for an
@@ -2489,6 +2557,9 @@ def _identity_executors(user: dict | None) -> dict[str, Callable[..., dict]]:
         # whether this seat has a linked Telegram chat (#193) — bound rather than taken
         # as an argument so the model cannot ask about another person's device.
         "crm_get_setup_status": bind_server_args(crm_get_setup_status, user_id=user_id),
+        # The registry carries the approved batch id and the deal finds (#371). Bound, so
+        # the model cannot pass either; with no registry the tool refuses.
+        "crm_apply_change_list": bind_server_args(crm_apply_change_list, registry=registry),
     }
     bound.update({
         name: bind_owner_filter(fn, user) for name, fn in (
@@ -2502,7 +2573,9 @@ def _identity_executors(user: dict | None) -> dict[str, Callable[..., dict]]:
     return {**TOOL_EXECUTORS, **bound}
 
 
-def get_crm_tools(user: dict | None = None) -> tuple[list[dict], dict[str, Callable[..., dict]]]:
+def get_crm_tools(
+    user: dict | None = None, registry=None,
+) -> tuple[list[dict], dict[str, Callable[..., dict]]]:
     """Return (tool definitions, executor map) for the CRM.
 
     CRM tools are first-class core: always collected, with NO per-integration
@@ -2522,4 +2595,4 @@ def get_crm_tools(user: dict | None = None) -> tuple[list[dict], dict[str, Calla
     defs = CRM_TOOL_DEFS
     if crm.get_todo_mode() == "gtd":
         defs = [d for d in CRM_TOOL_DEFS if d["name"] not in _TODO_TOOL_NAMES]
-    return defs, _identity_executors(user)
+    return defs, _identity_executors(user, registry)

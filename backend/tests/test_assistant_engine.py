@@ -1744,3 +1744,87 @@ async def test_a_later_public_capture_read_gates_the_write_by_result(store, monk
     else:
         assert confirms == [] and marks == []
         assert writes == [{}]
+
+
+# ── Change list: staged before its card, applied from the card's batch (#371) ──
+
+_CHANGES = {"changes": [{"record_type": "deal", "id": 7, "field": "stage", "value": "proposal"}]}
+
+
+@pytest.mark.parametrize("tool_mode", ["normal", "power"])
+async def test_change_list_is_staged_then_confirms_in_every_mode(store, monkeypatch, tool_mode):
+    from assistant.router import _message_for_ui
+    from crm import change_list
+
+    summary = {"headline": "Change 1 field on 1 deal; 1 row will not change",
+               "lines": ["deal 9 stage: archived deal; restore it first"]}
+    seen = []
+
+    def stage(args, registry):
+        seen.append((args, registry))
+        return {"summary": summary, "change_batch_id": "chg_1"}
+
+    monkeypatch.setattr(change_list, "stage", stage)
+    reg = Registry(writes={"crm_apply_change_list"})
+    prov = FakeProvider([
+        [_complete([_tc("crm_apply_change_list", args=_CHANGES)], stop="tool_use")],
+        [{"type": "text", "text": "Please approve"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "move it"}],
+                        tool_mode=tool_mode, user={"id": 7})
+    assert seen == [(_CHANGES, reg)]
+    assert reg.calls == []  # nothing runs before the card, Auto included
+    event = next(e for e in events if e["type"] == "confirm")
+    assert (event["summary"], event["change_batch_id"]) == (summary, "chg_1")
+    row = next(m for m in store.convs["conv1"]["messages"] if m["tool_results"])
+    result = _message_for_ui(row)["tool_calls"][0]["result"]
+    assert result == {"status": history.PENDING_STATUS, "summary": summary, "change_batch_id": "chg_1"}
+
+
+async def test_a_change_list_the_stager_refuses_gets_no_card(store, monkeypatch):
+    from crm import change_list
+
+    refusal = {"error": "Nothing to change: no row can be applied.", "refused": ["deal 9 stage: x"]}
+    monkeypatch.setattr(change_list, "stage", lambda args, registry: refusal)
+    reg = Registry(writes={"crm_apply_change_list"})
+    prov = FakeProvider([
+        [_complete([_tc("crm_apply_change_list", args=_CHANGES)], stop="tool_use")],
+        [{"type": "text", "text": "Nothing could change"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "move it"}], user={"id": 7})
+    assert "confirm" not in _types(events) and reg.calls == []
+    end = next(e for e in events if e["type"] == "tool_end")
+    assert end["result"] == {"ok": False, **refusal}
+    assert json.loads(store.merges[-1]["content"]) == {"ok": False, **refusal}
+    assert _types(events)[-1] == "done"  # the model got the refusal and answered
+
+
+async def test_read_only_mode_never_stages_a_change_list(store, monkeypatch):
+    from crm import change_list
+
+    monkeypatch.setattr(change_list, "stage", lambda *a: pytest.fail("staged in read-only mode"))
+    reg = Registry(writes={"crm_apply_change_list"})
+    prov = FakeProvider([
+        [_complete([_tc("crm_apply_change_list", args=_CHANGES)], stop="tool_use")],
+        [{"type": "text", "text": "ok"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "move it"}],
+                        tool_mode="read-only", user={"id": 7})
+    assert "confirm" not in _types(events)
+
+
+@pytest.mark.parametrize("content, expected", [
+    (json.dumps({"status": history.PENDING_STATUS, "change_batch_id": "chg_1"}), "chg_1"),
+    (history.PENDING_RESULT_JSON, None),
+])
+def test_approval_hands_the_registry_the_cards_batch_and_nothing_else(monkeypatch, content, expected):
+    reg = Registry(writes={"crm_apply_change_list"})
+    reg.change_batch_id = "left over from an earlier approval"
+    monkeypatch.setattr(history, "claim_pending_tool", lambda cid, tuid, msg_id=None: {
+        "msg_id": "m1", "tool": "crm_apply_change_list",
+        "args": {**_CHANGES, "batch_id": "chg_model_named"}, "content": content})
+    monkeypatch.setattr(history, "merge_tool_result", lambda *a: None)
+    # Approving a change list must not taint the conversation: its result has no record text.
+    monkeypatch.setattr(history, "mark_untrusted_seen", lambda cid: pytest.fail("tainted"))
+    engine.resolve_confirmation(reg, "c1", "t1", "approve", user=None)
+    assert reg.change_batch_id == expected

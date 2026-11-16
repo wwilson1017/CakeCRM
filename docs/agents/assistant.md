@@ -847,3 +847,75 @@ Tests: `test_read_batch.py` (lanes, the process-wide bound across two registries
 synchronous ordered handlers and lane recovery, Stop, the audited set, background order),
 the #372 block in `test_assistant_engine.py` (overlap barrier, write-after-read, hung
 read, same-batch find) and `test_gmail_engine_taint.py`.
+
+## Change lists: one card for a bulk edit, with Undo (#371, port of cake_os #4706)
+
+`crm_apply_change_list` takes `{changes: [{record_type, id, field, value}], reason?}` for
+deals and todos (up to `change_list.MAX_ROWS` = 200). It is the one write the engine
+**stages before its card**: after the read-only, deal-guard and write-budget checks,
+`_chat_impl` calls `crm.change_list.stage(args, registry)`. An `{"error"}` answer is
+recorded as the tool result and no card is raised (malformed call, or no row can be
+applied). Otherwise the answer is the pending placeholder's binding,
+`{summary: {headline, lines}, change_batch_id}`, and the call confirms in every mode
+(`staged is not None` in the gate). Approving one does not taint the conversation:
+the sample excludes titles, notes and descriptions, including public-capture todo text. `_card_summary` copies the
+placeholder's `summary` and `change_batch_id` onto the `confirm` event, and
+`mapServerMessages` reads both back after a reload.
+
+- **The batch is the source of truth.** `assistant_change_batches` (id `chg_<hex>`,
+  `user_id`, `conversation_id` FK cascade, `status` proposed/applied/undone, `rows` JSONB)
+  holds every row with the server-read `label`, `old`, the normalized `new`, a `state` and
+  a `reason`. The card (`GET /api/assistant/change-batches/{id}`), the apply and the Undo
+  read it; the executor never reads the model's arguments. Owner-only by `user_id`
+  (404 for another seat), `NOT_EXPORTED`, and first in both `_truncate_all` branches
+  (apply locks the batch row, then deals, then todos).
+- **The model cannot name a batch.** The executor takes no arguments from the model:
+  `get_crm_tools(user, registry)` binds `registry`, and `engine.resolve_confirmation` sets
+  `registry.change_batch_id` from the claimed placeholder. A direct dispatch with no
+  approval (a future MCP call, #323) is refused with `ONLY_FROM_CARD`.
+- **Per-row rules**, asked at stage, again under the row locks at apply, and again at Undo
+  (`change_list._blocked`): no such record; archived deal; a stage row on a won or lost
+  deal; a status row to or from done on a repeating todo (it would spawn an occurrence
+  Undo cannot remove). Stage-only refusals: unknown record type, a field outside
+  `change_list.FIELDS`, a value its write path would not store (`_normalize` calls
+  `gtd_common.validate_*`, `normalize_deal_temperature`, `update_deal`'s clamp), the same
+  record and field twice, a value already held, a missing owner, and the #332 find-first rule
+  (`deal_write_guard.unfound`), which here refuses the ROW. `deal_write_guard.refusal`
+  does not see nested ids, so it never refuses the whole call for them. Malformed rows
+  become refused `row N` entries; only invalid whole lists and missing identity refuse the call.
+- **Stale rows.** Apply writes a row only when the locked record still holds the staged
+  `old`; Undo only when it still holds `new`. Others become `skipped` / `kept` with
+  "changed since the card was shown". Every taken row of a record succeeds or misses
+  together. Value rows also compare current currency against the staged currency (apply)
+  or the currency the batch left (undo). `_transition(direction="apply" | "undo")` derives
+  its states and value keys from one module-level mapping.
+- **Writes** go through `service._write_deal_update_cur` and
+  `service._apply_todo_update_cur`, one call per record, in one transaction with
+  `bulk_move_deals`' lock and statement timeouts; rescoring and the provenance badge run
+  after commit. An undone stage change adds a reverse `deal_stage_events` row. Lock timeout,
+  statement timeout and deadlock all roll back and ask the user to request a new change list.
+- **Bounds.** The placeholder (`SUMMARY_BUDGET`) and the result (`RESULT_BUDGET`) are cut
+  to stay valid JSON under `_UI_RESULT_PREVIEW_CAP`, because a reloaded conversation finds
+  the batch id in them. Summary lines start with up to five ready-row samples, values cut
+  to 40 characters, excluding title/notes/description; then refused lines. A truncated
+  no-card error says only "…and N more". The full list is served by the GET route.
+- **Frontend.** `ChangeList.tsx` renders the batch by status on the pending card, on the
+  resolved card (id taken from the RESULT, so a failed or declined card shows nothing) and
+  on the plain tool card a reload produces. Approve is disabled until the list loads;
+  failure offers Retry while Decline stays enabled. Long values are cut to 120 characters
+  with full text in a title attribute. Undo is `POST …/change-batches/{id}/undo`: a
+  person's click, not a tool, so Baker's transcript still says "applied" afterwards.
+- **Telegram** shows `summary.headline` and its lines in place of the argument dump
+  (`_send_confirm`), and points to the full list in the app; it has no Undo.
+- **Money.** A `value` row carries `currency: [before, after]`; nothing sums.
+
+Not ported or left out: contacts, companies and custom fields (no cursor-taking writers);
+contact/company/deal links (company follow-merge gate precedes record locks); completed
+(status is the one spelling); repeat/auto-star settings (completion can spawn an occurrence);
+projects (assigning by name can create one); closing or reopening deals; retries on deadlock.
+Notes/descriptions use validate_notes; tags use validate_tags as a whole-list replacement;
+nullable owner ids must name existing users, read once at stage.
+
+Tests: `test_change_list.py`, the #371 block in `test_assistant_engine.py`,
+`test_integration_change_list_pg.py` (50 rows, refusals, stale row, Undo, ownership,
+reset, the engine end to end), `ChangeList.test.tsx`.

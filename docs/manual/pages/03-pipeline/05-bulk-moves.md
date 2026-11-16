@@ -30,3 +30,5 @@ The selection only ever covers deals on screen, so what the bar counts and what 
 ## Asking Baker
 
 With an AI provider connected, you can ask Baker to move a set of deals. It has the same 200-deal limit, but it only moves deals into open stages. It refuses to win or lose deals in bulk, and closes them one at a time instead so each date and reason is captured. See [What Baker can do](../07-baker/02-what-baker-can-do.md).
+
+If you ask for more than a stage move, such as a new stage and a new close date together, Baker puts every change on one card that you approve once and can undo. See [Approvals and modes](../07-baker/03-approvals.md).

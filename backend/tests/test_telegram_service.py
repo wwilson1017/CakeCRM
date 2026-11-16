@@ -766,3 +766,21 @@ async def test_typed_yes_reports_mixed_success_and_failure(monkeypatch):
     assert _texts(h) == ["⚠️ Action failed."]
     assert h.consume_calls == [(7, "m1")]
     assert h.chat_calls == [[]]
+
+
+async def test_confirm_prompt_shows_a_server_summary_instead_of_the_arguments(monkeypatch):
+    h = Harness()
+    script = [
+        {"type": "confirm", "tool": "crm_apply_change_list", "tool_use_id": "tu1", "msg_id": "m1",
+         "args": {"changes": [{"record_type": "deal", "id": 7, "field": "stage", "value": "proposal"}]},
+         "description": "Change several deals", "change_batch_id": "chg_1",
+         "summary": {"headline": "Change 1 field on 1 deal; 1 row will not change",
+                     "lines": ["deal 7 stage: lead → proposal", "deal 9 stage: archived deal; restore it first"]}},
+        {"type": "done"},
+    ]
+    _install(monkeypatch, h, chat_scripts=[script])
+    await service.handle_update(_msg("move the deal"))
+    body = next(s for s in h.sent if s[0] == "text" and s[3])[2]
+    assert "Change 1 field on 1 deal; 1 row will not change\ndeal 7 stage: lead → proposal\ndeal 9 stage: archived deal" in body
+    assert "The full list is on the card in the app." in body
+    assert "record_type" not in body
