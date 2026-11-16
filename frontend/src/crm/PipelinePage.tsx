@@ -1509,28 +1509,42 @@ export function PipelinePage() {
   // ternary unmount it identically. And nothing can be selected before the board lands anyway —
   // `deepLinkVerdict` answers `idle` until a payload has been applied, precisely so a network
   // blip is never read as "that deal is gone".
-  const addDealButton = (inHeader: boolean) => (
+  // #373: the header's Add Deal, plus a desktop-only arrow that folds the header away. While
+  // folded, Add Deal rides the search bar as an icon-sized square beside the arrow: the bar is
+  // already full at desktop widths, and a full-width button there squeezed the search box to
+  // nothing and wrapped the arrow onto a second line.
+  const addDealButton = (
     <button onClick={() => setShowCreate(true)} style={{
       ...btnPrimary, padding: '7px 14px', fontSize: 13,
-      flexShrink: 0, ...(inHeader ? { marginTop: 8 } : {}),
+      flexShrink: 0, marginTop: 8,
     }}>
       <IconPlus size={13} strokeWidth={2.25} /> {isMobile ? 'Add' : 'Add Deal'}
     </button>
   );
+  const toolbarSquare = {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: 34, height: 34, padding: 0, flexShrink: 0, borderRadius: 6, cursor: 'pointer',
+  } as const;
   const toolbarExtras = isMobile ? undefined : (
     <>
-      {headerCollapsed && addDealButton(false)}
+      {headerCollapsed && (
+        <button
+          type="button"
+          aria-label="Add Deal"
+          title="Add Deal"
+          onClick={() => setShowCreate(true)}
+          style={{ ...btnPrimary, ...toolbarSquare }}
+        >
+          <IconPlus size={15} strokeWidth={2.25} aria-hidden="true" />
+        </button>
+      )}
       <button
         type="button"
         aria-expanded={!headerCollapsed}
         aria-label={headerCollapsed ? 'Show header' : 'Hide header'}
         title={headerCollapsed ? 'Show header' : 'Hide header to fit more cards'}
         onClick={toggleHeader}
-        style={{
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          width: 34, height: 34, flexShrink: 0, border: `1px solid ${LINE_STRONG}`,
-          borderRadius: 6, background: 'transparent', color: INK_MUTE, cursor: 'pointer',
-        }}
+        style={{ ...toolbarSquare, border: `1px solid ${LINE_STRONG}`, background: 'transparent', color: INK_MUTE }}
       >
         <IconChevron aria-hidden="true" style={{ transform: headerCollapsed ? undefined : 'rotate(180deg)' }} />
       </button>
@@ -1573,7 +1587,7 @@ export function PipelinePage() {
             )}
           </p>
         </div>
-        {addDealButton(true)}
+        {addDealButton}
       </div>}
 
       <WarmStatus savedAt={warmBoard?.savedAt ?? null} failed={warmBoard?.failed ?? false} onRetry={() => void load(true)} />

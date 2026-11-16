@@ -27,7 +27,8 @@ let root: Root;
 const heading = () => container.querySelector('h1');
 const arrow = () => container.querySelector<HTMLButtonElement>('button[aria-label="Hide header"], button[aria-label="Show header"]');
 function button(text: string): HTMLButtonElement {
-  const found = Array.from(document.querySelectorAll('button')).find(b => b.textContent?.trim() === text);
+  const found = Array.from(document.querySelectorAll('button'))
+    .find(b => b.textContent?.trim() === text || b.getAttribute('aria-label') === text);
   if (!found) throw new Error(`Missing button: ${text}`);
   return found;
 }

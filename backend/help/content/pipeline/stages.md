@@ -48,7 +48,7 @@ so a closed deal never vanishes without explanation.
 
 ## Hiding the page header
 
-On desktop, the arrow at the right of the search row folds away the title and totals line to show more cards, with **Add Deal** moving into the search row; click the arrow again to restore the header and its recovery links, even on an empty board.
+On desktop, the arrow at the right of the search row folds away the title and totals line to show more cards, with a **+** button beside the arrow standing in for **Add Deal**; click the arrow again to restore the header and its recovery links, even on an empty board.
 This browser remembers the choice for you; phones keep the header visible.
 
 ## Moving a deal

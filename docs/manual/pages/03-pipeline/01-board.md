@@ -10,7 +10,7 @@ shots: [pipeline-board]
 
 ## Hiding the header
 
-On desktop, the arrow at the right of the search row folds away the title, totals line and top **Add Deal** button so the board shows more cards. **Add Deal** moves into the search row while folded. Click the arrow again to bring the header back, including **Show all** for hidden stages. The arrow stays available even on an empty board. This browser remembers the choice for you; phones keep the header as before.
+On desktop, the arrow at the right of the search row folds away the title, totals line and top **Add Deal** button so the board shows more cards. While folded, a **+** button beside the arrow adds a deal. Click the arrow again to bring the header back, including **Show all** for hidden stages. The arrow stays available even on an empty board. This browser remembers the choice for you; phones keep the header as before.
 
 ## The columns
 
