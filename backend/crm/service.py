@@ -4067,6 +4067,8 @@ def dismiss_ai_prompt() -> dict:
 
 def _truncate_all(cur, include_definitions: bool = False) -> None:
     # Pending lead-import previews hold lead names/emails, so CRM resets clear them (#370).
+    # Listed FIRST: TRUNCATE locks in list order, and an import holds its preview row
+    # before writing companies/contacts/deals, so the same order cannot deadlock.
     # todo_web_sessions / todo_web_signin_tokens (#293) are deliberately in NEITHER
     # branch: they are auth state, like saved_views, and a CRM reset must not sign the
     # todo app's devices out.
@@ -4134,18 +4136,18 @@ def _truncate_all(cur, include_definitions: bool = False) -> None:
     # writer touches only its own table, so taking its lock last cannot invert.
     if include_definitions:
         cur.execute(
-            "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
+            "TRUNCATE assistant_lead_import_previews, companies, contacts, deals, activity_log, todos, todo_projects, "
             "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_definitions, "
             "crm_field_values, "
             "crm_field_provenance, deal_stage_events, proactive_nudges, "
-            "deal_ai_touch_evidence, crm_stage_criteria, reminders, assistant_deal_finds, assistant_lead_import_previews RESTART IDENTITY"
+            "deal_ai_touch_evidence, crm_stage_criteria, reminders, assistant_deal_finds RESTART IDENTITY"
         )
     else:
         cur.execute(
-            "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
+            "TRUNCATE assistant_lead_import_previews, companies, contacts, deals, activity_log, todos, todo_projects, "
             "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_values, "
             "crm_field_provenance, deal_stage_events, proactive_nudges, deal_ai_touch_evidence, "
-            "crm_stage_criteria, reminders, assistant_deal_finds, assistant_lead_import_previews RESTART IDENTITY"
+            "crm_stage_criteria, reminders, assistant_deal_finds RESTART IDENTITY"
         )
 
 

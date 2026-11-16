@@ -377,10 +377,10 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
     # referenced table without its child in the same statement — dropping it here makes
     # every CRM reset raise.
     assert any(
-        "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
+        "TRUNCATE assistant_lead_import_previews, companies, contacts, deals, activity_log, todos, todo_projects, "
         "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_values, "
         "crm_field_provenance, deal_stage_events, proactive_nudges, deal_ai_touch_evidence, "
-        "crm_stage_criteria, reminders, assistant_deal_finds, assistant_lead_import_previews RESTART IDENTITY"
+        "crm_stage_criteria, reminders, assistant_deal_finds RESTART IDENTITY"
         in s for s in stmts
     )
     assert not any("crm_field_definitions" in s for s in stmts)
@@ -415,10 +415,10 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     # consistent with both set_field_values entity→defs and delete_field_definition
     # defs→values); crm_field_provenance trails both.
     assert any(
-        "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
+        "TRUNCATE assistant_lead_import_previews, companies, contacts, deals, activity_log, todos, todo_projects, "
         "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_definitions, "
         "crm_field_values, crm_field_provenance, deal_stage_events, proactive_nudges, "
-        "deal_ai_touch_evidence, crm_stage_criteria, reminders, assistant_deal_finds, assistant_lead_import_previews RESTART IDENTITY"
+        "deal_ai_touch_evidence, crm_stage_criteria, reminders, assistant_deal_finds RESTART IDENTITY"
         in s for s in stmts
     )
     assert any("sample_data_loaded = FALSE" in s for s in stmts)
