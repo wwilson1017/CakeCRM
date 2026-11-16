@@ -51,6 +51,8 @@ def get_notification_tools(registry) -> tuple[list[dict], dict[str, Callable[...
         refs = getattr(registry, "deal_refs", None)
         title, message = link_deal_refs(title, refs), link_deal_refs(message, refs)
         result = delivery.deliver_notification(title, message)
+        # Heartbeat distinguishes "the user was told" from "a send was attempted".
+        registry._notify_user_delivered = bool(result.get("logged") or result.get("channels_sent"))
         channels = result.get("channels_sent", [])
         return {
             "ok": True,

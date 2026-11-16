@@ -12,6 +12,9 @@ features append cleanly):
   * always: ``crm.tools.get_crm_tools()`` + ``crm.gtd_tools.get_gtd_tools()``
   * always: ``reminders.tools.get_reminder_tools(user=…)`` (issue #283) — six tools,
     keyless, no enable gate; owner bound server-side; none routine (they notify).
+  * always: ``heartbeat.tools.get_heartbeat_tools(user=…)`` (#360) — two keyless
+    tools, no enable gate. The write is never routine and its executor refuses a
+    non-admin seat; the read is secret-free install configuration, background-callable.
   * background only (``ToolRegistry(background=True)``): ``notify_user`` — Chatty
     gates it behind background mode; interactive chat never needs it.
   * always: ``memory.tools.get_memory_tools()`` (issue #5 — long-term facts).
@@ -82,6 +85,7 @@ from crm.gtd_tools import get_gtd_tools
 from crm.links import remember_deal_refs
 from crm.tools import get_crm_tools
 from gmail.tools import get_gmail_tools
+from heartbeat.tools import get_heartbeat_tools
 from help.tools import get_help_tools
 from memory.tools import get_memory_tools
 from reminders.tools import get_reminder_tools
@@ -121,6 +125,7 @@ class ToolRegistry:
             crm_source,
             gtd_source,
             get_reminder_tools(user=user),
+            get_heartbeat_tools(user=user),
             get_memory_tools(),
             get_context_file_tools(user=user),
             get_gmail_tools(user=user),

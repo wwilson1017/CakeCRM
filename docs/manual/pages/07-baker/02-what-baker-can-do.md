@@ -6,7 +6,7 @@ shots: []
 
 ## The short version
 
-Baker can read and change CRM records, work your todos, keep its own memory and knowledge files, search and read connected Gmail, and put drafts in your Gmail Drafts folder. It cannot send email, cannot change install settings, and cannot act outside CakeCRM.
+Baker can read and change CRM records, work your todos, keep its own memory and knowledge files, search and read connected Gmail, and put drafts in your Gmail Drafts folder. It cannot send email, cannot change install settings except its own background check-in schedule, and cannot act outside CakeCRM.
 
 ## CRM records and todos
 
@@ -24,7 +24,9 @@ By default only admins can have Baker use the connected mailbox.
 
 ## Settings
 
-Baker has no settings tools at all. It cannot add an AI key, connect Gmail, switch todo mode, define a custom field, add a user or change branding. It can explain how to do these things and point you to the right screen; you do the clicking.
+Baker has one settings write tool, for its own background check-in: on/off, how often it runs, quiet hours, the minimum notification gap, and a pause that ends automatically. Only admins can use it. It is never routine: Ask shows an Approve card, Telegram asks for typed approval, and Auto applies it. No key or secret passes through it. See [Notifications](../01-getting-started/06-notifications.md).
+
+It cannot add an AI key, connect Gmail, switch todo mode, define a custom field, add a user or change branding. For everything else, Baker explains and points; you click.
 
 ## Files you upload
 
@@ -53,11 +55,12 @@ one is data, and every proposed change asks for approval for the rest of that co
 
 ## When nobody is watching
 
-Baker also runs on a schedule, with nobody in the chat, for the daily digest and nudges about deals and leads that have gone quiet. Those unattended turns are much more limited, and the server enforces it:
+Baker also runs on a schedule, with nobody in the chat, for the background check-in and the daily digest. Those unattended turns are much more limited, and the server enforces it:
 
 - Baker gets read tools and a single notification, nothing else. It cannot create, update, log or delete anything.
 - It cannot search or open your Gmail, even though those are reads.
 - It sends at most one notification per run.
+- It can read the background check-in settings but cannot change them unattended.
 
 So the worst a hostile instruction hidden in a note could achieve unattended is one notification.
 

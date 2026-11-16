@@ -82,13 +82,14 @@ def _registered_tool_names() -> set[str]:
     from crm.gtd_tools import GTD_TOOL_DEFS, GTD_TOOL_EXECUTORS
     from crm.tools import CRM_TOOL_DEFS, TOOL_EXECUTORS
     from gmail.tools import GMAIL_TOOL_DEFS
+    from heartbeat.tools import HEARTBEAT_TOOL_DEFS
     from memory.tools import get_memory_tools
     from notifications.tools import get_notification_tools
     from reminders.tools import REMINDER_TOOL_DEFS
 
     names: set[str] = set()
     for defs in (CRM_TOOL_DEFS, GTD_TOOL_DEFS, GMAIL_TOOL_DEFS, CONTEXT_FILE_TOOL_DEFS,
-                 HELP_TOOL_DEFS, REMINDER_TOOL_DEFS, get_memory_tools()[0],
+                 HELP_TOOL_DEFS, HEARTBEAT_TOOL_DEFS, REMINDER_TOOL_DEFS, get_memory_tools()[0],
                  get_notification_tools(ToolRegistry())[0]):
         names |= {d["name"] for d in defs}
     names |= set(TOOL_EXECUTORS) | set(GTD_TOOL_EXECUTORS) | set(CONTEXT_FILE_TOOL_EXECUTORS)
@@ -556,6 +557,7 @@ def test_the_marker_detector_bites():
 # settingsSections.ts declares; parsing that file is what makes a real gating change fail
 # here, where two hand-written lists in this repo would just agree with each other.
 _TOPIC_TO_CARD = {
+    "settings/install-on-phone": "install_app",
     "settings/gmail": "gmail",
     "settings/telegram": "telegram",
     # #193 split Telegram in two: the bot is install configuration (admin), a linked chat

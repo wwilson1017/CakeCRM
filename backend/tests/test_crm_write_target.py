@@ -31,12 +31,14 @@ from assistant import identity
 from context_files.tools import CONTEXT_FILE_TOOL_DEFS
 from crm import gtd_service, gtd_tools, provenance_service, service as crm, tools
 from gmail.tools import GMAIL_TOOL_DEFS
+from heartbeat.tools import HEARTBEAT_TOOL_DEFS
 from memory.tools import MEMORY_TOOL_DEFS
 from notifications.tools import NOTIFY_USER_DEF
 from reminders import tools as reminder_tools
 
 #: Write tools that deliberately carry no `target`, each with the reason.
 WAIVED = {
+    "heartbeat_update_settings": "install-wide settings singleton; names no record",
     "crm_recompute_lead_scores": "recomputes a derived score across a scope; names no record",
     "memory_add_fact": "the assistant's own memory, not a CRM record; the result is the fact",
     "memory_invalidate_fact": "the assistant's own memory, not a CRM record",
@@ -60,6 +62,7 @@ def _scanned_writes() -> set[str]:
         _write_names(tools.CRM_TOOL_DEFS) | _write_names(gtd_tools.GTD_TOOL_DEFS)
         | _write_names(reminder_tools.REMINDER_TOOL_DEFS) | _write_names(MEMORY_TOOL_DEFS) | _write_names(CONTEXT_FILE_TOOL_DEFS)
         | _write_names(GMAIL_TOOL_DEFS) | _write_names([NOTIFY_USER_DEF])
+        | _write_names(HEARTBEAT_TOOL_DEFS)
     )
 
 
