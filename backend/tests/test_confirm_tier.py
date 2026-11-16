@@ -474,3 +474,11 @@ def test_reminder_tools_are_never_routine(todo_mode):
         assert reg.is_write(name) is True, name
         assert reg.is_routine_write(name) is False, name
     assert reg.is_write("reminder_list") is False
+
+
+def test_the_heartbeat_settings_write_is_never_routine(todo_mode):
+    todo_mode("normal")
+    reg = ToolRegistry()
+    assert reg.is_write("heartbeat_update_settings")
+    assert not reg.is_routine_write("heartbeat_update_settings")
+    assert reg.is_write("heartbeat_get_settings") is False

@@ -1197,10 +1197,9 @@ CRM_TOOL_DEFS = [
         },
         "kind": "integration",
     },
-    # Install setup status (issue #200). A READ — there are no settings WRITE tools and
-    # there must not be: an API key or an OAuth secret must never flow through chat
-    # history, and a wrong settings write is install-wide where a wrong record write is
-    # one record. Keyless, like every other CRM tool.
+    # Install setup status (issue #200). A READ; no settings write tool takes a key
+    # or a secret. Those must never flow through chat history. The only settings
+    # write is the background check-in schedule (#360).
     {
         "name": "crm_get_setup_status",
         "writes": False,

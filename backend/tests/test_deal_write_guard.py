@@ -35,7 +35,7 @@ def make_registry(monkeypatch, guard_db):
     names = {"crm_get_deal": False, "crm_update_deal": True, "crm_archive_deal": True,
              "crm_create_deal": True, "help_read": False}
     defs = [{"name": name, "writes": write, "description": "test"} for name, write in names.items()]
-    for source in ('get_gtd_tools', 'get_reminder_tools', 'get_memory_tools',
+    for source in ('get_gtd_tools', 'get_reminder_tools', 'get_heartbeat_tools', 'get_memory_tools',
                    'get_context_file_tools', 'get_gmail_tools', 'get_help_tools'):
         monkeypatch.setattr(registry_module, source, lambda **kw: ([], {}))
 

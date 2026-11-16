@@ -205,6 +205,8 @@ notifications, memory facts, and any write to `soul.md` or `MEMORY.md` all
 keep their Approve card. Bulk todo updates and project deletes are in that group too. A todo is never deleted: the
 assistant has no todo delete tool, and dropping one keeps its card.
 Setting, changing and voiding a reminder keep their card too: a reminder notifies people later.
+Changing the background check-in's schedule is not routine either: it gets a card in Ask
+mode and on Telegram like every other non-routine write, and only an admin's seat can run it.
 Five of the twenty can take a record out of your lists by setting its `status` —
 archiving a contact or a company, or dropping a todo or a project; that
 particular call keeps its card even though the tool is routine. Giving a todo a

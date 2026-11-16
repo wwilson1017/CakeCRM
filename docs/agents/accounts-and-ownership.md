@@ -102,9 +102,11 @@
   `/chat`, `/confirm` and `/conversations*`, none of which appear in
   `test_route_authz.ADMIN_ONLY`.
   The registry is **card-granular**, and one card straddles that line: Notifications'
-  Web Push half configures this browser (everyone's), while its "Daily digest and
-  nudges" half writes install state through the `require_admin`
-  `POST /api/heartbeat/proactive` — so that block carries its own `isAdmin` gate
+  Web Push part configures this browser (everyone's), while two admin-gated blocks
+  write install state: "Daily digest and nudges" through `require_admin`
+  `POST /api/heartbeat/proactive`, and "Baker's background check-in" (#360) through
+  `PUT /api/heartbeat/settings`. The latter also requires an AI provider to be shown.
+  Both carry their own `isAdmin` gate
   *inside* a member-visible card (pinned in `SettingsPage.test.tsx`). Any future card
   mixing personal and install controls needs the same second gate: the registry cannot
   express it, and "don't offer what can only 403" is a rule about controls, not cards.
