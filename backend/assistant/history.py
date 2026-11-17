@@ -337,11 +337,12 @@ def save_message(
     context_tokens: int | None = None,
     context_boundary_seq: int | None = None,
     images: list[dict] | None = None,
+    files: list[dict] | None = None,
 ) -> None:
     """Insert one message, allocating ``seq`` atomically under the conversation lock.
 
-    Images are inserted under the same conversation lock and transaction, so a
-    user row never exists without its photos or vice versa.
+    Images and stored files share the conversation lock and transaction, so a
+    user row never exists without its attachments or vice versa.
     Raises if the conversation does not exist (fail-loud — never silently create).
 
     ``context_tokens`` is the cache-inclusive input count the model read for THIS
@@ -417,6 +418,12 @@ def save_message(
                 "VALUES (%s, %s, %s, %s, %s, %s)",
                 (msg_id, ordinal, img["filename"], img["mime"], len(img["data"]), img["data"]),
             )
+        for f in files or []:
+            cur.execute(
+                "INSERT INTO assistant_message_files (id, message_id, filename, data) "
+                "VALUES (%s, %s, %s, %s)",
+                (f["id"], msg_id, f["filename"], f["data"]),
+            )
         cur.execute(
             "UPDATE assistant_conversations "
             "SET updated_at = now(), "
@@ -439,6 +446,20 @@ def get_message_images(msg_id: str) -> list[dict]:
     for row in rows:
         row["data"] = bytes(row["data"])
     return rows
+
+
+def get_message_file(file_id: str, *, user_id: int) -> dict | None:
+    """A stored CSV/XLSX upload from one of this seat's own conversations (#191)."""
+    row = pg_fetchone(
+        "SELECT f.filename, f.data FROM assistant_message_files f "
+        "JOIN assistant_messages m ON m.id = f.message_id "
+        "JOIN assistant_conversations c ON c.id = m.conversation_id "
+        "WHERE f.id = %s AND c.user_id = %s",
+        (file_id, user_id),
+    )
+    if row:
+        row["data"] = bytes(row["data"])
+    return row
 
 
 def merge_tool_result(msg_id: str, tool_use_id: str, tool_name: str, content: str) -> None:

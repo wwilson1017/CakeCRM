@@ -1337,6 +1337,49 @@ values (including blanks) are sent so retries can clear a previously saved value
 fields and replacement contacts cause no contact write. Inline details join the close guard,
 and starting a fresh edit resets them. A failed deal write can leave the details saved.
 
+
+- **Lead import (#370, port of cake_os #3717 @ 211fe70dd).**
+  `crm_preview_lead_import` parses an attachment by id or pasted CSV/TSV; the uploaded
+  CSV/XLSX bytes live in owner-only assistant history in Postgres, with conversation
+  retention. `crm_execute_lead_import` creates companies, contacts and one deal per usable
+  row behind one approval card with a server-built count and sample. It is never routine;
+  the preview is an untrusted source that taints even pasted-text Auto turns, so later
+  writes confirm. Both executors bind the requesting seat and refuse without one; the
+  preview is also excluded from the background allowlist.
+
+  Previews are seat-bound Postgres rows, usable for 60 minutes, swept by the next preview
+  and consumed inside execute's transaction. They contain lead data, so both CRM reset
+  branches clear them; stored conversation files survive resets like photos. Neither
+  table is exported. No durable state is written to local disk.
+
+  Parsing reuses `smart_import.COLUMN_ALIASES`, with Baker's explicit header mapping on
+  top, and reads the first XLSX sheet with a warning for the rest. There is no nested AI
+  call: Baker already maps headers, while smart import's async fallback emits contacts-only
+  JSON and is output-capped. Duplicate normalized headers and duplicate non-notes targets
+  refuse; explicit skips are reported apart from unmapped columns. Up to 500 rows and
+  a 2000-character chatter note bound the transaction and scoring work.
+
+  Execute first claims the live, owned batch with `SELECT payload … FOR UPDATE`, then
+  resolves companies and existing contacts on that same cursor. The resolver's optional
+  `cur` keeps its original two statements and normalizer, with its existing autocommit
+  behavior unchanged for other callers. All companies, contacts, deals, notes and the
+  preview DELETE commit or roll back together; concurrent executes consume a batch once.
+  Dedup is recomputed at execute; the payload has no CRM ids. Companies match normalized
+  names; live contacts match email, and repeated emails within a batch share one contact.
+  A concurrent different batch can still create a duplicate email (emails are not unique).
+  Person rows without email always create a contact; deals are never deduplicated.
+
+  `_CONTACT_INSERT_SQL` / `_DEAL_INSERT_SQL` are shared with single-record creation,
+  including company merge resolution. Deals default to Lead, 0 USD and probability 0;
+  contacts and deals belong to the importer, auto-created companies remain unassigned.
+  Row notes go on the deal. `insert_note_cur` writes the optional owner-authored chatter
+  note per deal without per-row AI touch-count work. One post-commit `score_on_event`
+  rescores every new deal and every new or linked contact.
+
+  Not ported: undo/import-batch columns, custom-field creation or targets, existing-contact
+  updates/diffs, vCard, company domain/industry/phone mapping or domain matching,
+  provenance badges, deal-find guard credit, a Settings/Import page, Telegram card summaries,
+  file TTLs or a timed preview sweep. The Baker flow is the entry point.
 - **Collapsible Pipeline header (#373):** desktop-only, page-local (no shared hook), with
   localStorage key `cakecrm_pipeline_header_collapsed:<viewer>`. The toolbar arrow hides the
   title/totals and relocates Add Deal; an empty-board row keeps the arrow reachable so the

@@ -964,7 +964,30 @@ automatically retries a save.</p><nav class="pn"><a href="#/pipeline/adding-a-de
 <li>A row that fails is listed as an error, and the rest still import.</li>
 </ul>
 <h2>Duplicates are not checked</h2>
-<p>Import does not look for people already in the CRM. Every row becomes a new contact, even if someone with that email exists. Tidy your file first. See <a href="#/contacts-and-companies/duplicates">Duplicates</a>.</p><nav class="pn"><a href="#/contacts-and-companies/notes-mentions-attachments"><small>Previous</small>Notes, mentions and attachments</a><a class="next" href="#/contacts-and-companies/duplicates"><small>Next</small>Duplicates</a></nav></article>
+<p>Import does not look for people already in the CRM. Every row becomes a new contact, even if someone with that email exists. Tidy your file first. See <a href="#/contacts-and-companies/duplicates">Duplicates</a>.</p>
+<h2>Importing leads with Baker</h2>
+<p>For a lead list that should become companies, contacts <strong>and deals</strong>, use Baker instead of
+the Contacts page import. An AI provider must be set up for Baker.</p>
+<ol>
+<li>Use <strong>Attach a file</strong> in Baker to attach a CSV or XLSX, and ask to import the leads. You can also paste CSV or tab-separated rows with a header line.</li>
+<li>Read the preview: how many deals, new and existing contacts and companies, plus a sample. Ask Baker to map any useful columns it missed and preview again.</li>
+<li>Press <strong>Approve</strong> on the one card. Its count and sample come from the saved preview and survive a page reload. Baker always asks for your approval before a lead import writes anything, Auto mode included.</li>
+</ol>
+<p>You get:</p>
+<ul>
+<li>Companies matched by name or created, with new companies left unassigned.</li>
+<li>Contacts matched by email to a contact that is not archived, or created and owned by you. Existing contacts are not changed. A company-only row makes no contact.</li>
+<li>One new <strong>Lead</strong> deal per usable row, owned by you, titled “Company - New Lead” (or the person's name) unless a title column is mapped. Value starts at 0 USD unless a value column is mapped. Columns mapped to notes go in the deal's notes field.</li>
+<li>If you supply a note, one chatter note on every new deal, written as you. It can be up to 2000 characters and counts as contact, giving the deal a last-contact date.</li>
+</ul>
+<p>The limit is <strong>500 rows per import</strong>; an XLSX uses its first sheet. A preview lasts <strong>60 minutes</strong>
+and imports once. Companies, contacts, deals and notes are saved together, all or nothing.
+An expired or already-imported preview says so; ask Baker for a new preview.</p>
+<p><strong>Deals are never checked for duplicates.</strong> Importing the same list twice doubles the deals.
+A person row without an email always creates a new contact. Custom-field columns and import
+undo are not supported; you can archive imported deals normally.</p>
+<p>CSV and XLSX bytes stay with the conversation and are deleted with it. See
+<a href="#/baker/what-baker-can-do">What Baker can do</a>.</p><nav class="pn"><a href="#/contacts-and-companies/notes-mentions-attachments"><small>Previous</small>Notes, mentions and attachments</a><a class="next" href="#/contacts-and-companies/duplicates"><small>Next</small>Duplicates</a></nav></article>
 <article data-route="contacts-and-companies/duplicates" data-title="Duplicates" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/contacts-and-companies/contacts-list">Contacts &amp; companies</a></p><h1>Duplicates</h1><p class="lead">How to find duplicate records, and why contacts cannot be merged.</p><p>Duplicate records are the commonest way a CRM goes stale. CakeCRM helps you avoid them, but it cannot merge contacts, so prevention matters most.</p>
 <h2>Preventing duplicates</h2>
 <ul>
@@ -1611,7 +1634,7 @@ any reply or completed step still shows an error without adding an assistant mes
 <li>up to 5 files per message, 10 MB each;</li>
 <li>CSV, XLSX, MD, TXT, PDF or DOCX.</li>
 </ul>
-<p>Only the text is extracted; the file itself is not stored. Uploaded text is treated as untrusted, so for the rest of that conversation every change Baker proposes asks for your approval. Baker cannot attach a file to a record; you add attachments yourself.</p>
+<p>The text is extracted for Baker to read. A CSV or XLSX file is also kept with the conversation, so Baker can import it as a lead list (see <a href="#/contacts-and-companies/importing">Importing</a>); deleting the conversation deletes it. Other file types are not stored. Uploaded text is treated as untrusted, so for the rest of that conversation every change Baker proposes asks for your approval. Baker cannot attach a file to a record; you add attachments yourself.</p>
 <h2>Photos</h2>
 <p>When the active model can see images, <strong>Attach a file</strong> also accepts JPEG, PNG and WebP,
 and <strong>Take photo</strong> opens the rear camera on a phone. Photos share the 5-file limit and
@@ -1673,10 +1696,11 @@ Baker runs the lookups of one step side by side. If a lookup has not answered wi
 </ul>
 <p>A few of those calls still ask, because of what they would do: archiving a contact or company, dropping a todo or project, or setting a bring-back date that hides a todo. Marking a todo done, completing a project, or filing either to someday runs without asking.</p>
 <h2>What always asks in Ask mode</h2>
-<p>Deleting, archiving, merging, bulk moves and bulk todo updates, recomputing lead scores, creating a Gmail draft, sending a notification, recording a memory fact, and any change to Baker's protected files. Anything new that has not been classified asks too.</p>
+<p>Deleting, archiving, merging, bulk moves, lead imports and bulk todo updates, recomputing lead scores, creating a Gmail draft, sending a notification, recording a memory fact, and any change to Baker's protected files. Anything new that has not been classified asks too.</p>
 <h2>What asks even in Auto</h2>
 <ul>
 <li><strong>Writing Baker's protected files</strong>, soul.md and MEMORY.md. These always ask, in every mode, and only an admin can change them. See <a href="#/baker/memory">Memory</a>.</li>
+<li><strong>Importing a lead list.</strong> A lead import always shows one Approve card with the count and a sample, in every mode and from any conversation. See <a href="#/contacts-and-companies/importing">Importing</a>.</li>
 <li><strong>A conversation that has read outside content.</strong> Once Baker has read an email, an uploaded file, a photo, or a todo that came in through the public quick-capture link while no token was set, every change it proposes asks for approval for the rest of that conversation, even after that message has scrolled out of view. Text someone else wrote can never quietly steer Baker into changing your data. The Telegram chat is one long conversation, so once it has read such outside content it asks before every change from then on. Within one step, Baker finishes its lookups before running changes, so a change proposed alongside an email read asks for approval too.</li>
 </ul>
 <h2>Approving a change</h2>

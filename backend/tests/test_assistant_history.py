@@ -505,3 +505,28 @@ def test_get_message_images_in_order_as_bytes(rec):
     assert rows[0]["data"] == b"photo" and isinstance(rows[0]["data"], bytes)
     assert "ORDER BY ordinal, id" in rec.sql_with("assistant_message_images")
     assert rec.params_with("assistant_message_images") == ["m1"]
+
+
+def test_save_message_files_share_transaction(fake_conn, monkeypatch):
+    conn = fake_conn(monkeypatch, history, fetchone_results=[("c1",), (0,)])
+    files = [{"id": "f1", "filename": "leads.csv", "data": b"Name\nAna"}]
+    history.save_message("c1", "m1", "user", "leads", files=files)
+    inserts = [p for s, p in conn.executed if "INSERT INTO assistant_message_files" in s]
+    assert inserts == [("f1", "m1", "leads.csv", b"Name\nAna")]
+    assert "FOR UPDATE" in conn.executed[0][0]
+    assert sum("INSERT INTO assistant_messages " in s for s, _ in conn.executed) == 1
+
+
+def test_get_message_file_scoped_to_conversation_owner(monkeypatch):
+    from unittest.mock import Mock
+
+    fetch = Mock(return_value={"filename": "leads.csv", "data": memoryview(b"Name\nAna")})
+    monkeypatch.setattr(history, "pg_fetchone", fetch)
+    result = history.get_message_file("f1", user_id=7)
+    assert result == {"filename": "leads.csv", "data": b"Name\nAna"}
+    assert isinstance(result["data"], bytes)
+    sql, params = fetch.call_args.args
+    assert "JOIN assistant_conversations" in sql and "c.user_id = %s" in sql
+    assert params == ("f1", 7)
+    fetch.return_value = None
+    assert history.get_message_file("f1", user_id=8) is None

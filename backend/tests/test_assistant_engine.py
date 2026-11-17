@@ -88,10 +88,10 @@ class Store:
         return (text or "")[:60]
 
     def save_message(self, cid, mid, role, content, tool_calls=None, model="",
-                     context_tokens=None, context_boundary_seq=None, images=None):
+                     context_tokens=None, context_boundary_seq=None, images=None, files=None):
         self.context_tokens.append(context_tokens)
         self.boundary_stamps.append(context_boundary_seq)
-        self.saved.append({"images": images, "cid": cid, "mid": mid, "role": role, "content": content, "tool_calls": tool_calls})
+        self.saved.append({"files": files, "images": images, "cid": cid, "mid": mid, "role": role, "content": content, "tool_calls": tool_calls})
         self.convs.setdefault(cid, {"id": cid, "messages": []})["messages"].append(
             {"id": mid, "role": role, "content": content, "tool_calls": tool_calls, "tool_results": None})
 
@@ -443,7 +443,7 @@ async def test_tool_iteration_persist_failure_fails_closed(store, monkeypatch):
     reg = Registry(writes={"crm_create_contact"})
     prov = FakeProvider([[_complete([_tc("crm_create_contact")], stop="tool_use")]])
 
-    def _save(cid, mid, role, content, tool_calls=None, model="", images=None):
+    def _save(cid, mid, role, content, tool_calls=None, model="", images=None, files=None):
         if tool_calls is not None:
             raise RuntimeError("db down")
         store.save_message(cid, mid, role, content, tool_calls, model, images=images)
@@ -1582,6 +1582,88 @@ async def test_uploaded_images_reach_history_and_taint(store, monkeypatch, with_
     assert "done" in _types(events)
     assert store.saved[0]["images"] == images
     assert marks == ([store.saved[0]["cid"]] if with_photo else [])
+
+
+async def test_uploaded_files_reach_history(store):
+    files = [{"id": "f1", "filename": "leads.csv", "data": b"Name\nAna"}]
+    provider = FakeProvider([[{"type": "text", "text": "Hello"}, _complete()]])
+    events = await _run(provider, Registry(), [{"role": "user", "content": "import"}], files=files)
+    assert events[-1]["type"] == "done"
+    assert store.saved[0]["files"] == files
+
+
+@pytest.mark.parametrize("bound", [True, False])
+async def test_lead_import_summary_persists_and_reloads(store, monkeypatch, bound):
+    from assistant.router import _message_for_ui
+    from crm import lead_import
+
+    summary = lead_import._summary(
+        [{"name": "漢" * 120, "company": ""}] * 3 + [{"name": "😀" * 120, "company": ""}],
+        {"contacts_new": 4, "contacts_existing": 0, "companies_new": 0, "companies_existing": 0},
+    )
+    seen = []
+
+    def binding(args, user_id):
+        seen.append((args, user_id))
+        return {"summary": summary} if bound else None
+
+    monkeypatch.setattr(lead_import, "pending_binding", binding)
+    args = {"batch_id": "b"}
+    reg = Registry(writes={"crm_execute_lead_import"})
+    prov = FakeProvider([
+        [_complete([_tc("crm_execute_lead_import", args=args)], stop="tool_use")],
+        [{"type": "text", "text": "Please approve"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "import"}], user={"id": 7})
+    event = next(e for e in events if e["type"] == "confirm")
+    assert seen == [(args, 7)]
+    assert reg.calls == []
+    placeholder = store.merges[-1]["content"]
+    row = next(m for m in store.convs["conv1"]["messages"] if m["tool_results"])
+    result = _message_for_ui(row)["tool_calls"][0]["result"]
+    assert result["status"] == history.PENDING_STATUS
+    if bound:
+        assert event["summary"] == summary
+        assert json.loads(placeholder)["summary"] == summary
+        assert result["summary"] == summary
+    else:
+        assert "summary" not in event
+        assert placeholder == history.PENDING_RESULT_JSON
+
+
+async def test_lead_preview_forces_approval_in_power_mode(store, monkeypatch):
+    from crm import lead_import
+
+    marks = []
+    monkeypatch.setattr(history, "mark_untrusted_seen", marks.append)
+    monkeypatch.setattr(lead_import, "pending_binding", lambda *args: None)
+    reg = Registry(writes={"crm_execute_lead_import"})
+    prov = FakeProvider([
+        [_complete([_tc("crm_preview_lead_import", args={"text": "Name\nAna"})], stop="tool_use")],
+        [_complete([_tc("crm_execute_lead_import", tid="t2", args={"batch_id": "b"})], stop="tool_use")],
+        [{"type": "text", "text": "Please approve"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "import pasted rows"}], tool_mode="power", user={"id": 7})
+    assert [name for name, _ in reg.calls] == ["crm_preview_lead_import"]
+    assert any(e["type"] == "confirm" and e["tool"] == "crm_execute_lead_import" for e in events)
+    assert marks == ["conv1"]
+    assert store.merges[0]["content"].startswith("<untrusted_external_content")
+
+
+async def test_lead_import_execute_confirms_in_a_clean_power_mode_turn(store, monkeypatch):
+    """A batch is claimable from any of the seat's conversations, so the card must not
+    depend on the preview's taint (#370)."""
+    from crm import lead_import
+
+    monkeypatch.setattr(lead_import, "pending_binding", lambda *args: None)
+    reg = Registry(writes={"crm_execute_lead_import"})
+    prov = FakeProvider([
+        [_complete([_tc("crm_execute_lead_import", args={"batch_id": "b"})], stop="tool_use")],
+        [{"type": "text", "text": "Please approve"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "import"}], tool_mode="power", user={"id": 7})
+    assert reg.calls == []
+    assert any(e["type"] == "confirm" and e["tool"] == "crm_execute_lead_import" for e in events)
 
 
 # ── Reads of one batch run first and side by side (#372) ──────────────────────

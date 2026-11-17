@@ -23,11 +23,13 @@ def test_def_and_executor_counts():
     # Phase 2: get_deal_health, get_pipeline_analytics) + 2 (#70 todo parity:
     # crm_update_todo, crm_delete_todo) + 1 (#55 crm_bulk_move_deals) + 1 (#200
     # crm_get_setup_status) - 1 (#299 removed crm_delete_todo) + N (sibling
-    # additions) + 2 (#334 crm_preview_company_merge, crm_merge_companies) — SUM the additions, never overwrite the number. On rebase behind a
-    # sibling that also adds a tool, recompute cumulative (do NOT keep-both a single
-    # number). The executor count is always defs + 1 (crm_log_note alias).
-    assert len(CRM_TOOL_DEFS) == 49
-    assert len(TOOL_EXECUTORS) == 50
+    # additions) + 2 (#334 crm_preview_company_merge, crm_merge_companies)
+    # + 2 (#370 crm_preview_lead_import, crm_execute_lead_import).
+    # SUM the additions, never overwrite the number. On rebase behind a sibling that
+    # also adds a tool, recompute cumulative (do NOT keep-both a single number).
+    # The executor count is always defs + 1 (crm_log_note alias).
+    assert len(CRM_TOOL_DEFS) == 51
+    assert len(TOOL_EXECUTORS) == 52
     # Relative invariant (robust to any future additions): exactly one alias-only executor.
     assert len(TOOL_EXECUTORS) == len(CRM_TOOL_DEFS) + 1
 
@@ -976,3 +978,20 @@ def test_the_model_cannot_name_the_seat_the_setup_status_answers_for(monkeypatch
     assert executors["crm_get_setup_status"](user_id=99) == {"seat": 4}
     _, unattended = get_crm_tools(user=None)
     assert unattended["crm_get_setup_status"](user_id=99) == {"seat": None}
+
+
+def test_lead_import_targets_bounded_to_ten(monkeypatch):
+    monkeypatch.setattr(tools.lead_import, "execute", lambda *a, **kw: {
+        "ok": True, "deals_created": 12, "deal_ids": list(range(1, 13)),
+    })
+    monkeypatch.setattr(tools, "pg_fetchall", lambda *a, **kw: [
+        {"id": i, "title": f"Lead {i}", "owner_id": 7} for i in range(1, 11)
+    ])
+    result = tools.crm_execute_lead_import("b", user_id=7)
+    assert result["deals_created"] == 12
+    assert len(result["targets"]) == 10
+    assert "deal_ids" not in result
+    assert all(t["url"].endswith(f"?deal={t['id']}") for t in result["targets"])
+    error = {"error": "expired"}
+    monkeypatch.setattr(tools.lead_import, "execute", lambda *a, **kw: error)
+    assert tools.crm_execute_lead_import("b", user_id=7) is error
