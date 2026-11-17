@@ -95,3 +95,4 @@ Populated by port PRs from here on.
 | Reminder pause/resume in Baker and the Reminders page; paused rows stay editable and skip firing, overdue repeats resume at the next future occurrence | PR #4492 (`079c6510e`), reminders only | #336 | — |
 | Lead import in one step: an attached CSV/XLSX or pasted list becomes companies, contacts and deals behind one approval, with an optional note on every deal | PR #4746 (`211fe70dd`) | #370 | — |
 | Baker lookups in one step run side by side, changes wait for them, and a lookup that hangs times out | PR #5269 (`52b2c1851`) | #372 | — |
+| Bulk edits as one change-list approval card with batch Undo, for deal and todo fields | PR #5261 (`a0c03fe2e`) | #371 | — |

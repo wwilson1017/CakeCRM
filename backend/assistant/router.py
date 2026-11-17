@@ -47,6 +47,7 @@ from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from assistant import delimiters, engine, history, identity, turns, uploads
 from assistant.registry import ToolRegistry
 from core.auth import get_current_user, require_admin
+from crm import change_list
 from providers import get_ai_provider
 
 logger = logging.getLogger(__name__)
@@ -351,6 +352,30 @@ def confirm(req: ConfirmRequest, user=Depends(get_current_user)):
     if result.get("status") == "not_found":
         raise HTTPException(status_code=404, detail="Conversation not found.")
     return result
+
+
+# ── Change lists (#371) ────────────────────────────────────────────────────
+
+@router.get("/change-batches/{batch_id}")
+def get_change_batch(batch_id: str, user=Depends(get_current_user)):
+    """The rows a change-list card shows and what apply and Undo did to each. Owner-only
+    like the conversation it belongs to: another seat's batch is a 404, never a 403."""
+    batch = change_list.view(batch_id, user_id=user["id"])
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Change list not found.")
+    return batch
+
+
+@router.post("/change-batches/{batch_id}/undo")
+def undo_change_batch(batch_id: str, user=Depends(get_current_user)):
+    """Undo an applied change list. The click is the consent, so this is not a Baker tool."""
+    try:
+        batch = change_list.undo(batch_id, user_id=user["id"])
+    except ValueError as e:  # already undone, never applied, or rows busy: nothing written
+        raise HTTPException(status_code=409, detail=str(e))
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Change list not found.")
+    return batch
 
 
 # ── Conversations ──────────────────────────────────────────────────────────

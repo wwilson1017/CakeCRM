@@ -758,3 +758,29 @@ def test_spreadsheet_upload_passes_bytes_and_server_id(client, with_provider, fi
     ui = router_mod._message_for_ui({"role": "user", "content": content, "tool_results": []})
     assert ui["attachments"] == [filename]
     assert ui["content"] == "import"
+# ── Change lists (#371) ─────────────────────────────────────────────────────
+
+def test_change_batch_routes_are_scoped_to_the_caller(client, monkeypatch):
+    batch = {"id": "chg_1", "status": "applied", "reason": "", "rows": []}
+    seen = []
+
+    def view(batch_id, *, user_id):
+        seen.append(("view", batch_id, user_id))
+        return batch if batch_id == "chg_1" else None
+
+    def undo(batch_id, *, user_id):
+        seen.append(("undo", batch_id, user_id))
+        if batch_id == "chg_done":
+            raise ValueError("This change list is undone, so it cannot be undone.")
+        return {**batch, "status": "undone"} if batch_id == "chg_1" else None
+
+    monkeypatch.setattr(router_mod.change_list, "view", view)
+    monkeypatch.setattr(router_mod.change_list, "undo", undo)
+    assert client.get("/api/assistant/change-batches/chg_1").json() == batch
+    # Another seat's batch and a missing one answer the same: 404, never 403 (#191).
+    assert client.get("/api/assistant/change-batches/chg_other").status_code == 404
+    assert client.post("/api/assistant/change-batches/chg_1/undo").json()["status"] == "undone"
+    assert client.post("/api/assistant/change-batches/chg_other/undo").status_code == 404
+    again = client.post("/api/assistant/change-batches/chg_done/undo")
+    assert again.status_code == 409 and "undone" in again.json()["detail"]
+    assert {user_id for _, _, user_id in seen} == {fake_admin()["id"]}

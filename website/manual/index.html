@@ -619,7 +619,8 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <h2>Moving into Won or Lost</h2>
 <p><strong>Move to…</strong> does list Won and Lost, but a bulk move closes the deals with today as their Closed on date and no lost reason. If the date or reason matters, close the deals one at a time with <strong>Mark Won</strong> or <strong>Mark Lost</strong>. See <a href="#/pipeline/stages-and-closing">Stages and closing a deal</a>.</p>
 <h2>Asking Baker</h2>
-<p>With an AI provider connected, you can ask Baker to move a set of deals. It has the same 200-deal limit, but it only moves deals into open stages. It refuses to win or lose deals in bulk, and closes them one at a time instead so each date and reason is captured. See <a href="#/baker/what-baker-can-do">What Baker can do</a>.</p><nav class="pn"><a href="#/pipeline/stages-and-closing"><small>Previous</small>Stages and closing a deal</a><a class="next" href="#/pipeline/archived-deals"><small>Next</small>Archived deals</a></nav></article>
+<p>With an AI provider connected, you can ask Baker to move a set of deals. It has the same 200-deal limit, but it only moves deals into open stages. It refuses to win or lose deals in bulk, and closes them one at a time instead so each date and reason is captured. See <a href="#/baker/what-baker-can-do">What Baker can do</a>.</p>
+<p>If you ask for more than a stage move, such as a new stage and a new close date together, Baker puts every change on one card that you approve once and can undo. See <a href="#/baker/approvals">Approvals and modes</a>.</p><nav class="pn"><a href="#/pipeline/stages-and-closing"><small>Previous</small>Stages and closing a deal</a><a class="next" href="#/pipeline/archived-deals"><small>Next</small>Archived deals</a></nav></article>
 <article data-route="pipeline/archived-deals" data-title="Archived deals" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/pipeline/board">Pipeline</a></p><h1>Archived deals</h1><p class="lead">Archiving hides a junk deal without deleting it, and Restore brings it back.</p><p>Archiving is a soft hide. The deal keeps every note, activity and todo; it simply stops appearing. Nothing is deleted.</p>
 <h2>Archived is not Lost</h2>
 <ul>
@@ -1620,8 +1621,9 @@ any reply or completed step still shows an error without adding an assistant mes
 <p>Baker can read and change CRM records, work your todos, keep its own memory and knowledge files, search and read connected Gmail, and put drafts in your Gmail Drafts folder. It cannot send email, cannot change install settings except its own background check-in schedule, and cannot act outside CakeCRM.</p>
 <h2>CRM records and todos</h2>
 <p>Baker can search, create and update contacts, companies and deals, move a deal's stage, mark a deal won or lost, log activities, and create, update and complete todos. Whether each change runs straight away or waits for your <strong>Approve</strong> depends on the mode you pick. See <a href="#/baker/approvals">Approvals</a>.</p>
+<p>Asked for one edit across many deals or todos, Baker puts every change on a single card, old value to new, that you approve once and can undo. See <a href="#/baker/approvals">Approvals</a>.</p>
 <p>Deleting a contact or a company is permanent; there is no recycle bin. Deals cannot be deleted at all: archiving is the way to remove one, and it can be restored. A todo is never deleted either: when you ask Baker to delete one, it drops it, and you can reopen it from Done → Dropped.</p>
-<p>One turn can make at most 20 changes. Past that, Baker's further changes are refused.</p>
+<p>One turn can carry out at most 20 actions that change data. A change list counts as one action, covering up to 200 field changes. Past that action limit, Baker's further changes are refused.</p>
 <h2>Email</h2>
 <p>Gmail is <strong>read and create-draft only</strong>. Baker can search your mail, read a thread and write a draft into your Gmail Drafts folder. It can never send an email. No tool in CakeCRM sends mail, and a test fails the build if one is ever added. You review and send every draft yourself, from Gmail. See <a href="#/integrations/gmail">Gmail</a>.</p>
 <p>By default only admins can have Baker use the connected mailbox.</p>
@@ -1696,16 +1698,31 @@ Baker runs the lookups of one step side by side. If a lookup has not answered wi
 </ul>
 <p>A few of those calls still ask, because of what they would do: archiving a contact or company, dropping a todo or project, or setting a bring-back date that hides a todo. Marking a todo done, completing a project, or filing either to someday runs without asking.</p>
 <h2>What always asks in Ask mode</h2>
-<p>Deleting, archiving, merging, bulk moves, lead imports and bulk todo updates, recomputing lead scores, creating a Gmail draft, sending a notification, recording a memory fact, and any change to Baker's protected files. Anything new that has not been classified asks too.</p>
+<p>Deleting, archiving, merging, bulk moves, lead imports, change lists and bulk todo updates, recomputing lead scores, creating a Gmail draft, sending a notification, recording a memory fact, and any change to Baker's protected files. Anything new that has not been classified asks too.</p>
 <h2>What asks even in Auto</h2>
 <ul>
 <li><strong>Writing Baker's protected files</strong>, soul.md and MEMORY.md. These always ask, in every mode, and only an admin can change them. See <a href="#/baker/memory">Memory</a>.</li>
 <li><strong>Importing a lead list.</strong> A lead import always shows one Approve card with the count and a sample, in every mode and from any conversation. See <a href="#/contacts-and-companies/importing">Importing</a>.</li>
+<li><strong>A change list.</strong> One edit across many deals or todos always shows one card listing every change, in every mode. See "Changing many records at once" below.</li>
 <li><strong>A conversation that has read outside content.</strong> Once Baker has read an email, an uploaded file, a photo, or a todo that came in through the public quick-capture link while no token was set, every change it proposes asks for approval for the rest of that conversation, even after that message has scrolled out of view. Text someone else wrote can never quietly steer Baker into changing your data. The Telegram chat is one long conversation, so once it has read such outside content it asks before every change from then on. Within one step, Baker finishes its lookups before running changes, so a change proposed alongside an email read asks for approval too.</li>
 </ul>
 <h2>Approving a change</h2>
 <p>When Baker wants to make a change that needs approval, its message carries a card naming the action and showing exactly what it will do, with <strong>Approve</strong> and <strong>Deny</strong>. Until you answer, nothing has happened.</p>
 <p>In Telegram the same thing arrives as two buttons, Approve and Deny, and only the linked account can press them. A button answers that one action; replying <strong>yes</strong> approves every pending change. Any other message cancels the pending changes. Telegram chats always run in Ask mode.</p>
+<h2>Changing many records at once</h2>
+<p>Ask Baker for one edit across several deals or todos ("move these 40 deals to Proposal and set their close date to the 30th") and you get <strong>one card</strong> instead of one per record.</p>
+<ul>
+<li>The card lists every change as <em>record · field: old value → new value</em>. CakeCRM reads the old values and the record names itself. A long list shows its first 20 rows; press <strong>Show all</strong> for the rest.</li>
+<li>A <strong>Will not be changed</strong> box lists every row CakeCRM refused, with the reason. Those rows are never written.</li>
+<li><strong>Approve</strong> becomes available once the full list loads; a failed load offers <strong>Retry</strong>, and <strong>Decline</strong> stays available. Approve applies all the listed changes together. If any proposed field changed while the card waited, every proposed change for that record is skipped and listed as "changed since the card was shown".</li>
+<li>After Approve, the card shows how many changes were applied and an <strong>Undo</strong> button. One click puts every applied row back. If any applied field has changed since, every change for that record is left alone and listed as "changed since it was applied". A batch can be undone once, and the card still shows its state when you reopen the conversation.</li>
+</ul>
+<p>A change list can set, on deals: title, stage, value, expected close date, probability, currency, temperature and notes. On todos: title, status, due date, bring-back date, star, context, priority, description and tags. Tags replace the whole list. Owners are not set by a change list; change a deal's or todo's owner on the record itself. Up to 200 rows fit on one card.</p>
+<p>Long values show their first 120 characters; hover for the full value. Links, repeat settings and projects remain outside change lists. Use status rather than a separate completed flag.</p>
+<p>Some rows are always refused: an archived deal, a deal Baker has not looked up in this conversation, moving a deal into or out of Won or Lost (close and reopen deals one at a time, so the date and reason are captured), and completing or reopening a repeating todo. A malformed row is listed as <strong>row N</strong>; other valid rows can still be approved. If all rows are refused, there is nothing to approve and no card.</p>
+<p>Each value row shows its own currency. If that currency changes before Approve or Undo, or the amount changes under a currency row, all changes for that deal are skipped or left alone. Amounts in different currencies are never added up, so the card shows no total.</p>
+<p>If the records are busy and the transaction fails, nothing changes. Ask Baker to send the change list again.</p>
+<p>In Telegram the approval message shows the count, up to five sample changes (excluding titles, notes and descriptions), and the refused rows. The full list and Undo are in the app.</p>
 <h2>Baker looks a deal up before changing it</h2>
 <p>Baker must find the deal in this conversation and check its title before changing it.
 The lookup must finish in an earlier step, so a guessed id cannot be sent alongside a

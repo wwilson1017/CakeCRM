@@ -19,6 +19,8 @@ export interface ConfirmSummary { headline: string; lines: string[] }
 export interface PendingConfirmation {
   // Server-built description of the write (#370); never model-supplied.
   summary?: ConfirmSummary;
+  // The server's staged change list this card approves (#371); see ChangeList.
+  changeBatchId?: string;
   tool: string;
   toolUseId: string;
   msgId?: string; // the persisted assistant row; disambiguates reused tool_use_ids

@@ -7,7 +7,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { BulkItemList } from './BulkItemList';
-import { COLLAPSED_ROWS, bulkItems, confirmSummary } from './bulkItems';
+import { COLLAPSED_ROWS, bulkItems, changeBatchId, confirmSummary } from './bulkItems';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -33,6 +33,12 @@ function render(items: unknown[]) {
 }
 
 describe('bulkItems', () => {
+  it('reads a change-batch id off an event, placeholder or result, and nothing else', () => {
+    expect(changeBatchId({ status: 'pending_user_approval', change_batch_id: 'chg_1' })).toBe('chg_1');
+    for (const bad of [undefined, null, 'chg_1', {}, { change_batch_id: 7 }, { change_batch_id: '' }]) {
+      expect(changeBatchId(bad)).toBeNull();
+    }
+  });
   it('validates server summaries and drops non-string sample lines', () => {
     const summary = { headline: 'Import 2 leads', lines: ['Ana', 'Bo'] };
     expect(confirmSummary(summary)).toEqual(summary);

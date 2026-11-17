@@ -40,6 +40,10 @@ from reminders import tools as reminder_tools
 WAIVED = {
     "heartbeat_update_settings": "install-wide settings singleton; names no record",
     "crm_recompute_lead_scores": "recomputes a derived score across a scope; names no record",
+    "crm_apply_change_list": (
+        "up to 200 records of two types: the result is bounded to counts and the rows not "
+        "applied, by id, and the card lists every record by title from the staged batch"
+    ),
     "memory_add_fact": "the assistant's own memory, not a CRM record; the result is the fact",
     "memory_invalidate_fact": "the assistant's own memory, not a CRM record",
     "write_context_file": "a context file is identified by its filename, which is the argument",

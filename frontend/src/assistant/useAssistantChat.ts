@@ -29,7 +29,7 @@ import { getToken, TOKEN_KEY } from '../core/auth/tokenUtils';
 import { parseUTC } from '../crm/gtd/util';
 import { shrinkImage } from '../shared/shrinkImage';
 import { toast } from '../shared/toast';
-import { confirmSummary } from './bulkItems';
+import { changeBatchId, confirmSummary } from './bulkItems';
 import type {
   ActiveRecordContext,
   ChatMessage,
@@ -136,6 +136,7 @@ function addConfirm(m: ChatMessage, evt: SSEEvent): ChatMessage {
         description: evt.description ? String(evt.description) : undefined,
         status: 'pending',
         summary: confirmSummary(evt.summary) ?? undefined,
+        changeBatchId: changeBatchId(evt) ?? undefined,
       },
     ],
   };
@@ -162,6 +163,7 @@ export function mapServerMessages(serverMsgs: ServerMessage[]): ChatMessage[] {
           args: tc.args ?? {},
           status: 'pending' as const,
           summary: confirmSummary((tc.result as { summary?: unknown } | null)?.summary) ?? undefined,
+          changeBatchId: changeBatchId(tc.result) ?? undefined,
         })),
       toolCalls: calls
         .filter((tc) => !isPending(tc.result))

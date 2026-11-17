@@ -618,10 +618,28 @@ async def _chat_impl(
                     terminated = True
                     break
 
+            # A change list is validated and staged BEFORE its card (#371): the card shows
+            # the server's staged rows, a deal nobody searched for is a refused ROW there,
+            # and a list with nothing to apply is answered here with no card at all.
+            staged = None
+            if is_write and name == _CHANGE_LIST_TOOL:
+                from crm import change_list  # lazy: only this branch needs it
+
+                staged = await asyncio.to_thread(change_list.stage, args, registry)
+                if "error" in staged:
+                    async for line in _record_result(
+                        conversation_id, iter_msg_id, name, tool_use_id, results,
+                        {"ok": False, **staged}, 0,
+                    ):
+                        yield line
+                    continue
+
             # Confirmation gate (issues #4, #8, #72, #180). A write confirms when ANY of
             # these holds:
             #   * it is a lead import (#370): a batch outlives its preview's conversation,
             #     so the preview's taint alone cannot promise a card — every mode;
+            #   * it is a change list (#371, `staged` above): the card is the feature —
+            #     every mode;
             #   * it is a write to a PROTECTED context file (soul.md / MEMORY.md) —
             #     every mode, power included. `writes: True` alone is not enough there:
             #     a poisoned soul is not one bad record, it is a permanent system
@@ -640,7 +658,10 @@ async def _chat_impl(
             # never reaches here.
             # Persist the pending placeholder BEFORE emitting confirm (so /confirm can
             # find it), then wait for approval.
-            always_confirms = name in _SUMMARY_WRITE_TOOLS or context_file_tools.requires_confirmation(name, args)
+            always_confirms = (
+                staged is not None or name in _SUMMARY_WRITE_TOOLS
+                or context_file_tools.requires_confirmation(name, args)
+            )
             # Routine by name, minus the call shapes that take a record out of view
             # (see confirm_tier.removes_from_view) — normal mode only; power is untouched.
             routine_exempt = registry.is_routine_write(name) and not confirm_tier.removes_from_view(name, args)
@@ -650,7 +671,7 @@ async def _chat_impl(
                 or turn_has_untrusted_reads
                 or (tool_mode == "normal" and not routine_exempt)
             ):
-                placeholder = await _pending_placeholder(name, args, user_id)
+                placeholder = await _pending_placeholder(name, args, user_id, staged)
                 try:
                     await asyncio.to_thread(
                         history.merge_tool_result, iter_msg_id, tool_use_id, name,
@@ -816,18 +837,27 @@ _VERSION_BOUND_WRITE_TOOLS = frozenset({"write_context_file"})
 # The batch id alone cannot describe an import. Keep the server's summary on the
 # placeholder so both a live confirm event and a reloaded card show it (#370).
 _SUMMARY_WRITE_TOOLS = frozenset({"crm_execute_lead_import"})
+# Staged before its card and applied from that staged batch (#371). Deliberately NOT in
+# the set above: approving one of those taints the conversation, and a change list's
+# result carries no record text.
+_CHANGE_LIST_TOOL = "crm_apply_change_list"
 
 
-async def _pending_placeholder(tool_name: str, args: dict | None, user_id: int | None = None) -> str:
+async def _pending_placeholder(
+    tool_name: str, args: dict | None, user_id: int | None = None, staged: dict | None = None,
+) -> str:
     """The pending-approval result to persist for a gated write.
 
     Plain PENDING_RESULT_JSON, except for a bound write, which also carries what it was
     proposed against — the live connection for Gmail, the row version for a context
-    file, or the server's summary for a lead import. Extra keys are safe: history's
+    file, the server's summary for a lead import, or a change list's ``staged`` summary
+    and batch id (already built by the gate). Extra keys are safe: history's
     status helpers read only "status". Binding reads touch Postgres, so they are
     offloaded — this runs on the SSE event loop.
     """
-    if tool_name in _CONNECTION_BOUND_WRITE_TOOLS:
+    if staged is not None:
+        binding = staged
+    elif tool_name in _CONNECTION_BOUND_WRITE_TOOLS:
         from gmail import tools as gmail_tools  # lazy: keeps gmail out of engine import
 
         binding = await asyncio.to_thread(gmail_tools.pending_binding)
@@ -845,9 +875,9 @@ async def _pending_placeholder(tool_name: str, args: dict | None, user_id: int |
 
 
 def _card_summary(placeholder: str) -> dict:
-    """The pending placeholder's summary, as an extra confirm-event key."""
-    summary = _parse_pending(placeholder).get("summary")
-    return {"summary": summary} if summary else {}
+    """The pending placeholder's summary and change-batch id, as extra confirm-event keys."""
+    pending = _parse_pending(placeholder)
+    return {key: pending[key] for key in ("summary", "change_batch_id") if pending.get(key)}
 
 
 def _parse_pending(pending_content: str | dict | None) -> dict:
@@ -930,6 +960,9 @@ def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decis
         existing = history.get_tool_result(conversation_id, tool_use_id, msg_id=msg_id)
         return {"status": "already_resolved", "result": existing}
     registry.conversation_id = conversation_id
+    # The batch a change-list card showed (#371); None for every other tool. It comes
+    # from the server's own placeholder, so the model cannot name a batch.
+    registry.change_batch_id = _parse_pending(claimed.get("content")).get("change_batch_id")
     claimed_msg_id, tool, args = claimed["msg_id"], claimed["tool"], claimed["args"]
     # Defense-in-depth: only a write should ever have been marked pending. If a
     # non-write somehow got here (a future bug in the gate), refuse rather than

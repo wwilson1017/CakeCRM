@@ -208,7 +208,7 @@ of those: capturing a todo, updating one, and creating or updating a project.
 
 **Everything else still asks**, and absence of the classification is the deny state — a
 tool nobody has classified confirms, so a capability added later is never silently
-exempt. Deletes, archives, merges, bulk moves, lead-score recomputation, Gmail drafts,
+exempt. Deletes, archives, merges, bulk moves, change lists, lead-score recomputation, Gmail drafts,
 notifications, memory facts, and any write to `soul.md` or `MEMORY.md` all
 keep their Approve card. Bulk todo updates and project deletes are in that group too. A todo is never deleted: the
 assistant has no todo delete tool, and dropping one keeps its card.
@@ -223,10 +223,12 @@ its card too; clearing one does not. Finishing something is
 not the same as removing it, so marking a todo done or a project completed runs without
 asking, and so does filing either one to someday.
 
-Four rules override the tier entirely, in every mode:
+Five rules override the tier entirely, in every mode:
 
 - a write to a protected context file always confirms (see below);
 - a lead import always confirms, whichever conversation it is approved from;
+- a change list (one edit across many deals or todos) always confirms, on one card that
+  lists every change from the server's own read of the records;
 - untrusted content in the conversation — an uploaded document or photo, or email the assistant
   read, this turn or an earlier one — makes every write confirm;
 - the unattended assistant (heartbeat, proactive nudges) cannot reach any of

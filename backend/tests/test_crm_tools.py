@@ -25,11 +25,12 @@ def test_def_and_executor_counts():
     # crm_get_setup_status) - 1 (#299 removed crm_delete_todo) + N (sibling
     # additions) + 2 (#334 crm_preview_company_merge, crm_merge_companies)
     # + 2 (#370 crm_preview_lead_import, crm_execute_lead_import).
+    # + 1 (#371 crm_apply_change_list).
     # SUM the additions, never overwrite the number. On rebase behind a sibling that
     # also adds a tool, recompute cumulative (do NOT keep-both a single number).
     # The executor count is always defs + 1 (crm_log_note alias).
-    assert len(CRM_TOOL_DEFS) == 51
-    assert len(TOOL_EXECUTORS) == 52
+    assert len(CRM_TOOL_DEFS) == 52
+    assert len(TOOL_EXECUTORS) == 53
     # Relative invariant (robust to any future additions): exactly one alias-only executor.
     assert len(TOOL_EXECUTORS) == len(CRM_TOOL_DEFS) + 1
 

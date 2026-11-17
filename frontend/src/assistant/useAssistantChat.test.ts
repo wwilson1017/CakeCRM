@@ -234,3 +234,28 @@ it('keeps a server summary on the streamed and reloaded pending card', async () 
   expect(mapped[0].pendingConfirmations![0].status).toBe('pending');
   expect(mapped[0].toolCalls).toEqual([]);
 });
+
+
+it('keeps the change-batch id on the streamed and reloaded pending card', async () => {
+  const summary = { headline: 'Change 2 fields on 1 deal', lines: [] };
+  fetchMock.mockResolvedValueOnce(sse([
+    { type: 'conversation_id', id: 'c1' },
+    { type: 'confirm', tool: 'crm_apply_change_list', tool_use_id: 't1', msg_id: 'm1', args: { changes: [] }, summary, change_batch_id: 'chg_1' },
+    { type: 'done' },
+  ]));
+  render(null);
+  await act(async () => { chat.sendMessage('move them'); });
+  const pending = chat.messages.find(m => m.role === 'assistant')!.pendingConfirmations![0];
+  expect(pending.changeBatchId).toBe('chg_1');
+  const mapped = mapServerMessages([{
+    id: 'm1', role: 'assistant', content: '',
+    tool_calls: [
+      { tool: 'crm_apply_change_list', tool_use_id: 't1', args: { changes: [] },
+        result: { status: 'pending_user_approval', summary, change_batch_id: 'chg_1' } },
+      { tool: 'crm_apply_change_list', tool_use_id: 't2', args: { changes: [] },
+        result: { ok: true, change_batch_id: 'chg_0', applied: 2 } },
+    ],
+  }]);
+  expect(mapped[0].pendingConfirmations!.map(c => c.changeBatchId)).toEqual(['chg_1']);
+  expect(mapped[0].toolCalls!.map(c => c.toolUseId)).toEqual(['t2']);
+});

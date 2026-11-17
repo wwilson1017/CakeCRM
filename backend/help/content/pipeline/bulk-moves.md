@@ -40,6 +40,10 @@ per-deal error reporting. It accepts **open stages only** — winning or losing 
 skip the reason capture, so it refuses and points at `crm_mark_deal_won` and
 `crm_mark_deal_lost`.
 
+For more than a stage move (a stage and a close date together, say), Baker sends a change
+list instead: one card listing every change, old value to new, with Undo for the whole
+batch. See `assistant/change-lists`.
+
 Note the difference from the interface: the Move to… menu in the app does list Won and Lost,
 and moving there in bulk closes those deals with no reason recorded. Deals moved into Won in
 bulk are dated today; correct a date afterwards on the deal itself. If the reason matters,

@@ -18,3 +18,10 @@ export function confirmSummary(value: unknown): ConfirmSummary | null {
   if (typeof headline !== 'string' || !Array.isArray(lines)) return null;
   return { headline, lines: lines.filter((l): l is string => typeof l === 'string') };
 }
+
+/** The staged change list (#371) a confirm event, a pending placeholder or a result names. */
+export function changeBatchId(value: unknown): string | null {
+  const id = value && typeof value === 'object'
+    ? (value as { change_batch_id?: unknown }).change_batch_id : null;
+  return typeof id === 'string' && id ? id : null;
+}
