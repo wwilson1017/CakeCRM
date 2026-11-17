@@ -29,7 +29,7 @@ refused rows; the full list and Undo are in the app.
 - **Todos:** title, status, due date, bring-back date, star, context, priority, description and tags.
 
 Up to 200 rows on one card. Tags replace the whole list. Owners are not set by a change
-list: Baker assigns them by name, one record at a time. Long values show their first 120 characters; hover to read the full
+list; change a deal's or todo's owner on the record itself. Long values show their first 120 characters; hover to read the full
 value. Titles, notes and descriptions are omitted from the Telegram sample.
 
 Links to contacts, companies or deals stay outside change lists because re-linking follows

@@ -1139,8 +1139,8 @@ CRM_TOOL_DEFS = [
             f"Todo fields: {', '.join(change_list.FIELDS['todo'])}. `status` is one of "
             f"{', '.join(TODO_STATUSES)} (a repeating todo is completed by itself, not here); "
             "`due_date` and `bring_back_on` are YYYY-MM-DD or '' to clear; `star` is true or "
-            "false; `tags` replaces the whole list of strings. Owners are not set here: assign "
-            "them one record at a time. Every deal must have been found by a CRM search earlier in this chat. "
+            "false; `tags` replaces the whole list of strings. Owners cannot be set here; the "
+            "user changes them on the record. Every deal must have been found by a CRM search earlier in this chat. "
             f"Up to {change_list.MAX_ROWS} rows. Do not repeat the rows in your reply."
         ),
         "input_schema": {

@@ -932,8 +932,8 @@ placeholder's `summary` and `change_batch_id` onto the `confirm` event, and
 Not ported or left out: contacts, companies and custom fields (no cursor-taking writers);
 contact/company/deal links (company follow-merge gate precedes record locks); completed
 (status is the one spelling); repeat/auto-star settings (completion can spawn an occurrence);
-projects (assigning by name can create one); owners (assigned by name, one record at a
-time, through `_resolve_owner(require_active=True)`, #237); closing or reopening deals;
+projects (assigning by name can create one); owners (a raw user id could name a
+deactivated teammate, and no Baker tool assigns a deal or todo owner, #237); closing or reopening deals;
 retries on deadlock.
 Notes/descriptions use validate_notes; tags use validate_tags as a whole-list replacement.
 

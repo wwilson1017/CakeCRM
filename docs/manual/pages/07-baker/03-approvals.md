@@ -55,7 +55,7 @@ Ask Baker for one edit across several deals or todos ("move these 40 deals to Pr
 - **Approve** becomes available once the full list loads; a failed load offers **Retry**, and **Decline** stays available. Approve applies all the listed changes together. If any proposed field changed while the card waited, every proposed change for that record is skipped and listed as "changed since the card was shown".
 - After Approve, the card shows how many changes were applied and an **Undo** button. One click puts every applied row back. If any applied field has changed since, every change for that record is left alone and listed. A batch can be undone once, and the card still shows its state when you reopen the conversation.
 
-A change list can set, on deals: title, stage, value, expected close date, probability, currency, temperature and notes. On todos: title, status, due date, bring-back date, star, context, priority, description and tags. Tags replace the whole list. Owners are not set by a change list; Baker assigns them by name, one record at a time. Up to 200 rows fit on one card.
+A change list can set, on deals: title, stage, value, expected close date, probability, currency, temperature and notes. On todos: title, status, due date, bring-back date, star, context, priority, description and tags. Tags replace the whole list. Owners are not set by a change list; change a deal's or todo's owner on the record itself. Up to 200 rows fit on one card.
 
 Long values show their first 120 characters; hover for the full value. Links, repeat settings and projects remain outside change lists. Use status rather than a separate completed flag.
 

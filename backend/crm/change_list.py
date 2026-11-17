@@ -56,8 +56,8 @@ SUMMARY_BUDGET = 1300
 RESULT_BUDGET = 1800
 
 #: What one change list may set. Every other column keeps its single-record tool; owners
-#: stay out because they are assigned by name, one record at a time, through
-#: tools._resolve_owner(require_active=True).
+#: stay out: a raw model-supplied user id could name a deactivated or wrong teammate, and
+#: the card could show only the number (owner assignment by name is tools._resolve_owner).
 FIELDS = {
     "deal": ("title", "stage", "value", "expected_close_date", "probability", "currency",
              "deal_temperature", "notes"),
