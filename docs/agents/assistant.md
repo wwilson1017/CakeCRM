@@ -904,10 +904,11 @@ placeholder's `summary` and `change_batch_id` onto the `confirm` event, and
   does not see nested ids, so it never refuses the whole call for them. Malformed rows
   become refused `row N` entries; only invalid whole lists and missing identity refuse the call.
 - **Stale rows.** Apply writes a row only when the locked record still holds the staged
-  `old`; Undo only when it still holds `new`. Others become `skipped` / `kept` with
-  "changed since the card was shown". Every taken row of a record succeeds or misses
-  together. Value rows also compare current currency against the staged currency (apply)
-  or the currency the batch left (undo). `_transition(direction="apply" | "undo")` derives
+  `old`; Undo only when it still holds `new`. Others become `skipped` ("changed since the
+  card was shown") / `kept` ("changed since it was applied"). Every taken row of a record
+  succeeds or misses together. Value rows also compare current currency against the staged
+  currency (apply) or the currency the batch left (undo), and currency rows the value, the
+  same way (connector review). `_transition(direction="apply" | "undo")` derives
   its states and value keys from one module-level mapping.
 - **Writes** go through `service._write_deal_update_cur` and
   `service._apply_todo_update_cur`, one call per record, in one transaction with
@@ -927,7 +928,12 @@ placeholder's `summary` and `change_batch_id` onto the `confirm` event, and
   person's click, not a tool, so Baker's transcript still says "applied" afterwards.
 - **Telegram** shows `summary.headline` and its lines in place of the argument dump
   (`_send_confirm`), and points to the full list in the app; it has no Undo.
-- **Money.** A `value` row carries `currency: [before, after]`; nothing sums.
+- **Money.** A `value` row carries `currency: [before, after]` and a `currency` row
+  `value: [before, after]`; nothing sums.
+- **Reset.** Staging reads the records and inserts the batch in one transaction under
+  `crm_meta` `FOR KEY SHARE`, the row `clear_all` / `clear_demo_data` lock `FOR UPDATE`
+  before truncating, so a reset cannot land between them and leave a batch naming ids
+  that `RESTART IDENTITY` reuses.
 
 Not ported or left out: contacts, companies and custom fields (no cursor-taking writers);
 contact/company/deal links (company follow-merge gate precedes record locks); completed

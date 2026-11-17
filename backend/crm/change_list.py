@@ -34,7 +34,7 @@ from typing import Literal
 import psycopg2
 
 from core.localtime import today_local
-from core.postgres import get_connection, pg_execute, pg_fetchone, row_to_dict
+from core.postgres import get_connection, pg_fetchone, row_to_dict
 from crm import (
     deal_write_guard,
     gtd_common,
@@ -72,6 +72,7 @@ _READ = {
 }
 
 CHANGED = "changed since the card was shown"
+CHANGED_SINCE_APPLY = "changed since it was applied"
 NOT_FOUND = ("not found by a CRM search in this chat; find the deal first, then send the "
              "change list in your next step")
 NEEDS_USER = "A change list needs a signed-in person in a conversation."
@@ -243,18 +244,30 @@ def _stage(args, registry) -> dict:
     if len(changes) > MAX_ROWS:
         return {"error": f"Too many changes ({len(changes)}); a change list takes at most "
                          f"{MAX_ROWS}. Split it."}
-    def well_formed(change):
-        return (isinstance(change, dict)
-                and set(change) == {"record_type", "id", "field", "value"}
-                and isinstance(change["record_type"], str)
-                and isinstance(change["field"], str)
-                and type(change["id"]) is int and change["id"] > 0)
-
-    valid = [c for c in changes if well_formed(c)]
+    valid = [c for c in changes if _well_formed(c)]
     ids = {kind: {c["id"] for c in valid if c["record_type"] == kind} for kind in FIELDS}
     with get_connection() as conn:
         cur = conn.cursor()
+        # Read the records and save the batch in ONE transaction, holding the crm_meta row
+        # that clear_all / clear_demo_data lock FOR UPDATE before they truncate: a reset
+        # cannot land between the read and the insert and leave a batch that names ids
+        # RESTART IDENTITY hands to new records. KEY SHARE blocks only that lock.
+        cur.execute("SELECT 1 FROM crm_meta WHERE id = 1 FOR KEY SHARE")
         current = {kind: _read(cur, kind, ids[kind], lock=False) for kind in FIELDS}
+        return _stage_rows(cur, args, registry, user_id, valid, ids, current)
+
+
+def _well_formed(change) -> bool:
+    return (isinstance(change, dict)
+            and set(change) == {"record_type", "id", "field", "value"}
+            and isinstance(change["record_type"], str)
+            and isinstance(change["field"], str)
+            and type(change["id"]) is int and change["id"] > 0)
+
+
+def _stage_rows(cur, args, registry, user_id, valid, ids, current) -> dict:
+    """Build and save the batch inside ``_stage``'s transaction."""
+    changes = args["changes"]
     # The #332 rule per ROW: a deal no earlier batch of this chat found is a refused row,
     # not a refused call (the guard's own check ignores this tool's nested ids).
     unfound = set(deal_write_guard.unfound(registry, sorted(ids["deal"]))) if ids["deal"] else set()
@@ -262,7 +275,7 @@ def _stage(args, registry) -> dict:
 
     rows: list[dict] = []
     for i, change in enumerate(changes, 1):
-        if not well_formed(change):
+        if not _well_formed(change):
             rows.append({"record_type": "row", "id": i, "field": "", "label": f"row {i}",
                          "old": None, "new": None, "state": "refused",
                          "reason": "not a {record_type, id, field, value} row"})
@@ -298,20 +311,22 @@ def _stage(args, registry) -> dict:
             else:
                 row["state"] = "ready"
 
-    # A value row names its deal's currency on each side; nothing is ever totalled.
-    recoded = {r["id"]: r["new"] for r in rows
-               if r["state"] == "ready" and (r["record_type"], r["field"]) == ("deal", "currency")}
-    for r in rows:
-        if (r["record_type"], r["field"]) == ("deal", "value") and r["id"] in current["deal"]:
-            was = current["deal"][r["id"]]["currency"]
-            r["currency"] = [was, recoded.get(r["id"], was)]
+    # A value row names its deal's currency on each side, and a currency row its deal's
+    # value, so apply and Undo skip either when the other half moved; nothing is totalled.
+    for field, other in (("value", "currency"), ("currency", "value")):
+        after = {r["id"]: r["new"] for r in rows
+                 if r["state"] == "ready" and (r["record_type"], r["field"]) == ("deal", other)}
+        for r in rows:
+            if (r["record_type"], r["field"]) == ("deal", field) and r["id"] in current["deal"]:
+                was = current["deal"][r["id"]][other]
+                r[other] = [was, after.get(r["id"], was)]
 
     left = [_line(r) for r in rows if r["state"] != "ready"]
     if len(left) == len(rows):
         return _bounded({"error": "Nothing to change: no row can be applied."},
                         "refused", left, RESULT_BUDGET)
     batch_id = "chg_" + secrets.token_hex(8)
-    pg_execute(
+    cur.execute(
         "INSERT INTO assistant_change_batches (id, user_id, conversation_id, reason, rows) "
         "VALUES (%s, %s, %s, %s, %s::jsonb)",
         (batch_id, user_id, registry.conversation_id,
@@ -375,11 +390,11 @@ def _transition(batch_id: str, user_id: int, *, direction: Literal["apply", "und
                     field = r["field"]
                     why = (NOT_FOUND if kind == "deal" and record_id in unfound
                            else _blocked(kind, record, field, r[write]))
-                    if why is None and record[field] != r[expect]:
-                        why = CHANGED
-                    if (why is None and kind == "deal" and field == "value"
-                            and record["currency"] != r["currency"][0 if direction == "apply" else 1]):
-                        why = CHANGED
+                    other = {"value": "currency", "currency": "value"}.get(field) if kind == "deal" else None
+                    side = 0 if direction == "apply" else 1
+                    if why is None and (record[field] != r[expect]
+                                        or (other and record[other] != r[other][side])):
+                        why = CHANGED if direction == "apply" else CHANGED_SINCE_APPLY
                     if why:
                         break
                 for r in record_rows:

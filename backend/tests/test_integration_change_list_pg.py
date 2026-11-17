@@ -171,8 +171,8 @@ def test_fifty_rows_one_batch_refusals_stale_row_and_one_undo():
     undone = cl.undo(batch_id, user_id=7)
     assert undone["status"] == "undone"
     got = states(batch_id)
-    assert got[("deal", deals[4], "expected_close_date")] == ("kept", cl.CHANGED)
-    assert got[("deal", deals[4], "stage")] == ("kept", cl.CHANGED)
+    assert got[("deal", deals[4], "expected_close_date")] == ("kept", cl.CHANGED_SINCE_APPLY)
+    assert got[("deal", deals[4], "stage")] == ("kept", cl.CHANGED_SINCE_APPLY)
     assert got[("deal", deals[3], "stage")] == ("skipped", cl.CHANGED)
     assert deal_row(deals[4])["expected_close_date"] == "2027-01-15"
     assert deal_row(deals[3])["stage"] == "qualified" and deal_row(deals[3])["expected_close_date"] == ""
@@ -362,7 +362,51 @@ def test_currency_change_keeps_every_field_of_that_deal(recoded_after_apply, inc
         assert (result["applied"], result["skipped"]) == (0, len(changes))
         assert (deal_row(deal)["value"], deal_row(deal)["stage"]) == (1000, "lead")
     assert deal_row(deal)["currency"] == "EUR"
-    assert set(states(batch_id).values()) == {("kept" if recoded_after_apply else "skipped", cl.CHANGED)}
+    assert set(states(batch_id).values()) == (
+        {("kept", cl.CHANGED_SINCE_APPLY)} if recoded_after_apply else {("skipped", cl.CHANGED)})
+
+
+@pytest.mark.parametrize("edited_after_apply", [False, True])
+def test_currency_row_is_skipped_when_the_amount_moved(edited_after_apply):
+    # The other half of the coupling: a currency row snapshots its deal's value, so
+    # neither Approve nor Undo re-labels an amount a person typed in between.
+    deal = service.create_deal(title="Renewal", value=100, currency="USD")["id"]
+    registry = chat(found=[deal])
+    batch_id = cl.stage({"changes": [row("deal", deal, "currency", "EUR")]}, registry)["change_batch_id"]
+    if edited_after_apply:
+        assert approve(registry, batch_id)["applied"] == 1
+    service.update_deal(deal, value=150)
+    if edited_after_apply:
+        assert cl.undo(batch_id, user_id=7)["status"] == "undone"
+        assert (deal_row(deal)["value"], deal_row(deal)["currency"]) == (150, "EUR")
+        assert set(states(batch_id).values()) == {("kept", cl.CHANGED_SINCE_APPLY)}
+    else:
+        assert approve(registry, batch_id)["skipped"] == 1
+        assert (deal_row(deal)["value"], deal_row(deal)["currency"]) == (150, "USD")
+        assert set(states(batch_id).values()) == {("skipped", cl.CHANGED)}
+
+
+def test_staging_waits_for_a_reset_in_progress():
+    # A reset holds crm_meta FOR UPDATE before it truncates; staging reads the records
+    # and saves the batch under KEY SHARE of that row, so it cannot straddle the reset.
+    import threading
+
+    deal = service.create_deal(title="Renewal", value=100)["id"]
+    registry = chat(found=[deal])
+    reset = psycopg2.connect(os.environ["DATABASE_URL"])
+    try:
+        reset.cursor().execute("SELECT id FROM crm_meta WHERE id = 1 FOR UPDATE")
+        out = {}
+        worker = threading.Thread(target=lambda: out.update(
+            cl.stage({"changes": [row("deal", deal, "stage", "proposal")]}, registry)))
+        worker.start()
+        worker.join(1.0)
+        assert worker.is_alive() and not out  # blocked behind the reset's lock
+        reset.commit()
+        worker.join(10)
+        assert out.get("change_batch_id")
+    finally:
+        reset.close()
 
 
 def test_malformed_rows_are_listed_beside_valid_rows_and_all_refused_has_no_card():

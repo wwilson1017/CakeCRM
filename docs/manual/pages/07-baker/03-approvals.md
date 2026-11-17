@@ -53,7 +53,7 @@ Ask Baker for one edit across several deals or todos ("move these 40 deals to Pr
 - The card lists every change as *record · field: old value → new value*. CakeCRM reads the old values and the record names itself. A long list shows its first 20 rows; press **Show all** for the rest.
 - A **Will not be changed** box lists every row CakeCRM refused, with the reason. Those rows are never written.
 - **Approve** becomes available once the full list loads; a failed load offers **Retry**, and **Decline** stays available. Approve applies all the listed changes together. If any proposed field changed while the card waited, every proposed change for that record is skipped and listed as "changed since the card was shown".
-- After Approve, the card shows how many changes were applied and an **Undo** button. One click puts every applied row back. If any applied field has changed since, every change for that record is left alone and listed. A batch can be undone once, and the card still shows its state when you reopen the conversation.
+- After Approve, the card shows how many changes were applied and an **Undo** button. One click puts every applied row back. If any applied field has changed since, every change for that record is left alone and listed as "changed since it was applied". A batch can be undone once, and the card still shows its state when you reopen the conversation.
 
 A change list can set, on deals: title, stage, value, expected close date, probability, currency, temperature and notes. On todos: title, status, due date, bring-back date, star, context, priority, description and tags. Tags replace the whole list. Owners are not set by a change list; change a deal's or todo's owner on the record itself. Up to 200 rows fit on one card.
 
@@ -61,7 +61,7 @@ Long values show their first 120 characters; hover for the full value. Links, re
 
 Some rows are always refused: an archived deal, a deal Baker has not looked up in this conversation, moving a deal into or out of Won or Lost (close and reopen deals one at a time, so the date and reason are captured), and completing or reopening a repeating todo. A malformed row is listed as **row N**; other valid rows can still be approved. If all rows are refused, there is nothing to approve and no card.
 
-Each value row shows its own currency. If that currency changes before Approve or Undo, all changes for that deal are skipped or left alone. Amounts in different currencies are never added up, so the card shows no total.
+Each value row shows its own currency. If that currency changes before Approve or Undo, or the amount changes under a currency row, all changes for that deal are skipped or left alone. Amounts in different currencies are never added up, so the card shows no total.
 
 If the records are busy and the transaction fails, nothing changes. Ask Baker to send the change list again.
 

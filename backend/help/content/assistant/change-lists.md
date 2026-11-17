@@ -56,7 +56,7 @@ If every row is refused there is no card, and Baker is told why.
 Approve checks each record again. If any proposed field no longer holds the old value the
 card showed, all proposed changes for that record are skipped and reported as "changed since
 the card was shown". Other records still apply. A value change also requires the currency
-to match what the card showed.
+to match what the card showed, and a currency change the amount.
 
 If the records are busy and the transaction fails, nothing changes. Ask Baker to send the
 change list again.
@@ -65,7 +65,8 @@ change list again.
 
 After Approve the card shows how many changes were applied and an **Undo** button. One click
 puts every applied row back to its old value, in one transaction. If any applied field
-or a value row’s currency changed since, all changes for that record are left alone and listed. A batch can be undone once; after that the card reads
+(or the amount or currency beside it) changed since, all changes for that record are left alone
+and listed as "changed since it was applied". A batch can be undone once; after that the card reads
 Undone, also when the conversation is reopened. Baker cannot undo a batch itself; ask it and
 it will point you to the button. Only the person whose conversation it is can undo it.
 
