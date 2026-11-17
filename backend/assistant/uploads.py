@@ -3,8 +3,9 @@
 Extracts readable text from uploaded PDF / DOCX / XLSX / CSV / plain-text files
 so the assistant can read them. Extracted text is wrapped in untrusted-content
 delimiters (assistant/delimiters.py) and prepended into the user's message by the
-router. Document bytes are not stored or forwarded; extracted text persists in the
-user row. Photo bytes persist in assistant_message_images, linked to that row,
+router. CSV and XLSX bytes persist in assistant_message_files, linked to the user
+row, so lead import can re-read them by id; other document bytes are not stored.
+Extracted text persists in the user row. Photo bytes persist in assistant_message_images, linked to that row,
 whose text contains only a nonce-fenced placeholder. Adapted from Chatty's ``core/agents/tools/text_extraction.py``.
 
 Heavy parsers (pdfplumber / python-docx / openpyxl) are imported LAZILY inside
@@ -20,6 +21,7 @@ from assistant import delimiters
 # mirrors them (including IMAGE_EXTENSIONS) for a pre-submit UX check. Keep the two in sync.
 ALLOWED_EXTENSIONS = {"csv", "json", "xlsx", "md", "txt", "pdf", "docx"}
 IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
+STORED_EXTENSIONS = {"csv", "xlsx"}  # kept so a tool can re-read them (#370)
 IMAGE_MIMES = ("image/jpeg", "image/png", "image/webp")
 MAX_IMAGE_BYTES = 5 * 1024 * 1024 * 3 // 4  # Anthropic caps the base64 image at 5 MB; base64 adds a third
 MAX_IMAGE_EDGE = 8000
@@ -41,6 +43,10 @@ def _ext(filename: str) -> str:
 
 def is_image_name(filename: str) -> bool:
     return _ext(filename) in IMAGE_EXTENSIONS
+
+
+def is_stored_name(filename: str) -> bool:
+    return _ext(filename) in STORED_EXTENSIONS
 
 
 def read_image(filename: str, data: bytes) -> dict:
@@ -164,7 +170,7 @@ def _extract_by_ext(ext: str, data: bytes, max_chars: int) -> str:
     return extract_plain(data, max_chars)
 
 
-def extract_upload(filename: str, data: bytes) -> str:
+def extract_upload(filename: str, data: bytes, attachment_id: str | None = None) -> str:
     """Extract text from one uploaded file and return a wrapped, tagged block.
 
     Raises UploadError (→ HTTP 400) on a disallowed extension or an unreadable
@@ -187,4 +193,4 @@ def extract_upload(filename: str, data: bytes) -> str:
     elif not text.strip():
         text = "(No extractable text found.)"
 
-    return delimiters.wrap_untrusted_file(filename, text)
+    return delimiters.wrap_untrusted_file(filename, text, attachment_id)

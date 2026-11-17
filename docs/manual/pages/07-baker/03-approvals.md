@@ -31,11 +31,12 @@ A few of those calls still ask, because of what they would do: archiving a conta
 
 ## What always asks in Ask mode
 
-Deleting, archiving, merging, bulk moves, change lists and bulk todo updates, recomputing lead scores, creating a Gmail draft, sending a notification, recording a memory fact, and any change to Baker's protected files. Anything new that has not been classified asks too.
+Deleting, archiving, merging, bulk moves, lead imports, change lists and bulk todo updates, recomputing lead scores, creating a Gmail draft, sending a notification, recording a memory fact, and any change to Baker's protected files. Anything new that has not been classified asks too.
 
 ## What asks even in Auto
 
 - **Writing Baker's protected files**, soul.md and MEMORY.md. These always ask, in every mode, and only an admin can change them. See [Memory](04-memory.md).
+- **Importing a lead list.** A lead import always shows one Approve card with the count and a sample, in every mode and from any conversation. See [Importing](../04-contacts-and-companies/06-importing.md).
 - **A change list.** One edit across many deals or todos always shows one card listing every change, in every mode. See "Changing many records at once" below.
 - **A conversation that has read outside content.** Once Baker has read an email, an uploaded file, a photo, or a todo that came in through the public quick-capture link while no token was set, every change it proposes asks for approval for the rest of that conversation, even after that message has scrolled out of view. Text someone else wrote can never quietly steer Baker into changing your data. The Telegram chat is one long conversation, so once it has read such outside content it asks before every change from then on. Within one step, Baker finishes its lookups before running changes, so a change proposed alongside an email read asks for approval too.
 

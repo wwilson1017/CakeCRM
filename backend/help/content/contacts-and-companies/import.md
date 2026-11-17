@@ -6,6 +6,9 @@ admin: false
 ---
 ## Two paths
 
+This import makes contacts only. To bring in companies, contacts and deals from a lead
+list in one step, ask Baker: see `contacts-and-companies/lead-import`.
+
 - **Deterministic** — a `.csv` file, or a vCard `.vcf` file. No AI, no key, same result every
   time.
 - **Assisted** — anything else (JSON, plain text, tab-separated, or a CSV too malformed to

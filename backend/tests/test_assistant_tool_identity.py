@@ -296,3 +296,14 @@ def test_shared_where_builders_understand_the_sentinel(builder, args):
     assert "owner_id" not in everyone
     assert "owner_id IS NULL" in unowned and 7 not in unowned_params
     assert "owner_id = %s" in mine and mine_params[-1] == 7
+
+
+@pytest.mark.parametrize("user,expected", [(USER, 7), (None, None)])
+@pytest.mark.parametrize("tool,method,args", [
+    ("crm_preview_lead_import", "preview", {"text": "Name\nAna"}),
+    ("crm_execute_lead_import", "execute", {"batch_id": "b"}),
+])
+def test_lead_import_identity_is_server_bound(crm_executors, user, expected, tool, method, args):
+    with patch.object(tools.lead_import, method, return_value={"error": "stub"}) as call:
+        assert crm_executors(user)[tool](**args, user_id=99) == {"error": "stub"}
+    assert call.call_args.kwargs["user_id"] == expected

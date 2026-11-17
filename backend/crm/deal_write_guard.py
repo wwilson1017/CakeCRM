@@ -52,8 +52,13 @@ def _current_epoch():
     return row["updated_at"] if row else None
 
 
+# The lead-import preview (#370) returns rows from an uploaded list, never a CRM deal.
+_NOT_FINDERS = frozenset({"crm_preview_lead_import"})
+
+
 def _records_finds(name: str, is_write: bool) -> bool:
-    return name.startswith("crm_") and (not is_write or name == "crm_create_deal")
+    return (name.startswith("crm_") and name not in _NOT_FINDERS
+            and (not is_write or name == "crm_create_deal"))
 
 
 def epoch_before(name: str, is_write: bool):

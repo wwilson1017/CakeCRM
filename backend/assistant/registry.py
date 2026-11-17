@@ -77,6 +77,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 
+from assistant import delimiters
 from assistant.confirm_tier import ROUTINE
 from context_files.tools import get_context_file_tools
 from crm import deal_write_guard
@@ -185,9 +186,11 @@ class ToolRegistry:
         # todo sources' reads — Postgres only, the same service calls REST handlers already
         # run concurrently. By SOURCE, so a Gmail or other connection read can never join by
         # accident. Every find-recording read is in here, which is what lets the engine
-        # defer their bookkeeping (``run_read_sync`` / ``record_deals``).
+        # defer their bookkeeping (``run_read_sync`` / ``record_deals``). An untrusted-source
+        # CRM read (the lead-import preview, #370) stays in the ordered lane like Gmail.
         self.parallel_reads: frozenset[str] = frozenset(
-            d["name"] for defs, _ in (crm_source, gtd_source) for d in defs if not d["writes"]
+            d["name"] for defs, _ in (crm_source, gtd_source) for d in defs
+            if not d["writes"] and d["name"] not in delimiters.UNTRUSTED_SOURCE_TOOLS
         )
 
     def next_tool_batch(self) -> None:
