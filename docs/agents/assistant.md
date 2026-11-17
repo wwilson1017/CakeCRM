@@ -899,7 +899,7 @@ placeholder's `summary` and `change_batch_id` onto the `confirm` event, and
   Undo cannot remove). Stage-only refusals: unknown record type, a field outside
   `change_list.FIELDS`, a value its write path would not store (`_normalize` calls
   `gtd_common.validate_*`, `normalize_deal_temperature`, `update_deal`'s clamp), the same
-  record and field twice, a value already held, a missing owner, and the #332 find-first rule
+  record and field twice, a value already held, and the #332 find-first rule
   (`deal_write_guard.unfound`), which here refuses the ROW. `deal_write_guard.refusal`
   does not see nested ids, so it never refuses the whole call for them. Malformed rows
   become refused `row N` entries; only invalid whole lists and missing identity refuse the call.
@@ -932,9 +932,10 @@ placeholder's `summary` and `change_batch_id` onto the `confirm` event, and
 Not ported or left out: contacts, companies and custom fields (no cursor-taking writers);
 contact/company/deal links (company follow-merge gate precedes record locks); completed
 (status is the one spelling); repeat/auto-star settings (completion can spawn an occurrence);
-projects (assigning by name can create one); closing or reopening deals; retries on deadlock.
-Notes/descriptions use validate_notes; tags use validate_tags as a whole-list replacement;
-nullable owner ids must name existing users, read once at stage.
+projects (assigning by name can create one); owners (assigned by name, one record at a
+time, through `_resolve_owner(require_active=True)`, #237); closing or reopening deals;
+retries on deadlock.
+Notes/descriptions use validate_notes; tags use validate_tags as a whole-list replacement.
 
 Tests: `test_change_list.py`, the #371 block in `test_assistant_engine.py`,
 `test_integration_change_list_pg.py` (50 rows, refusals, stale row, Undo, ownership,

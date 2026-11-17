@@ -17,8 +17,6 @@ TODO = {"status": "next_action", "repeat": ""}
 
 @pytest.mark.parametrize("kind, field, value, stored", [
     ("deal", "notes", "Long notes", "Long notes"),
-    ("deal", "owner_id", 7, 7),
-    ("todo", "owner_id", None, None),
     ("todo", "description", None, ""),
     ("todo", "tags", [" first ", "", "second"], ["first", "second"]),
     ("todo", "tags", None, []),
@@ -45,8 +43,7 @@ def test_a_value_is_stored_as_its_write_path_would_store_it(kind, field, value, 
 
 @pytest.mark.parametrize("kind, field, value", [
     ("deal", "notes", "x" * 20001), ("todo", "description", "x" * 20001),
-    ("deal", "owner_id", True), ("deal", "owner_id", 0), ("todo", "owner_id", "7"),
-    ("todo", "owner_id", -7), ("todo", "tags", "first"), ("todo", "tags", [1]),
+    ("todo", "tags", "first"), ("todo", "tags", [1]),
     ("deal", "title", "   "), ("deal", "title", 5),
     ("deal", "stage", "won"), ("deal", "stage", "lost"), ("deal", "stage", "nope"),
     ("deal", "value", -1), ("deal", "value", "5000"), ("deal", "value", True),

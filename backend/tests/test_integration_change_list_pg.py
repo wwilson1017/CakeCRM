@@ -391,18 +391,17 @@ def test_malformed_rows_are_listed_beside_valid_rows_and_all_refused_has_no_card
     assert pg_fetchone("SELECT COUNT(*) AS n FROM assistant_change_batches")["n"] == 1
 
 
-def test_notes_descriptions_tags_and_owners_apply_and_undo_without_text_in_summary():
+def test_notes_descriptions_and_tags_apply_and_undo_without_text_in_summary():
     deal = service.create_deal(title="Private deal title", notes="Private old notes", owner_id=7)["id"]
     todo = service.create_todo(title="Private todo title", description="Private old description",
                                tags=["old"], owner_id=7)["id"]
     registry = chat(found=[deal])
     changes = [row("deal", deal, "notes", "Private new notes"),
                row("deal", deal, "title", "Private new deal title"),
-               row("deal", deal, "owner_id", None),
+               row("deal", deal, "deal_temperature", "hot"),
                row("todo", todo, "description", "Private new description"),
                row("todo", todo, "title", "Private new todo title"),
                row("todo", todo, "tags", [" new ", "second"]),
-               row("todo", todo, "owner_id", 8),
                row("todo", todo, "context", "@calls"),
                row("todo", todo, "star", True), row("todo", todo, "priority", "high")]
     staged = cl.stage({"changes": changes}, registry)
@@ -410,16 +409,16 @@ def test_notes_descriptions_tags_and_owners_apply_and_undo_without_text_in_summa
     assert "Private" not in json.dumps(staged)
     assert len(staged["summary"]["lines"]) == 5
     assert approve(registry, batch_id)["applied"] == len(changes)
-    assert (deal_row(deal)["notes"], deal_row(deal)["owner_id"]) == ("Private new notes", None)
+    assert (deal_row(deal)["notes"], deal_row(deal)["owner_id"]) == ("Private new notes", 7)
     got = pg_fetchone("SELECT * FROM todos WHERE id = %s", (todo,))
-    assert (got["description"], got["tags"], got["owner_id"]) == ("Private new description", ["new", "second"], 8)
+    assert (got["description"], got["tags"], got["owner_id"]) == ("Private new description", ["new", "second"], 7)
     assert cl.undo(batch_id, user_id=7)["status"] == "undone"
     assert (deal_row(deal)["notes"], deal_row(deal)["owner_id"]) == ("Private old notes", 7)
     got = pg_fetchone("SELECT * FROM todos WHERE id = %s", (todo,))
     assert (got["description"], got["tags"], got["owner_id"]) == ("Private old description", ["old"], 7)
-    missing = cl.stage({"changes": [row("deal", deal, "owner_id", 999999),
-                                   row("todo", todo, "owner_id", 999999)]}, registry)
-    assert missing["refused"] == [f"deal {deal} owner_id: no such user", f"todo {todo} owner_id: no such user"]
+    owners = cl.stage({"changes": [row("deal", deal, "owner_id", 8),
+                                  row("todo", todo, "owner_id", 8)]}, registry)
+    assert all("owner_id cannot be set in a change list" in r for r in owners["refused"])
 
 
 @pytest.mark.parametrize("error", ["LockNotAvailable", "QueryCanceled", "DeadlockDetected"])

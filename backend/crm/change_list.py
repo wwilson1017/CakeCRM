@@ -55,18 +55,20 @@ REASON_MAX = 300
 SUMMARY_BUDGET = 1300
 RESULT_BUDGET = 1800
 
-#: What one change list may set. Every other column keeps its single-record tool.
+#: What one change list may set. Every other column keeps its single-record tool; owners
+#: stay out because they are assigned by name, one record at a time, through
+#: tools._resolve_owner(require_active=True).
 FIELDS = {
     "deal": ("title", "stage", "value", "expected_close_date", "probability", "currency",
-             "deal_temperature", "notes", "owner_id"),
+             "deal_temperature", "notes"),
     "todo": ("title", "status", "due_date", "bring_back_on", "star", "context", "priority",
-             "description", "tags", "owner_id"),
+             "description", "tags"),
 }
 _READ = {
     "deal": "SELECT id, title, stage, archived_at, value, expected_close_date, probability, "
-            "currency, deal_temperature, notes, owner_id FROM deals WHERE id = ANY(%s) ORDER BY id",
+            "currency, deal_temperature, notes FROM deals WHERE id = ANY(%s) ORDER BY id",
     "todo": "SELECT id, title, status, due_date, bring_back_on, star, context, priority, "
-            "repeat, description, tags, owner_id FROM todos WHERE id = ANY(%s) ORDER BY id",
+            "repeat, description, tags FROM todos WHERE id = ANY(%s) ORDER BY id",
 }
 
 CHANGED = "changed since the card was shown"
@@ -86,10 +88,6 @@ _TRANSITIONS = {
 
 def _normalize(kind: str, field: str, value):
     """``value`` as the target write path stores it; ValueError says what is wrong."""
-    if field == "owner_id":
-        if value is not None and (type(value) is not int or value <= 0):
-            raise ValueError("owner_id must be a positive integer or null")
-        return value
     if field in ("notes", "description"):
         return gtd_common.validate_notes(value)
     if kind == "todo":
@@ -257,10 +255,6 @@ def _stage(args, registry) -> dict:
     with get_connection() as conn:
         cur = conn.cursor()
         current = {kind: _read(cur, kind, ids[kind], lock=False) for kind in FIELDS}
-        owner_ids = sorted({c["value"] for c in valid if c["field"] == "owner_id"
-                            and type(c["value"]) is int and c["value"] > 0})
-        cur.execute("SELECT id FROM users WHERE id = ANY(%s) ORDER BY id", (owner_ids,))
-        users = {r[0] for r in cur.fetchall()}
     # The #332 rule per ROW: a deal no earlier batch of this chat found is a refused row,
     # not a refused call (the guard's own check ignores this tool's nested ids).
     unfound = set(deal_write_guard.unfound(registry, sorted(ids["deal"]))) if ids["deal"] else set()
@@ -294,8 +288,7 @@ def _stage(args, registry) -> dict:
             except ValueError as e:
                 row["reason"] = str(e)[:200]
                 continue
-            reason = ("no such user" if field == "owner_id" and new is not None and new not in users
-                      else _blocked(kind, record, field, new))
+            reason = _blocked(kind, record, field, new)
             if record is not None:
                 row["old"], row["new"] = record[field], new
                 if reason is None and record[field] == new:

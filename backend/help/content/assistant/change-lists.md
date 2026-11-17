@@ -25,11 +25,11 @@ refused rows; the full list and Undo are in the app.
 ## What a change list can set
 
 - **Deals:** title, stage (open stages only), value, expected close date, probability,
-  currency, temperature, notes and owner.
-- **Todos:** title, status, due date, bring-back date, star, context, priority, description, tags and owner.
+  currency, temperature and notes.
+- **Todos:** title, status, due date, bring-back date, star, context, priority, description and tags.
 
-Up to 200 rows on one card. Tags replace the whole list. An owner is an existing user id,
-or empty to unassign. Long values show their first 120 characters; hover to read the full
+Up to 200 rows on one card. Tags replace the whole list. Owners are not set by a change
+list: Baker assigns them by name, one record at a time. Long values show their first 120 characters; hover to read the full
 value. Titles, notes and descriptions are omitted from the Telegram sample.
 
 Links to contacts, companies or deals stay outside change lists because re-linking follows
@@ -46,7 +46,7 @@ Contacts, companies and custom fields are not available here either.
   one at a time, so the date and the reason are captured;
 - completing or reopening a repeating todo, because that creates its next occurrence;
 - a field outside the lists above, a value the field does not accept, the same record and
-  field listed twice, a value the record already has, or an owner who does not exist;
+  field listed twice, or a value the record already has;
 - a malformed row, listed as **row N** with its reason. Other valid rows can still be approved.
 
 If every row is refused there is no card, and Baker is told why.
