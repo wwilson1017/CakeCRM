@@ -350,6 +350,7 @@
   blank-means-default fallback constant (same pattern as `personality`); the migration seeds
   **empty** content so a later boot can never overwrite an edited soul, and the constant is
   scanned by `test_prompt_genericization.py`.
+  Listing and search resolve a blank soul's size and headline from the same built-in text as `read_file`, using Python `.strip()` for blankness (#384).
   Security: writes carry `writes:true` (so `background_allowlist()` excludes them — asserted
   explicitly, not left to the derivation), and a write to a **protected** file additionally
   **always confirms, power mode included**, via `context_files.tools.requires_confirmation()`
