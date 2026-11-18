@@ -450,7 +450,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 
 <p>The columns are Deal, Company, Stage, Value, % Closed, Score, Touches, Forecasted close, Closed on, Last contact and Owner. Click a row to open the deal. The Touches column needs an AI provider and is empty without one.</p>
 <h2>Sorting</h2>
-<p><strong>Sort</strong> orders the deals by Board order, Deal, Company, Value, % Closed, Lead score, Touches, Forecasted close date, Closed on, Last contact or Owner. The arrow beside it flips between ascending and descending.</p>
+<p><strong>Sort</strong> orders the deals by Board order, Deal, Company, Value, % Closed, Lead score, Touches, Forecasted close date, Closed on, Last contact or Owner. The arrow beside it flips between ascending and descending. Board order is stage, then lead score, then most recently updated; logging an activity on an open deal counts as an update.</p>
 <h2>Filters</h2>
 <p>Press <strong>Filters</strong> to open the filter panel. The button shows how many filters are on, for example "Filters (2)", and <strong>Clear filters</strong> turns them all off along with the search.</p>
 <div class="wrap"><table>
@@ -679,7 +679,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <tbody>
 <tr>
 <td>stale</td>
-<td>Nothing has touched it for 14 days</td>
+<td>No standard-field edit, logged activity (such as a call, email or meeting), or live non-system note for 14 days. A never-touched deal goes stale once it is older than this window</td>
 </tr>
 <tr>
 <td>stuck in stage</td>

@@ -35,7 +35,7 @@ Baker can check a deal's health and report these flags, and only these:
 
 | Flag | Meaning |
 |---|---|
-| stale | Nothing has touched it for 14 days |
+| stale | No standard-field edit, logged activity (such as a call, email or meeting), or live non-system note for 14 days. A never-touched deal goes stale once it is older than this window |
 | stuck in stage | It has sat in the same stage for 30 days |
 | no next step | It has no open todo |
 | overdue todo | It has a todo past its due date |
