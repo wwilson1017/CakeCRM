@@ -125,7 +125,7 @@ def test_gmail_error_records_error_state_never_raises(monkeypatch, connected):
 
 def test_first_sight_match_logs_email_touch(monkeypatch, fake_conn):
     conn = fake_conn(monkeypatch, gs,
-                     fetchone_results=[("m1",), (7,), (99,)],  # claim, contact, activity id
+                     fetchone_results=[("m1",), (7,), (99, datetime(2026, 7, 1, tzinfo=timezone.utc))],  # claim, contact, activity id
                      fetchall_results=[[(3,)]])                # exactly one open deal
     msg = {"id": "m1", "from": "Dana <dana@client.com>", "subject": "Hi"}
     out = gs._process_message(msg, "me@own.com")
@@ -138,7 +138,11 @@ def test_first_sight_match_logs_email_touch(monkeypatch, fake_conn):
     # scan could log an email touch onto a deal the user has already put away.
     assert "archived_at IS NULL" in stmts[2]
     assert "INSERT INTO activity_log" in stmts[3] and "'email'" in stmts[3]
-    assert "outcome = 'logged'" in stmts[4]
+    assert "GREATEST(updated_at, %s)" in stmts[4]
+    assert "stage NOT IN ('won', 'lost')" in stmts[4]
+    assert "archived_at IS NULL" in stmts[4]
+    assert conn.executed[4][1] == (datetime(2026, 7, 1, tzinfo=timezone.utc), 3)
+    assert "outcome = 'logged'" in stmts[5]
     # activity insert params: (note, contact_id, deal_id, occurred_at)
     activity_params = conn.executed[3][1]
     assert activity_params[0] == "Inbound email from dana@client.com: Hi"
@@ -154,7 +158,7 @@ def test_duplicate_message_short_circuits(monkeypatch, fake_conn):
 
 def test_sender_match_is_case_insensitive(monkeypatch, fake_conn):
     conn = fake_conn(monkeypatch, gs,
-                     fetchone_results=[("m1",), (7,), (99,)],
+                     fetchone_results=[("m1",), (7,), (99, datetime(2026, 7, 1, tzinfo=timezone.utc))],
                      fetchall_results=[[(3,)]])
     gs._process_message({"id": "m1", "from": "Dana <Dana@Client.COM>", "subject": "x"}, "me@own.com")
     assert conn.executed[0][1][1] == "dana@client.com"          # claim stores lowercased
@@ -163,7 +167,7 @@ def test_sender_match_is_case_insensitive(monkeypatch, fake_conn):
 
 def test_zero_open_deals_logs_contact_only(monkeypatch, fake_conn):
     conn = fake_conn(monkeypatch, gs,
-                     fetchone_results=[("m1",), (7,), (99,)],
+                     fetchone_results=[("m1",), (7,), (99, datetime(2026, 7, 1, tzinfo=timezone.utc))],
                      fetchall_results=[[]])                      # no open deals
     out = gs._process_message({"id": "m1", "from": "a@b.com", "subject": "x"}, "me@own.com")
     assert out == {"outcome": "logged", "deal_id": None}
@@ -172,7 +176,7 @@ def test_zero_open_deals_logs_contact_only(monkeypatch, fake_conn):
 
 def test_multiple_open_deals_logs_contact_only(monkeypatch, fake_conn):
     conn = fake_conn(monkeypatch, gs,
-                     fetchone_results=[("m1",), (7,), (99,)],
+                     fetchone_results=[("m1",), (7,), (99, datetime(2026, 7, 1, tzinfo=timezone.utc))],
                      fetchall_results=[[(3,), (4,)]])            # ambiguous → no fabrication
     out = gs._process_message({"id": "m1", "from": "a@b.com", "subject": "x"}, "me@own.com")
     assert out == {"outcome": "logged", "deal_id": None}

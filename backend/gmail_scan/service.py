@@ -65,6 +65,7 @@ from alerts import service as alerts
 from core.config import settings
 from core.postgres import get_connection, pg_execute
 from crm import touch_count_service
+from crm.service import LIVE_PREDICATE, OPEN_PREDICATE
 from gmail import ops, store
 from gmail.client import call_gmail
 
@@ -319,10 +320,17 @@ def _process_message(msg: dict, own_email: str) -> dict:
             occurred_at = _parse_occurred_at(msg.get("date", ""))
             cur.execute(
                 "INSERT INTO activity_log (activity, note, contact_id, deal_id, created_at) "
-                "VALUES ('email', %s, %s, %s, COALESCE(%s::timestamptz, now())) RETURNING id",
+                "VALUES ('email', %s, %s, %s, COALESCE(%s::timestamptz, now())) RETURNING id, created_at",
                 (note, contact_id, deal_id, occurred_at),
             )
-            activity_id = cur.fetchone()[0]
+            activity_id, activity_created_at = cur.fetchone()
+            if deal_id is not None:
+                # Message dates can predate edits; never move the deal clock backwards.
+                cur.execute(
+                    "UPDATE deals SET updated_at = GREATEST(updated_at, %s) "
+                    f"WHERE id = %s AND {OPEN_PREDICATE} AND {LIVE_PREDICATE}",
+                    (activity_created_at, deal_id),
+                )
             cur.execute(
                 "UPDATE gmail_scanned_messages SET outcome = 'logged', contact_id = %s, "
                 "deal_id = %s, activity_id = %s WHERE message_id = %s",
