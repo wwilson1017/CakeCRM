@@ -59,7 +59,7 @@ def seed_demo_data(conn) -> bool:
         return False
 
     # ── Companies ────────────────────────────────────────────────────────────
-    # Seeded before contacts/deals so the FK links below resolve. Fixed ids 1-6
+    # Seeded before contacts/deals so the FK links below resolve. Fixed ids 1-9
     # mirror the distinct non-empty company names on the demo contacts.
     cur.executemany(
         """INSERT INTO companies
@@ -84,6 +84,15 @@ def seed_demo_data(conn) -> bool:
             (6, "Mike's Meals", "mikesmeals.com", "Food Service", "(555) 901-2345",
              "Food truck (mobile)", "Popular food truck. Discussed a collab pop-up event.",
              "event", "active", _ts(25), _ts(8)),
+            (7, "Lakeside Coffee", "lakesidecoffee.com", "Cafe", "(555) 012-3456",
+             "12 Lakeshore Dr", "Two-location cafe. Wants a daily pastry case before the 6am open.",
+             "referral", "active", _ts(16), _ts(2)),
+            (8, "Blake & Daughters Events", "blakeevents.com", "Events", "(555) 123-4567",
+             "310 Mill St", "Event planners. Corporate holiday parties for a dozen local firms.",
+             "event", "active", _ts(11), _ts(3)),
+            (9, "Northside Schools", "northsideschools.org", "Education", "(555) 234-5679",
+             "1500 School Rd", "School district. Runs a fall fundraiser with cookie boxes.",
+             "website", "active", _ts(9), _ts(4)),
         ],
     )
 
@@ -136,17 +145,17 @@ def seed_demo_data(conn) -> bool:
             (9, "Priya Nair", "priya@lakesidecoffee.com", "(555) 012-3456",
              "Lakeside Coffee", "Owner", "referral", "active",
              "wholesale,cafe", "Two-location cafe. Wants a daily pastry case supplied before 6am.",
-             _ts(16), _ts(2), None),
+             _ts(16), _ts(2), 7),
 
             (10, "Owen Blake", "owen@blakeevents.com", "(555) 123-4567",
              "Blake & Daughters Events", "Events Director", "event", "active",
              "events,corporate", "Plans corporate holiday parties for a dozen local firms.",
-             _ts(11), _ts(3), None),
+             _ts(11), _ts(3), 8),
 
             (11, "Hannah Lee", "hannah@northsideschools.org", "(555) 234-5679",
              "Northside Schools", "Nutrition Coordinator", "website", "active",
              "schools,fundraiser", "Runs the district's fall fundraiser. Asked about cookie boxes.",
-             _ts(9), _ts(4), None),
+             _ts(9), _ts(4), 9),
         ],
     )
 
@@ -224,7 +233,7 @@ def seed_demo_data(conn) -> bool:
             (14, 9, "Lakeside Coffee pastry case", "negotiation", 3100.00,
              _ts(-9, 9)[:10], 70, "USD",
              "Daily case for two cafes, delivered before 6am. Haggling over the Sunday run.",
-             _ts(15), _ts(0), None),
+             _ts(15), _ts(0), 7),
 
             (15, 3, "Jam co-pack — Park Family Farms", "won", 1900.00,
              _ts(4, 9)[:10], 100, "USD",
@@ -234,17 +243,61 @@ def seed_demo_data(conn) -> bool:
             (16, 10, "Corporate holiday party desserts", "proposal", 2800.00,
              _ts(-18, 9)[:10], 60, "USD",
              "Plated desserts for a 90-seat dinner. Owen wants a menu draft this week.",
-             _ts(10), _ts(2), None),
+             _ts(10), _ts(2), 8),
 
             (17, 11, "School fundraiser cookie boxes", "lead", 800.00,
              _ts(-35, 9)[:10], 20, "USD",
              "Northside's fall fundraiser. Hannah asked for per-box pricing at three volumes.",
-             _ts(3), _ts(3), None),
+             _ts(3), _ts(3), 9),
         ],
     )
-    # #279: the sample Won deals carry a Closed on date like any deal won in the app (the
-    # seed writes no stage events, so the migration's backfill has nothing to date them by).
+    # ── Stage history (#383) ─────────────────────────────────────────────────
+    # What the app itself would have journaled: one row per stage MOVE and none for
+    # creation (`create_deal` writes no event), so the five deals still in lead have no
+    # rows. Each chain starts at lead, ends on the deal's current stage, and every
+    # instant sits between that deal's created_at and updated_at, so history never
+    # reads as a newer touch than the deal row. No day offset is 0: `_ts(0)` is 10:00
+    # UTC today, which is still in the future before then. Ids come from the sequence
+    # (nothing references them), so there is no setval for this table.
+    cur.executemany(
+        """INSERT INTO deal_stage_events (deal_id, old_stage, new_stage, changed_at)
+           VALUES (%s, %s, %s, %s)""",
+        [
+            (1, "lead", "qualified", _ts(34)),
+            (1, "qualified", "proposal", _ts(27)),
+            (1, "proposal", "negotiation", _ts(18)),
+            (1, "negotiation", "won", _ts(10)),
+            (2, "lead", "qualified", _ts(15)),
+            (2, "qualified", "proposal", _ts(8)),
+            (3, "lead", "qualified", _ts(10)),
+            (3, "qualified", "proposal", _ts(7)),
+            (3, "proposal", "negotiation", _ts(4)),
+            (4, "lead", "qualified", _ts(21)),
+            (7, "lead", "qualified", _ts(17)),
+            (7, "qualified", "lost", _ts(8)),
+            (8, "lead", "qualified", _ts(5)),
+            (9, "lead", "qualified", _ts(6)),
+            (9, "qualified", "proposal", _ts(3)),
+            (11, "lead", "qualified", _ts(4)),
+            (13, "lead", "qualified", _ts(4)),
+            (13, "qualified", "proposal", _ts(2)),
+            (14, "lead", "qualified", _ts(12)),
+            (14, "qualified", "proposal", _ts(8)),
+            (14, "proposal", "negotiation", _ts(3)),
+            (15, "lead", "qualified", _ts(24)),
+            (15, "qualified", "proposal", _ts(16)),
+            (15, "proposal", "negotiation", _ts(9)),
+            (15, "negotiation", "won", _ts(4)),
+            (16, "lead", "qualified", _ts(7)),
+            (16, "qualified", "proposal", _ts(3)),
+        ],
+    )
+    # #279: the sample Won deals carry a Closed on date like any deal won in the app:
+    # the day of the move into won, which the history above puts at `updated_at`.
     cur.execute("UPDATE deals SET closed_on = updated_at::date WHERE stage = 'won'")
+    # The lost deal says why, as `mark_deal_lost` would have recorded it (#383). It keeps
+    # no Closed on date: that column is Won-only (#279).
+    cur.execute("UPDATE deals SET lost_reason = %s WHERE id = 7", ("Scheduling conflicts",))
 
     # ── Todos ────────────────────────────────────────────────────────────────
     # `status`/`completed_at` are DERIVED from each row's `completed` flag rather than
@@ -448,5 +501,5 @@ def seed_demo_data(conn) -> bool:
             f"(SELECT COALESCE(MAX(id), 1) FROM {table}))"
         )
 
-    logger.info("CRM demo data seeded: 6 companies, 11 contacts, 17 deals, 16 todos, 16 activities")
+    logger.info("CRM demo data seeded: 9 companies, 11 contacts, 17 deals, 16 todos, 16 activities")
     return True

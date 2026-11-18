@@ -86,9 +86,11 @@ def test_merge_moves_fills_and_audits(pg_db):
               for name in ("Region", "Tier")]
     field_service.set_field_values("company", a, {str(fields[0]): "west", str(fields[1]): "source"}, "admin@example.test")
     field_service.set_field_values("company", s, {str(fields[0]): "", str(fields[1]): "kept"}, "admin@example.test")
+    # Snapshot after the activity: logging it on an open deal bumps that deal (#385), and
+    # what this pins is that the MERGE itself moves no updated_at.
+    activity = service.log_activity('call', 'Discussed next steps', contact_id=contacts[0], deal_id=deals[0])
     before_contacts = [service.get_contact(cid)['updated_at'] for cid in contacts]
     before_deals = [service.get_deal(did)['updated_at'] for did in deals]
-    activity = service.log_activity('call', 'Discussed next steps', contact_id=contacts[0], deal_id=deals[0])
     plan = merge.plan_merge(s, a)
     assert plan['moves'] == dict(contacts=2, deals=2, archived_deals=1, todos=1, notes=1, custom_fields=1)
     assert merge.merge_companies(s, a, actor_id=1, reason="same org") == plan

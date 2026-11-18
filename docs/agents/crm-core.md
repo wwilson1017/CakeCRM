@@ -1385,3 +1385,13 @@ and starting a fresh edit resets them. A failed deal write can leave the details
   title/totals and relocates Add Deal; an empty-board row keeps the arrow reachable so the
   header's recovery links can be restored. `useBoardScroller` absorbs the height change.
   Saved views and their storage version are unchanged.
+
+## Activity touches (#385)
+
+Logging activity advances an open, live deal's `updated_at` atomically with the insert.
+The Gmail scan uses the inserted activity's message date; both writers use `GREATEST`
+to avoid moving the clock backwards. Won/lost dates stay unchanged for
+`avg_days_to_close`, and archived dates retain the archive rule. The default deal list
+reflects this work; the board keeps stage, score, then recency ordering. Staleness is
+unchanged: `LAST_TOUCH_SQL` already includes edits, activity and live non-system notes,
+and an untouched deal's initial `updated_at` makes it stale after the window (14 days).

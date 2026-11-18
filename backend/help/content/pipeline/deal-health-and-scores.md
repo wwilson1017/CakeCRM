@@ -29,7 +29,7 @@ The score alone tells you nothing you can act on. Lead with the flags.
 `crm_get_deal_health` returns the score, the factors behind it, and a list of flags. The
 flags are exactly these, and no others:
 
-- **stale** — nothing has touched it for the staleness window, 14 days by default.
+- **stale** — no standard-field edit, logged activity (such as a call, email or meeting), or live non-system note within the staleness window, 14 days by default. A never-touched deal goes stale once it is older than that window.
 - **stuck in stage** — it has sat in the same stage for 30 days.
 - **no next step** — it has no open todo.
 - **overdue todo** — it has a todo past its due date.
