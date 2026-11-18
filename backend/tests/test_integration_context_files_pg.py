@@ -91,6 +91,31 @@ def test_migration_seeds_the_two_protected_files(pg_db):
     # assistant's own read tool and the Memory editor all show the identity that is live.
     assert service.read_file("soul.md")["content"] == DEFAULT_SOUL
     assert service.read_file("MEMORY.md")["content"] == ""
+    soul = next(row for row in service.list_files() if row["filename"] == "soul.md")
+    assert soul["size_chars"] == len(service.read_file("soul.md")["content"])
+    assert soul["headline"] == service._first_headline(DEFAULT_SOUL)
+    assert "_soul_content" not in soul
+
+
+@pytest.mark.parametrize("content", ["  \n\t", "# Rewritten\nA searchable identity"])
+def test_soul_metadata_matches_read_content(pg_db, content):
+    from context_files import service
+
+    try:
+        service.write_file("soul.md", content)
+        effective = service.read_file("soul.md")["content"]
+        soul = next(row for row in service.list_files() if row["filename"] == "soul.md")
+        assert soul["size_chars"] == len(effective)
+        assert soul["headline"] == service._first_headline(effective)
+        assert "_soul_content" not in soul
+        if content.strip():
+            hit = next(row for row in service.search_files("searchable") if row["filename"] == "soul.md")
+            assert hit["size_chars"] == len(content)
+            assert hit["headline"] == service._first_headline(content)
+            assert hit["rank"] > 0
+            assert "_soul_content" not in hit
+    finally:
+        service.write_file("soul.md", "")
 
 
 def test_kind_is_generated_and_cannot_drift(pg_db):

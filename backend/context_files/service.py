@@ -64,7 +64,11 @@ _ISO_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 _LIVE = "archived_at IS NULL"
 _COLUMNS = "id, filename, kind, content, headline, is_protected, written_by, created_at, updated_at"
-_META_COLUMNS = "id, filename, kind, headline, is_protected, written_by, created_at, updated_at, length(content) AS size_chars"
+_META_COLUMNS = (
+    "id, filename, kind, headline, is_protected, written_by, created_at, updated_at, "
+    "length(content) AS size_chars, "
+    "CASE WHEN filename = 'soul.md' THEN content END AS _soul_content"
+)
 
 
 class ContextFileError(Exception):
@@ -208,6 +212,18 @@ def _first_headline(content: str) -> str:
 
 # ── reads ─────────────────────────────────────────────────────────────────────────
 
+def _resolve_blank_soul_meta(rows: list[dict]) -> list[dict]:
+    """Describe the same effective soul body as read_file, without exposing bodies."""
+    for row in rows:
+        content = row.pop("_soul_content", None)
+        if row["filename"] == SOUL_FILE and not (content or "").strip():
+            from assistant.identity import DEFAULT_SOUL
+
+            row["size_chars"] = len(DEFAULT_SOUL)
+            row["headline"] = _first_headline(DEFAULT_SOUL)
+    return rows
+
+
 def list_files(kind: str | None = None, include_archived: bool = False, limit: int = 200) -> list[dict]:
     """File metadata (no bodies), newest first. Bodies are fetched one at a time."""
     where = [] if include_archived else [_LIVE]
@@ -222,11 +238,11 @@ def list_files(kind: str | None = None, include_archived: bool = False, limit: i
     # share a `now()` `updated_at` exactly — the head of this list is a guaranteed tie,
     # not a rare one. (The topic/daily manifests below need no such term: they already
     # end on `filename`, which is UNIQUE.)
-    return pg_fetchall(
+    return _resolve_blank_soul_meta(pg_fetchall(
         f"SELECT {_META_COLUMNS} FROM assistant_context_files {clause} "
         f"ORDER BY is_protected DESC, updated_at DESC, id DESC LIMIT %s",
         tuple(params),
-    )
+    ))
 
 
 def read_file(filename: str) -> dict | None:
@@ -275,13 +291,13 @@ def search_files(query: str, limit: int = 20) -> list[dict]:
     if not tsquery:
         return []
     capped = max(1, min(int(limit or 20), SEARCH_LIMIT_CAP))
-    return pg_fetchall(
+    return _resolve_blank_soul_meta(pg_fetchall(
         f"SELECT {_META_COLUMNS}, ts_rank(search_tsv, to_tsquery('simple', %s)) AS rank "
         f"FROM assistant_context_files "
         f"WHERE {_LIVE} AND search_tsv @@ to_tsquery('simple', %s) "
         f"ORDER BY rank DESC, updated_at DESC, id DESC LIMIT %s",
         (tsquery, tsquery, capped),
-    )
+    ))
 
 
 def topic_manifest() -> list[dict]:
