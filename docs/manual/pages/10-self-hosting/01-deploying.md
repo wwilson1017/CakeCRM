@@ -39,7 +39,7 @@ python run.py
 | `ENCRYPTION_KEY` | Encrypts AI keys, the Gmail secret and other stored credentials. Keep it stable. |
 | `AUTH_PASSWORD_RESET` | Emergency admin password reset. See [First admin and passwords](02-first-admin-and-passwords.md). |
 | `HEARTBEAT_ENABLED` | Baker's scheduled background work. On by default on Railway, off for a local run. |
-| `BACKEND_URL` | Your public address, if you run behind your own domain or proxy. Gmail's redirect URI is built from it. |
+| `BACKEND_URL` | Your public address, if you run behind your own domain or proxy. Gmail's redirect URI is built from it, and ChatGPT and Claude sign in to it when people connect their own AI tool (it must be https for that). |
 
 The full list, with comments, is in `.env.example` in the repository.
 

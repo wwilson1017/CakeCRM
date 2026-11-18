@@ -1,6 +1,6 @@
 ---
 title: Personal settings
-summary: Notifications, your password, how the pipeline board opens, linking your own Telegram, and installing CakeCRM on your phone.
+summary: Notifications, your password, how the pipeline board opens, linking your own Telegram, installing CakeCRM on your phone, and connecting your own AI tool.
 shots: [settings-personal]
 ---
 
@@ -54,6 +54,17 @@ On **Chrome or Edge on a computer**, click the install icon at the right end of 
 Open CakeCRM from its home-screen icon from then on. There is nothing to download from an app store; the card confirms when you are using the installed app. If installation is missing, use an **https://** address and, on iPhone, Safari rather than an in-app browser.
 
 The [no-login todo app](../05-todos/11-no-login-links.md) can have its own home-screen icon: sign the phone in through **Todo app devices**, then follow the same steps on the todo page.
+
+## Connect an AI tool
+
+Connect an AI tool you already use, such as ChatGPT, Claude, Claude Code or Codex, so it can work in CakeCRM as you. It sees what you can see, and what it adds or changes is recorded as you, made through that tool. CakeCRM needs no AI keys for this. Members can connect once an admin has switched it on under [Workspace settings](03-workspace.md); admins always can.
+
+- **ChatGPT or Claude**: copy the address on the card and add it as a connector in the app. A CakeCRM window opens. Sign in, check which app is asking, choose **Read and write** or **Read only**, and press **Allow**. This needs your CakeCRM to have a public https address; the card says so if it has none.
+- **Coding tools**: create a personal token with a name, Read and write or Read only, and an expiry of 30 days, 90 days, a year or never. It is shown once, so copy it. Pick your tool on the card to get the exact command or settings block with the token filled in.
+
+Tools that archive, merge, drop, change many records at once or set reminders ask you before they run. A connected tool never sees Gmail, never deletes a contact, and never changes Baker's notes or memory.
+
+Each connection shows when it was connected and last used. **Calls** lists what it did over the last 90 days, without what it asked or got back. **Revoke** disconnects it at once and takes it off the list, log included, so check **Calls** first. A password change disconnects all of your tools.
 
 ## Light and dark
 
