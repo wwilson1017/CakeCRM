@@ -67,10 +67,6 @@ class CapReached(Exception):
     """The seat already has MAX_CONNECTIONS_PER_SEAT connections."""
 
 
-class _Dead(Exception):
-    """Raised inside a transaction to roll it back when the connection is dead."""
-
-
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -512,42 +508,41 @@ def rotate_refresh(token_hash: str, scopes: list[str], *, now: datetime | None =
     None when the token was already spent. Dropping `crm:write` makes the connection
     read-only for good."""
     now = now or _utcnow()
-    try:
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """DELETE FROM mcp_credentials WHERE token_hash = %s AND kind = 'refresh'
-                   RETURNING connection_id""",
-                (token_hash,),
-            )
-            spent = cur.fetchone()
-            if spent is None:
-                return None
-            cur.execute(
-                f"""SELECT {_JUDGED_COLUMNS}
-                      FROM mcp_connections c
-                      JOIN users u ON u.id = c.user_id
-                      CROSS JOIN crm_meta m
-                     WHERE c.id = %s AND m.id = 1
-                     FOR UPDATE OF c""",
-                (spent[0],),
-            )
-            row = _row(cur)
-            if row is None or _judge(row, now=now) is None:
-                raise _Dead()
-            cur.execute(
-                "DELETE FROM mcp_credentials WHERE connection_id = %s AND kind = 'access'",
-                (spent[0],),
-            )
-            cur.execute(
-                """UPDATE mcp_connections
-                      SET last_used_at = %s, read_only = read_only OR %s
-                    WHERE id = %s""",
-                (now, "crm:write" not in scopes, spent[0]),
-            )
-            return _token_pair_cur(cur, spent[0], " ".join(scopes), now)
-    except _Dead:
-        return None
+    with get_connection() as conn:
+        cur = conn.cursor()
+        # Parent before child, the order a revoke's cascade takes, so the two cannot deadlock.
+        cur.execute(
+            f"""SELECT {_JUDGED_COLUMNS}
+                  FROM mcp_connections c
+                  JOIN users u ON u.id = c.user_id
+                  CROSS JOIN crm_meta m
+                 WHERE c.id = (SELECT connection_id FROM mcp_credentials
+                                WHERE token_hash = %s AND kind = 'refresh')
+                   AND m.id = 1
+                 FOR UPDATE OF c""",
+            (token_hash,),
+        )
+        row = _row(cur)
+        if row is None or _judge(row, now=now) is None:
+            return None
+        cur.execute(
+            "DELETE FROM mcp_credentials WHERE token_hash = %s AND kind = 'refresh'",
+            (token_hash,),
+        )
+        if cur.rowcount != 1:
+            return None  # a racing refresh spent it first
+        connection_id = row["id"]
+        cur.execute(
+            "DELETE FROM mcp_credentials WHERE connection_id = %s AND kind = 'access'",
+            (connection_id,),
+        )
+        cur.execute(
+            """UPDATE mcp_connections
+                  SET last_used_at = %s, read_only = read_only OR %s
+                WHERE id = %s""",
+            (now, "crm:write" not in scopes, connection_id),
+        )
+        return _token_pair_cur(cur, connection_id, " ".join(scopes), now)
 
 
 # ── Maintenance ──────────────────────────────────────────────────────────────

@@ -99,8 +99,9 @@ they age out but are no longer listed anywhere (#390 tracks keeping them viewabl
 in one query; `store._judge` is the single refusal predicate (inactive, epoch moved, token or
 connection expired, OAuth idle 90 days, member while the switch is off). Every refusal is
 the same 401. The hermetic fakes call `_judge` too, so they exercise the real rules. Refresh
-rotation re-judges inside its own transaction and rolls back (the refresh token survives)
-when the connection is dead; codes and consent requests are consumed with
+rotation locks and re-judges the connection before it spends the refresh token (parent
+before child, the order a revoke's cascade takes, so the two cannot deadlock), and spends
+nothing when the connection is dead; codes and consent requests are consumed with
 `DELETE ... RETURNING`; per-seat creates take `pg_advisory_xact_lock(3220, user_id)` and
 count only live connections against the cap of 25.
 

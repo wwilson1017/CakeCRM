@@ -250,6 +250,34 @@ def test_two_refreshes_racing_leave_exactly_one_live_pair(seats):
     assert _one("SELECT count(*) FROM mcp_credentials WHERE kind = 'refresh'")[0] == 1
 
 
+def test_a_refresh_racing_a_revoke_waits_for_it_instead_of_deadlocking(seats, pg_db):
+    """A revoke locks the connection, then cascades to its credentials. The refresh must
+    take the same order; spending the credential first deadlocked against the cascade."""
+    import time
+
+    member, _ = seats
+    first = _oauth(member)
+    cid = _one("SELECT connection_id FROM mcp_credentials WHERE kind = 'refresh'")[0]
+    revoker = psycopg2.connect(pg_db)
+    rcur = revoker.cursor()
+    rcur.execute("SELECT id FROM mcp_connections WHERE id = %s FOR UPDATE", (cid,))
+    results = []
+    t = threading.Thread(target=lambda: results.append(
+        store.rotate_refresh(store.hash_token(first["refresh_token"]), ["crm:read"], now=NOW)))
+    t.start()
+    for _ in range(100):  # until the refresh is queued on a lock
+        if _one("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+                "AND wait_event_type = 'Lock'")[0]:
+            break
+        time.sleep(0.05)
+    rcur.execute("DELETE FROM mcp_connections WHERE id = %s", (cid,))
+    revoker.commit()
+    revoker.close()
+    t.join(timeout=10)
+    assert results == [None]
+    assert _one("SELECT count(*) FROM mcp_credentials")[0] == 0
+
+
 def test_a_refresh_on_a_dead_connection_fails_without_spending_the_token(seats):
     member, _ = seats
     first = _oauth(member)
