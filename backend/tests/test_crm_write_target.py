@@ -307,7 +307,9 @@ def test_a_delete_reads_its_target_before_the_row_is_gone(monkeypatch, lookups):
         return True
 
     monkeypatch.setattr(crm, "delete_contact", delete)
-    assert tools.crm_delete_contact(4)["target"]["title"] == "Ana"
+    target = tools.crm_delete_contact(4)["target"]
+    assert target["title"] == "Ana"
+    assert "url" not in target, "a deleted contact has no page to link to"
 
 
 def test_an_activity_on_a_missing_record_is_a_named_refusal(monkeypatch, lookups):

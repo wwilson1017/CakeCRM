@@ -1721,6 +1721,7 @@ def crm_delete_contact(contact_id: int) -> dict:
     # the write where naming the wrong record costs the most.
     target = _lookup_target("contact", contact_id)
     if crm.delete_contact(contact_id):
+        target.pop("url", None)  # the page is gone with the row; a dead link is worse than none
         return {"deleted": True, "contact_id": contact_id, "target": target}
     return {"error": f"Contact {contact_id} not found"}
 
