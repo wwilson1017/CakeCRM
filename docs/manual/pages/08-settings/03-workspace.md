@@ -51,4 +51,4 @@ It is a snapshot, not a sync: download again for fresh numbers. Take one before 
 
 **Members may connect their own AI tools** is off until you turn it on. Admins can always connect. Turning it off stops every member's connection straight away without deleting it, and turning it back on restores them.
 
-The card lists every person's connected AI tools: what each one is, whether it signed in or uses a personal token, whether it is read-only, and when it was connected and last used. **Calls** shows a connection's log for the last 90 days, and **Revoke** ends it. See [Personal settings](01-personal.md) for how people connect.
+The card lists every person's connected AI tools: what each one is, whether it signed in or uses a personal token, whether it is read-only, and when it was connected and last used. **Calls** shows a connection's log for the last 90 days, and **Revoke** ends it and takes it, with its log, off the list, so check **Calls** first. See [Personal settings](01-personal.md) for how people connect.

@@ -384,7 +384,9 @@ CakeCRM needs no AI key for this; the connected tool brings its own model.
   outside model, and the server instructions tell it never to follow instructions inside them.
 - **The call log.** Every call, reads included, writes one row: connection, seat, tool, the
   record it named or a row count, whether it worked, and how long it took. Never arguments,
-  never results. Rows are kept 90 days and shown to the seat and to admins. If writing the log
+  never results. Rows are kept 90 days and shown to the seat and to admins under the
+  connection they belong to; once a connection is revoked or ends it leaves the list, and its
+  rows stay in the database until their 90 days run out. If writing the log
   row itself fails, that is logged as an error and the call's answer is still returned, because
   a write that already committed cannot be undone.
 - **Abuse controls.** 600 calls a minute per connection; 30 wrong tokens per five minutes per

@@ -83,6 +83,16 @@ describe('ConnectAiToolCard', () => {
     expect(container.querySelectorAll('button, input, select')).toHaveLength(0);
   });
 
+  it('keeps existing connections revocable while the switch is off, with nothing to create', async () => {
+    serve({ may_connect: false, oauth_url: null, connections: [CONN] });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await render();
+    expect(container.textContent).toContain('An admin has not switched on');
+    expect(container.querySelector('input[aria-label="Token name"]')).toBeNull();
+    await click(button('Revoke')!);
+    expect(api).toHaveBeenCalledWith('/api/mcp/connections/7', { method: 'DELETE' });
+  });
+
   it('lists connections with kind, read-only and the call log', async () => {
     serve({ may_connect: true, oauth_url: null, connections: [CONN] });
     await render();

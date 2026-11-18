@@ -51,6 +51,7 @@ any change to the assistant's notes files or remembered facts.
 Every connection is listed on the card with when it was connected and last used. **Calls**
 shows its log for the last 90 days: which tool it used, which record (or how many rows), whether
 it worked and how long it took. The log never records what the tool asked or what it got back.
+Check **Calls** before you revoke: a revoked connection leaves the list, and its log with it.
 
 **Revoke** disconnects a tool at once. A connection also ends when its token expires, when a
 signed-in app goes 90 days unused, when your password changes or your account is deactivated,

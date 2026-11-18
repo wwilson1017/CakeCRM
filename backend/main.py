@@ -45,6 +45,7 @@ from crm.todo_web import (
 )
 from gmail.router import router as gmail_router
 from heartbeat.router import router as heartbeat_router
+from mcp_endpoint import server as mcp_server
 from mcp_endpoint.oauth import build_routes as build_mcp_routes, oauth_base_url
 from mcp_endpoint.router import router as mcp_router
 from memory.router import router as memory_router
@@ -250,8 +251,9 @@ MAX_REQUEST_BYTES = 64 * 1024 * 1024
 # tight is 413ing a correct upload, and the cost of being loose is 64 KB.
 MULTIPART_ENVELOPE_BYTES = 64 * 1024
 
-# The /mcp ceiling (#322): far above any JSON-RPC tool call, far below the backstop.
-MCP_REQUEST_BYTES = 1_000_000
+# The /mcp ceiling (#322): far above any JSON-RPC tool call, far below the backstop. A
+# chunked /mcp body is counted against the same number inside the endpoint.
+MCP_REQUEST_BYTES = mcp_server.MCP_REQUEST_BYTES
 
 # Every upload route's admission ceiling, because for a multipart body the ceiling here is
 # the ONLY thing standing between a caller and a full spool-to-disk plus parse (see above:

@@ -41,6 +41,10 @@ logger = logging.getLogger(__name__)
 call_limiter = IPRateLimiter(window=60, max_hits=600)
 bad_token_limiter = IPRateLimiter(window=300, max_hits=30)
 
+# The /mcp body ceiling: far above any JSON-RPC tool call. main's Content-Length gate and
+# the SDK's streamed count (which also bounds a chunked body with no length) both use it.
+MCP_REQUEST_BYTES = 1_000_000
+
 _NO_STORE = {"Cache-Control": "no-store"}
 _DETAIL_ENTITIES = frozenset({"contact", "company", "deal", "todo", "project", "reminder"})
 
@@ -179,6 +183,7 @@ class McpEndpoint:
         scope.setdefault("state", {})["mcp"] = conn
         # A manager per request keeps the transport off the app lifespan (stateless: no
         # session survives the request anyway).
-        manager = StreamableHTTPSessionManager(app=server, stateless=True, json_response=True)
+        manager = StreamableHTTPSessionManager(app=server, stateless=True, json_response=True,
+                                             max_request_body_size=MCP_REQUEST_BYTES)
         async with manager.run():
             await manager.handle_request(scope, receive, send)

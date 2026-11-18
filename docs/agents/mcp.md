@@ -92,6 +92,8 @@ code carries the seat's epoch); `mcp_audit` (one row per call, never arguments o
 `crm_meta.mcp_members_enabled` is the admin switch. Credential tables are in
 `export.NOT_EXPORTED` and outside `_truncate_all`; `mcp_audit` is in `NOT_EXPORTED` and in
 both `_truncate_all` branches. The maintenance tick runs `store.sweep()`.
+Revoke and the per-seat sweep hard-delete the connection; its `mcp_audit` rows stay until
+they age out but are no longer listed anywhere (#390 tracks keeping them viewable).
 
 **The one lookup.** `store.resolve_bearer` joins credential, connection, seat and `crm_meta`
 in one query; `store._judge` is the single refusal predicate (inactive, epoch moved, token or

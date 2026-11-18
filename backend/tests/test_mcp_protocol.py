@@ -138,6 +138,21 @@ async def test_a_request_from_a_browser_origin_is_refused(fake):
     assert r.status_code == 403
 
 
+async def test_a_chunked_body_with_no_length_is_held_to_the_mcp_ceiling(fake):
+    fake.add("good")
+
+    async def chunks():
+        for _ in range(server.MCP_REQUEST_BYTES // 65536 + 2):
+            yield b" " * 65536
+
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=_app()), base_url=BASE) as c:
+        r = await c.post("/mcp", content=chunks(), headers={
+            "Authorization": "Bearer good", "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream"})
+    assert "content-length" not in r.request.headers
+    assert r.status_code == 413
+
+
 @pytest.mark.parametrize("mode", ["legacy", "auto"])
 async def test_a_personal_token_lists_and_calls_tools_as_its_seat(fake, executed, mode):
     fake.add("good")

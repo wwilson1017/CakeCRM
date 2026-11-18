@@ -64,7 +64,7 @@ Connect an AI tool you already use, such as ChatGPT, Claude, Claude Code or Code
 
 Tools that archive, merge, drop, change many records at once or set reminders ask you before they run. A connected tool never sees Gmail, never deletes a contact, and never changes Baker's notes or memory.
 
-Each connection shows when it was connected and last used. **Calls** lists what it did over the last 90 days, without what it asked or got back. **Revoke** disconnects it at once. A password change disconnects all of your tools.
+Each connection shows when it was connected and last used. **Calls** lists what it did over the last 90 days, without what it asked or got back. **Revoke** disconnects it at once and takes it off the list, log included, so check **Calls** first. A password change disconnects all of your tools.
 
 ## Light and dark
 

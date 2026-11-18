@@ -21,7 +21,8 @@ without deleting it, so turning it back on restores them as they were.
 The card lists every person's connected tools: the tool's name, whether it uses a personal
 token or signed in, whether it is read-only, when it was connected and when it was last used.
 **Calls** shows a connection's log for the last 90 days (tool, record or row count, result and
-time taken; never what it asked or got back). **Revoke** ends a connection at once.
+time taken; never what it asked or got back). **Revoke** ends a connection at once and takes it,
+with its log, off the list, so check **Calls** first.
 
 ## Why ChatGPT and Claude need a public address
 

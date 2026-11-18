@@ -91,15 +91,18 @@ export function ConnectAiToolCard({ isMobile }: { isMobile: boolean }) {
         </p>
       )}
 
+      {/* While the switch is off, existing connections stay listed so they can still be revoked. */}
+      {mine && (mine.may_connect || mine.connections.length > 0) && (
+        <AiConnectionRows
+          connections={mine.connections}
+          showSeat={false}
+          basePath="/api/mcp/connections"
+          onRevoked={id => setMine(m => (m ? { ...m, connections: m.connections.filter(c => c.id !== id) } : m))}
+        />
+      )}
+
       {mine?.may_connect && (
         <div>
-          <AiConnectionRows
-            connections={mine.connections}
-            showSeat={false}
-            basePath="/api/mcp/connections"
-            onRevoked={id => setMine(m => (m ? { ...m, connections: m.connections.filter(c => c.id !== id) } : m))}
-          />
-
           <h3 style={subhead}>ChatGPT or Claude</h3>
           {mine.oauth_url ? (
             <div>
