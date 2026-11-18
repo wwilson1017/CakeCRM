@@ -35,7 +35,8 @@ def test_seed_row_counts_match_the_dataset():
     conn = FakeConn(fetchone_results=[(0,)])
     seed_demo_data(conn)
     inserts = [sql for sql, _ in conn.executed if "INSERT INTO" in sql]
-    assert len(inserts) == 6  # one executemany per table (companies + the original 4 + crm_chatter)
+    # one executemany per table (companies + the original 4 + crm_chatter + deal_stage_events)
+    assert len(inserts) == 7
     stages = [row[3] for row in next(p for sql, p in conn.executed if "INSERT INTO deals" in sql)]
     # every open stage has at least three deals so a fresh board is never half empty
     for stage in ("lead", "qualified", "proposal"):
@@ -78,16 +79,21 @@ def test_seed_links_contacts_and_deals_to_companies():
     seed_demo_data(conn)
     batches = {sql.split("INSERT INTO ")[1].split()[0]: params
                for sql, params in conn.executed if "INSERT INTO" in sql}
-    # 6 companies with ids 1..6
-    assert [row[0] for row in batches["companies"]] == [1, 2, 3, 4, 5, 6]
+    # 9 companies with ids 1..9
+    assert [row[0] for row in batches["companies"]] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
     # contact company_id is the trailing column; matches the plan mapping
     contact_company = {row[0]: row[-1] for row in batches["contacts"]}
     assert contact_company == {1: 1, 2: None, 3: 2, 4: 3, 5: 4, 6: None, 7: 5, 8: 6,
-                               9: None, 10: None, 11: None}
+                               9: 7, 10: 8, 11: 9}
+    # #383: a contact's company TEXT and its linked record never disagree, and a contact
+    # with company text is never left unlinked (row[4] is the text, "" when there is none)
+    company_name = {row[0]: row[1] for row in batches["companies"]}
+    for row in batches["contacts"]:
+        assert company_name.get(row[-1], "") == row[4], row[1]
     # deal company_id mirrors each deal's contact's company
     deal_company = {row[0]: row[-1] for row in batches["deals"]}
     assert deal_company == {1: 1, 2: None, 3: 3, 4: 4, 5: 2, 6: None, 7: 6, 8: 1, 9: 3, 10: None,
-                            11: None, 12: 4, 13: 6, 14: None, 15: 2, 16: None, 17: None}
+                            11: None, 12: 4, 13: 6, 14: 7, 15: 2, 16: 8, 17: 9}
 
 
 def _seed_batches(conn):
@@ -140,3 +146,52 @@ def test_seed_never_passes_none_for_a_not_null_text_column():
         title, description, due_date = row[3], row[4], row[5]
         assert isinstance(description, str), (title, "description")
         assert isinstance(due_date, str), (title, "due_date")
+    # #383: every `companies` and `deal_stage_events` column the seed writes is NOT NULL.
+    for row in batches["companies"] + batches["deal_stage_events"]:
+        assert None not in row, row
+
+
+def test_seed_stage_history_matches_each_deals_stage():
+    """#383: pipeline analytics reads `deal_stage_events`, so a seed without them reports
+    an empty funnel beside a populated board. The rows are the ones the app would have
+    journaled — one per stage MOVE, none for creation — so a deal still in lead has none,
+    and every other deal's chain runs from lead to the stage it is in now. Each move is
+    dated inside the deal's own created_at..updated_at span: never in the future (`_ts(0)`
+    is 10:00 UTC today), and never newer than a touch the deal row already shows."""
+    conn = FakeConn(fetchone_results=[(0,)])
+    seed_demo_data(conn)
+    batches = _seed_batches(conn)
+    chains: dict[int, list[tuple]] = {}
+    for deal_id, old, new, at in batches["deal_stage_events"]:
+        chains.setdefault(deal_id, []).append((old, new, datetime.fromisoformat(at)))
+    deals = {row[0]: row for row in batches["deals"]}
+    assert set(chains) <= set(deals)
+    now = datetime.now(timezone.utc)
+    for deal_id, row in deals.items():
+        stage = row[3]
+        created, updated = datetime.fromisoformat(row[9]), datetime.fromisoformat(row[10])
+        chain = chains.get(deal_id, [])
+        if stage == "lead":
+            assert chain == [], deal_id
+            continue
+        assert chain[0][0] == "lead" and chain[-1][1] == stage, deal_id
+        assert all(a[1] == b[0] for a, b in zip(chain, chain[1:])), deal_id
+        assert all(old != new for old, new, _ in chain), deal_id
+        times = [at for _, _, at in chain]
+        assert all(a < b for a, b in zip(times, times[1:])), deal_id
+        assert created <= times[0] and times[-1] <= updated and times[-1] < now, deal_id
+        if stage == "won":  # the seed dates `closed_on` from `updated_at`: same day as the win
+            assert times[-1] == updated, deal_id
+
+
+def test_seed_closed_deals_carry_their_close_fields():
+    """#383: the lost deal says why; the won deals get their Closed on day. `closed_on` is
+    Won-only (#279) and `lost_reason` is NOT NULL with '' for unset, so those two writes
+    are the whole of it."""
+    conn = FakeConn(fetchone_results=[(0,)])
+    seed_demo_data(conn)
+    lost = [row[0] for row in _seed_batches(conn)["deals"] if row[3] == "lost"]
+    sql, params = next((s, p) for s, p in conn.executed if "SET lost_reason" in s)
+    assert lost == [7] and sql.endswith("WHERE id = 7")
+    assert isinstance(params[0], str) and params[0].strip()
+    assert any("SET closed_on = updated_at::date WHERE stage = 'won'" in s for s, _ in conn.executed)

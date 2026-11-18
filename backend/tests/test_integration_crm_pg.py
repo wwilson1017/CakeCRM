@@ -323,7 +323,7 @@ def test_seed_idempotent_and_sequences_advance(pg_db):
 
     out = service.load_sample_data()
     assert out == {"ok": True, "seeded": True}
-    assert pg_fetchone("SELECT COUNT(*) AS c FROM companies")["c"] == 6
+    assert pg_fetchone("SELECT COUNT(*) AS c FROM companies")["c"] == 9
     assert pg_fetchone("SELECT COUNT(*) AS c FROM contacts")["c"] == 11
     assert pg_fetchone("SELECT COUNT(*) AS c FROM deals")["c"] == 17
     assert pg_fetchone("SELECT COUNT(*) AS c FROM todos")["c"] == 16
@@ -344,7 +344,67 @@ def test_seed_idempotent_and_sequences_advance(pg_db):
 
     # the next real inserts get fresh ids — sequences advanced past the fixed demo ids
     assert service.create_contact("New Person")["id"] == 12
-    assert service.create_company("New Company")["id"] == 7
+    assert service.create_company("New Company")["id"] == 10
+
+
+def test_sample_data_has_stage_history_close_fields_and_company_links(pg_db):
+    """#383, against real Postgres and through the route the Load button calls — then
+    again after clear-all, which is how the demo instance is reset. The hermetic seed
+    tests see no NOT NULL, FK or sequence behaviour (#227), so this is the check that
+    the loader itself works and that pipeline analytics has something to read."""
+    from core.postgres import pg_fetchall, pg_fetchone
+    from crm import analytics_service
+
+    client = _client()
+
+    def count(sql):
+        return pg_fetchone(f"SELECT COUNT(*) AS c FROM {sql}")["c"]
+
+    for _ in range(2):
+        assert client.post("/api/crm/load-sample-data").json() == {"ok": True, "seeded": True}
+
+        # stage history: 27 moves, none in the future, each deal's newest move is its stage
+        assert count("deal_stage_events") == 27
+        assert count("deal_stage_events WHERE changed_at > now()") == 0
+        assert pg_fetchall(
+            """SELECT d.id FROM deals d
+                WHERE d.stage IS DISTINCT FROM COALESCE(
+                      (SELECT e.new_stage FROM deal_stage_events e WHERE e.deal_id = d.id
+                        ORDER BY e.changed_at DESC, e.id DESC LIMIT 1), 'lead')
+                ORDER BY d.id ASC""") == []
+
+        out = analytics_service.get_pipeline_analytics()
+        funnel = {s["stage"]: (s["entered"], s["won"], s["lost"]) for s in out["conversion"]}
+        # lead is 0 by design: the app journals moves, and these deals were created in lead
+        assert funnel == {"lead": (0, 0, 0), "qualified": (12, 2, 1),
+                          "proposal": (8, 2, 0), "negotiation": (4, 2, 0)}
+        samples = {s["stage"]: s["samples"] for s in out["time_in_stage"]}
+        assert samples == {"lead": 0, "qualified": 9, "proposal": 4, "negotiation": 2}
+        assert out["velocity"]["won_in_window"] == 2 and out["velocity"]["avg_days_to_won"] > 0
+
+        # closed deals: won ones dated on the day of their win, the lost one says why
+        closed = {r["id"]: r for r in pg_fetchall(
+            "SELECT id, stage, lost_reason, closed_on FROM deals "
+            "WHERE stage IN ('won', 'lost') ORDER BY id ASC")}
+        assert {i: r["stage"] for i, r in closed.items()} == {1: "won", 7: "lost", 15: "won"}
+        assert closed[7]["lost_reason"] == "Scheduling conflicts" and closed[7]["closed_on"] is None
+        assert all(closed[i]["closed_on"] and closed[i]["lost_reason"] == "" for i in (1, 15))
+        assert count(
+            "deals d WHERE d.stage = 'won' AND d.closed_on IS DISTINCT FROM "
+            "(SELECT MAX(e.changed_at)::date FROM deal_stage_events e "
+            "WHERE e.deal_id = d.id AND e.new_stage = 'won')") == 0
+        assert count("deals WHERE stage NOT IN ('won', 'lost') "
+                     "AND (closed_on IS NOT NULL OR lost_reason <> '')") == 0
+
+        # company links: no company text without a record, and deals follow their contact
+        assert count("contacts WHERE company <> '' AND company_id IS NULL") == 0
+        assert count("contacts c JOIN companies co ON co.id = c.company_id "
+                     "WHERE co.name <> c.company") == 0
+        assert count("deals d JOIN contacts c ON c.id = d.contact_id "
+                     "WHERE d.company_id IS DISTINCT FROM c.company_id") == 0
+
+        assert client.post("/api/crm/clear-all", json={"confirmation": "clear crm"}).status_code == 200
+        assert count("deal_stage_events") == 0
 
 
 # ── First-run demo state machine via the HTTP surface ─────────────────────────
