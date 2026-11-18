@@ -230,7 +230,8 @@ def test_contact_and_company_titles_come_from_the_name_column(monkeypatch, looku
         tools.field_service, "set_field_values", lambda et, eid, vals, who: {"ok": True},
     )
     result = tools.crm_set_contact_fields(4, {"tier": "gold"})
-    assert result["target"] == {"entity_type": "contact", "id": 4, "title": "Ana Lopez", "owner_id": None}
+    assert result["target"] == {"entity_type": "contact", "id": 4, "title": "Ana Lopez", "owner_id": None,
+                                "url": "/crm/contacts/4"}
 
 
 @pytest.mark.parametrize("args, expected", [
@@ -306,7 +307,9 @@ def test_a_delete_reads_its_target_before_the_row_is_gone(monkeypatch, lookups):
         return True
 
     monkeypatch.setattr(crm, "delete_contact", delete)
-    assert tools.crm_delete_contact(4)["target"]["title"] == "Ana"
+    target = tools.crm_delete_contact(4)["target"]
+    assert target["title"] == "Ana"
+    assert "url" not in target, "a deleted contact has no page to link to"
 
 
 def test_an_activity_on_a_missing_record_is_a_named_refusal(monkeypatch, lookups):

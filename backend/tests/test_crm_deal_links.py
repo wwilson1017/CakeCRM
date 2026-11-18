@@ -473,9 +473,8 @@ def test_get_contact_links_the_deals_it_embeds(absolute_base, monkeypatch):
     assert [d["url"] for d in contact["deals"]] == [
         absolute_base + FRONTEND_DEAL_PATH, absolute_base + "/crm/pipeline?deal=7",
     ]
-    # The contact itself is not a deal — its own id must not become a deal link, and
-    # neither must a todo's.
-    assert "url" not in contact
+    # The contact gets its own contact link (#386), never a deal link; a todo gets none.
+    assert contact["url"] == absolute_base + "/crm/contacts/5"
     assert "url" not in contact["todos"][0]
 
 
@@ -507,7 +506,7 @@ def test_analytics_links_the_stale_deals_beside_its_scalars(absolute_base, monke
     assert result["win_rate_pct"] == 40
 
 
-def test_find_duplicates_links_both_deals_in_a_group_and_leaves_contacts_alone(
+def test_find_duplicates_links_both_deals_and_contacts_to_their_own_routes(
     absolute_base, monkeypatch,
 ):
     """Deciding whether two same-titled cards are a duplicate means opening both. The
@@ -528,7 +527,7 @@ def test_find_duplicates_links_both_deals_in_a_group_and_leaves_contacts_alone(
         absolute_base + FRONTEND_DEAL_PATH, absolute_base + "/crm/pipeline?deal=7",
     ]
     # Same id, different entity — a contact must never be handed a deal link.
-    assert "url" not in result["contacts"][0]["records"][0]
+    assert result["contacts"][0]["records"][0]["url"] == absolute_base + "/crm/contacts/42"
 
 
 def test_scan_gaps_links_the_deals_it_asks_the_user_to_fix(absolute_base, monkeypatch):
@@ -546,7 +545,7 @@ def test_scan_gaps_links_the_deals_it_asks_the_user_to_fix(absolute_base, monkey
     )
     result = tools.crm_scan_gaps()
     assert result["deals"][0]["url"] == absolute_base + FRONTEND_DEAL_PATH
-    assert "url" not in result["contacts"][0]
+    assert result["contacts"][0]["url"] == absolute_base + "/crm/contacts/42"
     assert "url" not in result["unverified_fields"][0]
 
 

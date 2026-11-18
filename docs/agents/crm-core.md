@@ -1395,3 +1395,17 @@ to avoid moving the clock backwards. Won/lost dates stay unchanged for
 reflects this work; the board keeps stage, score, then recency ordering. Staleness is
 unchanged: `LAST_TOUCH_SQL` already includes edits, activity and live non-system notes,
 and an untouched deal's initial `updated_at` makes it stale after the window (14 days).
+
+## Landed #386: CRM tool consistency
+
+Baker and MCP share the tool-boundary rules in `crm/tools.py`: empty chatter, activity
+and record-filtered todo reads check existence before returning an empty list; missing
+records say `<Entity> <id> not found`, including custom fields and lead scores. Blank
+contact/company searches require another narrowing filter (status, non-blank contact
+tags, or owner); otherwise they point to the corresponding list tool.
+
+Contact/company records, nested company contacts, duplicate/gap rows, company merge
+plans and write targets carry `url` via `crm.links.with_record_url`, relative unless the
+public frontend address is configured. Shared tool description guidance tells callers
+to use those links as returned. Count/total and boolean field shapes, and contact
+staleness semantics, remain unchanged. No schema, route or help/manual flow changed.
