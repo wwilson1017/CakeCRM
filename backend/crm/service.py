@@ -1156,6 +1156,7 @@ _PIPELINE_LAST_CONTACT_LATERAL = f"""LEFT JOIN LATERAL (
 # ORDER BY, the window mode's partition ranking, and that window's outer ORDER BY. Ends
 # on the id term issue #58 requires; test_order_by_fragment_constants_are_total checks it.
 # (A keyset PAGE deliberately does NOT use this: its order is a cursor order, d.id ASC.)
+# Logging activity on an open deal bumps updated_at, so recency reflects that work.
 _PIPELINE_RECENCY_ORDER = "d.updated_at DESC, d.id DESC"
 
 
@@ -2710,10 +2711,21 @@ def log_activity(activity: str, note: str = "", contact_id: int | None = None,
     human performed, and Phase A does not thread identity into tool executors (that
     is Phase B). Those rows roll up as "Unattributed" rather than being credited to
     whoever happens to own the record.
+
+    Activity on an open, live deal also touches its updated_at atomically. Closed
+    deals keep their date for avg_days_to_close; archived deals keep the archive
+    rule that putting a deal away does not bump its date.
     """
     row = pg_fetchone(
-        """INSERT INTO activity_log (activity, note, contact_id, deal_id, actor_id)
-           VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+        f"""WITH ins AS (
+                INSERT INTO activity_log (activity, note, contact_id, deal_id, actor_id)
+                VALUES (%s, %s, %s, %s, %s) RETURNING id, deal_id, created_at
+            ), touched AS (
+                UPDATE deals d SET updated_at = GREATEST(d.updated_at, ins.created_at)
+                FROM ins WHERE d.id = ins.deal_id
+                  AND {OPEN_PREDICATE_D} AND {LIVE_PREDICATE_D}
+            )
+            SELECT id FROM ins""",
         (activity, note, contact_id, deal_id, actor_id),
     )
     result = pg_fetchone("SELECT * FROM activity_log WHERE id = %s", (row["id"],)) or {}
@@ -3412,7 +3424,8 @@ OPEN_PREDICATE = "stage NOT IN ('won', 'lost')"
 OPEN_PREDICATE_D = "d.stage NOT IN ('won', 'lost')"
 
 # "When was this deal last touched" — the newest of: any edit (updated_at), any logged
-# activity, any live non-system note. Requires the deals table aliased as `d`.
+# activity, any live non-system note. Open-deal activity also bumps updated_at.
+# Requires the deals table aliased as `d`.
 #
 # Shared by get_analytics (below) and analytics_service.get_stale_deals (issue #22), so
 # the dashboard's stale count and the assistant's stale-deal list can never disagree

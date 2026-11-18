@@ -16,7 +16,7 @@ The columns are Deal, Company, Stage, Value, % Closed, Score, Touches, Forecaste
 
 ## Sorting
 
-**Sort** orders the deals by Board order, Deal, Company, Value, % Closed, Lead score, Touches, Forecasted close date, Closed on, Last contact or Owner. The arrow beside it flips between ascending and descending.
+**Sort** orders the deals by Board order, Deal, Company, Value, % Closed, Lead score, Touches, Forecasted close date, Closed on, Last contact or Owner. The arrow beside it flips between ascending and descending. Board order is stage, then lead score, then most recently updated; logging an activity on an open deal counts as an update.
 
 ## Filters
 
