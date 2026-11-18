@@ -117,6 +117,33 @@ def test_the_fallback_is_soul_only(monkeypatch):
     assert service.read_file("MEMORY.md")["content"] == ""
 
 
+@pytest.mark.parametrize("reader", ["list", "search"])
+@pytest.mark.parametrize("content", ["", "  \n\t", "\u2003", "# Rewritten\nMy own words"])
+def test_metadata_resolves_only_blank_soul_and_preserves_response_keys(monkeypatch, reader, content):
+    from assistant.identity import DEFAULT_SOUL
+
+    rows = [
+        {
+            "filename": "soul.md", "size_chars": len(content),
+            "headline": service._first_headline(content), "_soul_content": content,
+        },
+        {"filename": "MEMORY.md", "size_chars": 0, "headline": "", "_soul_content": None},
+        {"filename": "topics/empty.md", "size_chars": 0, "headline": "", "_soul_content": None},
+    ]
+    if reader == "search":
+        for row in rows:
+            row["rank"] = 0.25
+    expected = [{k: v for k, v in row.items() if k != "_soul_content"} for row in rows]
+    if not content.strip():
+        expected[0].update(size_chars=len(DEFAULT_SOUL), headline=service._first_headline(DEFAULT_SOUL))
+    monkeypatch.setattr(service, "pg_fetchall", lambda *a, **k: rows)
+
+    result = service.list_files() if reader == "list" else service.search_files("soul")
+
+    assert result == expected
+    assert all("_soul_content" not in row for row in result)
+
+
 def test_write_file_rejects_non_string_content(monkeypatch):
     """Coercing to '' would let a schema-invalid but parseable {"content": []} ERASE the
     file — unconfirmed, for an ordinary topic file in power mode."""
