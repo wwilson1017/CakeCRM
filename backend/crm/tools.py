@@ -44,7 +44,7 @@ from crm import (
     service as crm,
 )
 from crm.gtd_common import TODO_STATUSES
-from crm.links import with_deal_url
+from crm.links import with_deal_url, with_record_url
 
 # Resolving an `owner` the model named as an email address. `users.service` imports only
 # `core.postgres`, so this adds no cycle — the same reasoning `crm.service` records for
@@ -403,7 +403,8 @@ CRM_TOOL_DEFS = [
             "the lost reason, which this tool does not. Deals already in the target "
             "stage are skipped, and deals that cannot move (archived, or no longer "
             "present) are reported individually while the rest still move. To change other "
-            "fields in the same request (a close date, a value), use crm_apply_change_list."
+            "fields in the same request (a close date, a value), use crm_apply_change_list "
+            "if it is available to you, otherwise crm_update_deal for each deal."
         ),
         "input_schema": {
             "type": "object",
@@ -1441,8 +1442,31 @@ CRM_DEAL_URL_TOOLS = frozenset({
 })
 
 
+CRM_RECORD_URL_GUIDANCE = (
+    " Each contact/company carries a `url` that opens it in the CRM; share it when "
+    "pointing at a specific record, using it exactly as returned, never constructing it."
+)
+CRM_RECORD_URL_TOOLS = frozenset({
+    "crm_find_contact",
+    "crm_list_contacts",
+    "crm_get_contact",
+    "crm_create_contact",
+    "crm_update_contact",
+    "crm_search_companies",
+    "crm_list_companies",
+    "crm_get_company",
+    "crm_create_company",
+    "crm_update_company",
+    "crm_get_contact_staleness",
+    "crm_find_duplicates",
+    "crm_scan_gaps",
+    "crm_preview_company_merge",
+    "crm_merge_companies",
+})
+
+
 def _apply_deal_url_guidance() -> None:
-    """Append ``CRM_DEAL_URL_GUIDANCE`` to every registered tool's description, once.
+    """Append deal and contact/company URL guidance to registered descriptions, once.
 
     ONE pass over the registry rather than an edit at each definition, so the guidance
     cannot be present on some deal tools and missing on others.
@@ -1456,6 +1480,8 @@ def _apply_deal_url_guidance() -> None:
     for tool in CRM_TOOL_DEFS:
         if tool["name"] in CRM_DEAL_URL_TOOLS and CRM_DEAL_URL_GUIDANCE not in tool["description"]:
             tool["description"] += CRM_DEAL_URL_GUIDANCE
+        if tool["name"] in CRM_RECORD_URL_TOOLS and CRM_RECORD_URL_GUIDANCE not in tool["description"]:
+            tool["description"] += CRM_RECORD_URL_GUIDANCE
 
 
 _apply_deal_url_guidance()
@@ -1495,7 +1521,7 @@ def _record_provenance(entity_type: str, entity_id: int, provided: dict, result:
 
 # ── Write targets (issue #236) ────────────────────────────────────────────────
 # Every write tool's SUCCESS result names the record it actually wrote, under `target`:
-# `{entity_type, id, title, owner_id}` plus `url` for deals. The blueprint's audit found
+# `{entity_type, id, title, owner_id}` plus `url` for deals, contacts and companies. The blueprint's audit found
 # notes logged against hallucinated deal ids — one of them another rep's deal — while the
 # results (`{"ok": true, "note": …}`) never said WHICH record was touched, so the model
 # narrated success against the deal the user had named and no transcript reader could see
@@ -1528,6 +1554,8 @@ def _target_from_record(entity_type: str | None, record: dict | None,
     }
     if entity_type == "deal":
         with_deal_url(target)  # the same int-not-bool guard, kept in one place
+    elif entity_type in {"contact", "company"}:
+        with_record_url(entity_type, target)
     return target
 
 
@@ -1607,6 +1635,10 @@ def _with_targets(result: dict, entity_type: str, ids: list) -> dict:
 
 # ── Contacts ──────────────────────────────────────────────────────────────────
 
+def _not_found(entity_type: str, entity_id: int) -> dict:
+    return {"error": f"{entity_type.capitalize()} {entity_id} not found"}
+
+
 def _bounded_limit(limit, default: int = 20, high: int = 100) -> int:
     """Clamp a model-supplied limit. The LLM writes these numbers, so an absurd value
     (or a string) must bound to something sane rather than reach the database."""
@@ -1620,9 +1652,16 @@ def crm_find_contact(
     query: str, status: str | None = None, tags: str | None = None, limit: int = 20,
     owner_id: int | str | None = None,
 ) -> dict:
+    query = (query or "").strip()
+    has_tags = any(tag.strip() for tag in (tags or "").split(","))
+    if not query and not status and not has_tags and owner_id is None:
+        return {"error": "Give a search term (a name, email, company or keyword). "
+                         "To browse every contact, use crm_list_contacts."}
     contacts = crm.search_contacts(
         query, status=status, tags=tags, limit=_bounded_limit(limit), owner_id=owner_id,
     )
+    for record in contacts:
+        with_record_url("contact", record)
     return {"contacts": contacts, "count": len(contacts)}
 
 
@@ -1638,6 +1677,7 @@ def crm_create_contact(name: str, **kwargs) -> dict:
     if not result:
         return {"error": "Contact could not be created"}
     _record_provenance("contact", result.get("id"), {"name": name, **kwargs}, result)
+    with_record_url("contact", result)
     return _with_target(result, "contact", result.get("id"), record=result)
 
 
@@ -1652,6 +1692,7 @@ def crm_update_contact(contact_id: int, actor_id: int | None = None, **kwargs) -
     if not result:
         return {"error": f"Contact {contact_id} not found"}
     _record_provenance("contact", contact_id, kwargs, result)
+    with_record_url("contact", result)
     return _with_target(result, "contact", contact_id, record=result)
 
 
@@ -1665,11 +1706,14 @@ def crm_get_contact(contact_id: int) -> dict:
     # because the guidance forbids inventing one, hands over nothing.
     for deal in result.get("deals") or []:
         with_deal_url(deal)
-    return result
+    return with_record_url("contact", result)
 
 
 def crm_list_contacts(status: str | None = None, limit: int = 50, offset: int = 0) -> dict:
-    return crm.list_contacts(offset=offset, limit=limit, status=status)
+    result = crm.list_contacts(offset=offset, limit=limit, status=status)
+    for record in result.get("contacts") or []:
+        with_record_url("contact", record)
+    return result
 
 
 def crm_delete_contact(contact_id: int) -> dict:
@@ -1990,6 +2034,10 @@ def crm_log_activity(
 
 def crm_get_activity_log(contact_id: int | None = None, deal_id: int | None = None, limit: int = 20) -> dict:
     activities = crm.get_activity_log(contact_id=contact_id, deal_id=deal_id, limit=limit)
+    if not activities:
+        for entity_type, entity_id in (("deal", deal_id), ("contact", contact_id)):
+            if entity_id is not None and not field_service.entity_exists(entity_type, entity_id):
+                return _not_found(entity_type, entity_id)
     return {"activities": activities, "count": len(activities)}
 
 
@@ -2012,6 +2060,10 @@ def crm_list_todos(
         contact_id=contact_id, deal_id=deal_id, completed=completed,
         due_before=due_before, priority=priority, limit=limit, owner_id=owner_id,
     )
+    if not todos:
+        for entity_type, entity_id in (("deal", deal_id), ("contact", contact_id)):
+            if entity_id is not None and not field_service.entity_exists(entity_type, entity_id):
+                return _not_found(entity_type, entity_id)
     return {"todos": todos, "count": len(todos)}
 
 
@@ -2041,9 +2093,15 @@ def crm_search_companies(
     query: str, status: str | None = None, limit: int = 20,
     owner_id: int | str | None = None,
 ) -> dict:
+    query = (query or "").strip()
+    if not query and not status and owner_id is None:
+        return {"error": "Give a search term (a name, domain or keyword). "
+                         "To browse every company, use crm_list_companies."}
     companies = crm.search_companies(
         query, status=status, limit=_bounded_limit(limit), owner_id=owner_id,
     )
+    for record in companies:
+        with_record_url("company", record)
     return {"companies": companies, "count": len(companies)}
 
 
@@ -2057,11 +2115,16 @@ def crm_get_company(company_id: int) -> dict:
     # company, so nobody looked at what its service returns.
     for deal in result.get("deals") or []:
         with_deal_url(deal)
-    return result
+    for contact in result.get("contacts") or []:
+        with_record_url("contact", contact)
+    return with_record_url("company", result)
 
 
 def crm_list_companies(status: str | None = None, limit: int = 50, offset: int = 0) -> dict:
-    return crm.list_companies(offset=offset, limit=limit, status=status)
+    result = crm.list_companies(offset=offset, limit=limit, status=status)
+    for record in result.get("companies") or []:
+        with_record_url("company", record)
+    return result
 
 
 def crm_create_company(name: str, **kwargs) -> dict:
@@ -2079,6 +2142,7 @@ def crm_create_company(name: str, **kwargs) -> dict:
         return {"error": str(e)}
     if not result:
         return {"error": "Company could not be created"}
+    with_record_url("company", result)
     return _with_target(result, "company", result.get("id"), record=result)
 
 
@@ -2092,12 +2156,16 @@ def crm_update_company(company_id: int, actor_id: int | None = None, **kwargs) -
         return {"error": str(e)}
     if not result:
         return {"error": f"Company {company_id} not found"}
+    with_record_url("company", result)
     return _with_target(result, "company", company_id, record=result)
 
 
 def crm_preview_company_merge(survivor_id: int, absorbed_id: int, rename_to: str | None = None) -> dict:
     try:
-        return company_merge_service.plan_merge(survivor_id, absorbed_id, rename_to=rename_to)
+        plan = company_merge_service.plan_merge(survivor_id, absorbed_id, rename_to=rename_to)
+        for key in ("survivor", "absorbed"):
+            with_record_url("company", plan.get(key))
+        return plan
     except (LookupError, ValueError) as e:
         return {"error": str(e)}
 
@@ -2112,6 +2180,8 @@ def crm_merge_companies(survivor_id: int, absorbed_id: int, reason: str = "",
         return {"error": str(e)}
     except psycopg2.errors.UniqueViolation:
         return {"error": "Another company already has that name"}
+    for key in ("survivor", "absorbed"):
+        with_record_url("company", plan.get(key))
     return _with_target({"ok": True, "merged_from": absorbed_id, "plan": plan}, "company", survivor_id)
 
 
@@ -2219,20 +2289,25 @@ def crm_get_stale_deals(
 def crm_get_contact_staleness(
     stale_days: int = 30, limit: int = 20, owner_id: int | str | None = None,
 ) -> dict:
-    return analytics_service.get_contact_staleness(
+    result = analytics_service.get_contact_staleness(
         stale_days=stale_days, limit=limit, owner_id=owner_id,
     )
+    for contact in result.get("contacts") or []:
+        with_record_url("contact", contact)
+    return result
 
 
 def crm_find_duplicates(entity_type: str = "all", limit: int = 20) -> dict:
     result = analytics_service.find_duplicates(entity_type=entity_type, limit=limit)
     # The deal groups name real deals, just nested one level deeper as `records` — and
-    # deciding whether two same-titled cards are a duplicate means opening both. Only
-    # the deal groups get links: `contacts` and `companies` come out of the same shaper
-    # but have no server-side link shape here (crm/links.py says why).
+    # deciding whether two same-titled cards are a duplicate means opening both.
     for group in result.get("deals") or []:
         for record in group.get("records") or []:
             with_deal_url(record)
+    for entity_type, key in (("contact", "contacts"), ("company", "companies")):
+        for group in result.get(key) or []:
+            for record in group.get("records") or []:
+                with_record_url(entity_type, record)
     return result
 
 
@@ -2244,6 +2319,9 @@ def crm_scan_gaps(entity_type: str = "all", limit: int = 20) -> dict:
     # types and keyed entity_id/entity_type, not a deal record.
     for deal in result.get("deals") or []:
         with_deal_url(deal)
+    for entity_type, key in (("contact", "contacts"), ("company", "companies")):
+        for record in result.get(key) or []:
+            with_record_url(entity_type, record)
     return result
 
 
@@ -2269,6 +2347,8 @@ def crm_get_chatter(
         )
     except ValueError as e:
         return {"error": str(e)}
+    if not notes and not field_service.entity_exists(entity_type, entity_id):
+        return _not_found(entity_type, entity_id)
     return {"notes": notes, "count": len(notes)}
 
 
@@ -2303,7 +2383,7 @@ def _get_entity_fields(entity_type: str, entity_id: int | None) -> dict:
         fields = [_normalize_field(d) for d in defs]
         return {"fields": fields, "total": len(fields)}
     if not field_service.entity_exists(entity_type, entity_id):
-        return {"error": f"{entity_type} {entity_id} not found"}
+        return _not_found(entity_type, entity_id)
     try:
         rows = field_service.get_field_values(entity_type, entity_id)
     except ValueError as e:
@@ -2323,7 +2403,7 @@ def _set_entity_fields(entity_type: str, entity_id: int, fields: dict) -> dict:
     if not isinstance(fields, dict) or not fields:
         return {"error": "No fields provided"}
     if not field_service.entity_exists(entity_type, entity_id):
-        return {"error": f"{entity_type} {entity_id} not found"}
+        return _not_found(entity_type, entity_id)
     try:
         defs = field_service.list_field_definitions(entity_type)
     except ValueError as e:
@@ -2400,7 +2480,7 @@ def crm_get_lead_score(entity_type: str, entity_id: int) -> dict:
     else:
         return {"error": f"invalid entity_type: {entity_type!r} (expected 'deal' or 'contact')"}
     if result is None:
-        return {"error": f"no {entity_type} with id {entity_id}"}
+        return _not_found(entity_type, entity_id)
     # stored_score = the persisted value (may lag the live compute until the next event/refresh).
     result["stored_score"] = stored.get("lead_score") if stored else None
     return result

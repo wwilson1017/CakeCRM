@@ -192,11 +192,16 @@ def test_crm_get_company_missing_returns_error(monkeypatch):
     assert tools.crm_get_company(999) == {"error": "Company 999 not found"}
 
 
-def test_crm_search_and_list_companies_pass_through(monkeypatch):
+def test_crm_search_and_list_companies_attach_links(monkeypatch):
     monkeypatch.setattr(service, "search_companies", lambda q, **kw: [{"id": 1}, {"id": 2}])
     monkeypatch.setattr(service, "list_companies", lambda **kw: {"companies": [{"id": 1}], "total": 1})
-    assert tools.crm_search_companies("acme") == {"companies": [{"id": 1}, {"id": 2}], "count": 2}
-    assert tools.crm_list_companies(status="active") == {"companies": [{"id": 1}], "total": 1}
+    assert tools.crm_search_companies("acme") == {
+        "companies": [{"id": 1, "url": "/crm/companies/1"}, {"id": 2, "url": "/crm/companies/2"}],
+        "count": 2,
+    }
+    assert tools.crm_list_companies(status="active") == {
+        "companies": [{"id": 1, "url": "/crm/companies/1"}], "total": 1,
+    }
 
 
 def test_contact_deal_tools_translate_fk_violation(monkeypatch):
@@ -296,7 +301,7 @@ def test_get_fields_no_id_lists_definitions(monkeypatch):
 
 def test_get_fields_with_missing_entity_returns_error(monkeypatch):
     monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: False)
-    assert tools.crm_get_contact_fields(999) == {"error": "contact 999 not found"}
+    assert tools.crm_get_contact_fields(999) == {"error": "Contact 999 not found"}
 
 
 def test_get_fields_with_id_returns_normalized_values(monkeypatch):
@@ -351,7 +356,7 @@ def test_set_fields_translates_service_valueerror(monkeypatch):
 
 def test_set_fields_missing_entity_returns_error(monkeypatch):
     monkeypatch.setattr(field_service, "entity_exists", lambda et, eid: False)
-    assert tools.crm_set_contact_fields(999, {"vip": "1"}) == {"error": "contact 999 not found"}
+    assert tools.crm_set_contact_fields(999, {"vip": "1"}) == {"error": "Contact 999 not found"}
 
 
 def test_set_fields_empty_map_returns_error():

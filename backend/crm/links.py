@@ -135,6 +135,13 @@ def with_deal_url(deal: dict | None) -> dict | None:
     return deal
 
 
+def with_record_url(entity_type: str, record: dict | None) -> dict | None:
+    """Twin of with_deal_url for contact/company records (#386), attached in place."""
+    if isinstance(record, dict) and type(record.get("id")) is int:
+        record["url"] = app_url(record_path(entity_type, record["id"]))
+    return record
+
+
 # ── Bare deal ids in outbound text (issue #238, port of the blueprint's #3175) ──────
 #
 # Baker's tool results carry a `url` for every deal (#145), but its prose still says
