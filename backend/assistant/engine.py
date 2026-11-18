@@ -35,7 +35,15 @@ import uuid
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
 
-from assistant import assembly, compaction, confirm_tier, delimiters, history, identity
+from assistant import (
+    assembly,
+    compaction,
+    confirm_tier,
+    delimiters,
+    history,
+    identity,
+    read_batch,
+)
 from assistant.write_budget import WRITE_BUDGET_PER_TURN, BudgetAction, BudgetState
 from context_files import prompt as context_prompt, tools as context_file_tools
 from memory import context as memory_context
@@ -223,6 +231,7 @@ async def chat(
     context: dict | None = None,
     page: dict | None = None,
     images: list[dict] | None = None,
+    files: list[dict] | None = None,
     *,
     user: dict | None,
 ) -> AsyncGenerator[str, None]:
@@ -230,6 +239,7 @@ async def chat(
 
     ``images`` are photos uploaded with this message, persisted beside its row;
     the assembler attaches them to the provider request.
+    ``files`` are CSV/XLSX uploads stored beside the user row so a tool can re-read them.
 
     ``messages`` carries only the newest user message (history lives server-side).
     An EMPTY ``messages`` with a ``conversation_id`` is a *continuation* — used to
@@ -259,7 +269,7 @@ async def chat(
     stop).
     """
     try:
-        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint, context, page, images, user):
+        async for line in _chat_impl(provider, registry, messages, tool_mode, conversation_id, title_hint, context, page, images, files, user):
             yield line
     except Exception:
         logger.exception("assistant.chat crashed mid-stream")
@@ -276,6 +286,7 @@ async def _chat_impl(
     context: dict | None = None,
     page: dict | None = None,
     images: list[dict] | None = None,
+    files: list[dict] | None = None,
     user: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     if tool_mode not in _VALID_MODES:
@@ -324,7 +335,7 @@ async def _chat_impl(
             # Fail-closed: if we can't record the user's message we can't assemble
             # reliable history, so don't proceed.
             await asyncio.to_thread(
-                history.save_message, conversation_id, user_msg_id, "user", user_text, images=images
+                history.save_message, conversation_id, user_msg_id, "user", user_text, images=images, files=files
             )
             # Durable half of the untrusted-content taint (#72 Phase 3). The scan below
             # reads the ASSEMBLED context, which compaction can empty of this row; the
@@ -551,7 +562,19 @@ async def _chat_impl(
         terminated = False
 
         registry.next_tool_batch()
-        for tc in tool_calls:
+        # Reads first (#372): every read in this batch has answered — the audited CRM and
+        # todo ones side by side, each under a timeout — before any write below is gated
+        # or run, whatever order the model listed them in. Their taint is applied HERE,
+        # ahead of the walk, so a write listed BEFORE a third-party read confirms too.
+        # The walk then records and emits everything in the model's order.
+        reads = await read_batch.run_reads(registry, tool_calls)
+        fenced = {
+            i: delimiters.fence_tool_result(tool_calls[i].get("name"), outcome.result)
+            for i, outcome in reads.items()
+        }
+        if any(tainted for _, tainted in fenced.values()):
+            turn_has_untrusted_reads = True
+        for i, tc in enumerate(tool_calls):
             name = tc.get("name")
             tool_use_id = tc.get("id")
             args = tc.get("args", {}) or {}
@@ -595,8 +618,28 @@ async def _chat_impl(
                     terminated = True
                     break
 
+            # A change list is validated and staged BEFORE its card (#371): the card shows
+            # the server's staged rows, a deal nobody searched for is a refused ROW there,
+            # and a list with nothing to apply is answered here with no card at all.
+            staged = None
+            if is_write and name == _CHANGE_LIST_TOOL:
+                from crm import change_list  # lazy: only this branch needs it
+
+                staged = await asyncio.to_thread(change_list.stage, args, registry)
+                if "error" in staged:
+                    async for line in _record_result(
+                        conversation_id, iter_msg_id, name, tool_use_id, results,
+                        {"ok": False, **staged}, 0,
+                    ):
+                        yield line
+                    continue
+
             # Confirmation gate (issues #4, #8, #72, #180). A write confirms when ANY of
             # these holds:
+            #   * it is a lead import (#370): a batch outlives its preview's conversation,
+            #     so the preview's taint alone cannot promise a card — every mode;
+            #   * it is a change list (#371, `staged` above): the card is the feature —
+            #     every mode;
             #   * it is a write to a PROTECTED context file (soul.md / MEMORY.md) —
             #     every mode, power included. `writes: True` alone is not enough there:
             #     a poisoned soul is not one bad record, it is a permanent system
@@ -615,7 +658,10 @@ async def _chat_impl(
             # never reaches here.
             # Persist the pending placeholder BEFORE emitting confirm (so /confirm can
             # find it), then wait for approval.
-            always_confirms = context_file_tools.requires_confirmation(name, args)
+            always_confirms = (
+                staged is not None or name in _SUMMARY_WRITE_TOOLS
+                or context_file_tools.requires_confirmation(name, args)
+            )
             # Routine by name, minus the call shapes that take a record out of view
             # (see confirm_tier.removes_from_view) — normal mode only; power is untouched.
             routine_exempt = registry.is_routine_write(name) and not confirm_tier.removes_from_view(name, args)
@@ -625,7 +671,7 @@ async def _chat_impl(
                 or turn_has_untrusted_reads
                 or (tool_mode == "normal" and not routine_exempt)
             ):
-                placeholder = await _pending_placeholder(name, args)
+                placeholder = await _pending_placeholder(name, args, user_id, staged)
                 try:
                     await asyncio.to_thread(
                         history.merge_tool_result, iter_msg_id, tool_use_id, name,
@@ -641,15 +687,22 @@ async def _chat_impl(
                     "type": "confirm", "tool": name, "args": args,
                     "tool_use_id": tool_use_id, "msg_id": iter_msg_id,
                     "description": registry.descriptions.get(name, name),
+                    **_card_summary(placeholder),
                 })
                 continue
 
-            # Execute (reads in any mode; writes in power mode).
-            t0 = time.monotonic()
+            # Execute (writes in power mode) or pick up the read that already ran.
             tool_count += 1
             last_tool = name
-            result = await registry.execute_tool(name, args)
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            if i in reads:
+                # Deals are recorded only now, as the result is recorded for the model: a
+                # read dropped by a timeout or an early exit above never becomes a find.
+                await read_batch.accept(registry, reads[i])
+                result, elapsed_ms = reads[i].result, reads[i].elapsed_ms
+            else:
+                t0 = time.monotonic()
+                result = await registry.execute_tool(name, args)
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
             # ONE call decides what the model is shown and whether this result carried
             # THIRD-PARTY text — shared with the background runner so the two loops can
             # never disagree (delimiters.fence_tool_result). It covers three fences: a
@@ -661,7 +714,7 @@ async def _chat_impl(
             #
             # `result` itself is untouched and is what the browser gets as `tool_end`, so
             # the tool-call preview shows the record rather than a wall of nonce tags.
-            content, tainted = delimiters.fence_tool_result(name, result)
+            content, tainted = fenced[i] if i in reads else delimiters.fence_tool_result(name, result)
             # Third-party text taints the rest of the turn and, via the nonce-fenced
             # marker persisted below, later turns too — so a prompt injection in an email
             # or in a stranger's capture can't silently drive an unconfirmed write. The
@@ -781,25 +834,50 @@ _CONNECTION_BOUND_WRITE_TOOLS = frozenset({"gmail_create_draft"})
 _VERSION_BOUND_WRITE_TOOLS = frozenset({"write_context_file"})
 
 
-async def _pending_placeholder(tool_name: str, args: dict | None) -> str:
+# The batch id alone cannot describe an import. Keep the server's summary on the
+# placeholder so both a live confirm event and a reloaded card show it (#370).
+_SUMMARY_WRITE_TOOLS = frozenset({"crm_execute_lead_import"})
+# Staged before its card and applied from that staged batch (#371). Deliberately NOT in
+# the set above: approving one of those taints the conversation, and a change list's
+# result carries no record text.
+_CHANGE_LIST_TOOL = "crm_apply_change_list"
+
+
+async def _pending_placeholder(
+    tool_name: str, args: dict | None, user_id: int | None = None, staged: dict | None = None,
+) -> str:
     """The pending-approval result to persist for a gated write.
 
     Plain PENDING_RESULT_JSON, except for a bound write, which also carries what it was
     proposed against — the live connection for Gmail, the row version for a context
-    file. Extra keys are safe: history's status helpers read only "status". Both binding
-    reads touch Postgres, so they are offloaded — this runs on the SSE event loop.
+    file, the server's summary for a lead import, or a change list's ``staged`` summary
+    and batch id (already built by the gate). Extra keys are safe: history's
+    status helpers read only "status". Binding reads touch Postgres, so they are
+    offloaded — this runs on the SSE event loop.
     """
-    if tool_name in _CONNECTION_BOUND_WRITE_TOOLS:
+    if staged is not None:
+        binding = staged
+    elif tool_name in _CONNECTION_BOUND_WRITE_TOOLS:
         from gmail import tools as gmail_tools  # lazy: keeps gmail out of engine import
 
         binding = await asyncio.to_thread(gmail_tools.pending_binding)
     elif tool_name in _VERSION_BOUND_WRITE_TOOLS:
         binding = await asyncio.to_thread(context_file_tools.pending_binding, args)
+    elif tool_name in _SUMMARY_WRITE_TOOLS:
+        from crm import lead_import
+
+        binding = await asyncio.to_thread(lead_import.pending_binding, args, user_id)
     else:
         return history.PENDING_RESULT_JSON
     if not binding:
         return history.PENDING_RESULT_JSON
     return json.dumps({"status": history.PENDING_STATUS, **binding})
+
+
+def _card_summary(placeholder: str) -> dict:
+    """The pending placeholder's summary and change-batch id, as extra confirm-event keys."""
+    pending = _parse_pending(placeholder)
+    return {key: pending[key] for key in ("summary", "change_batch_id") if pending.get(key)}
 
 
 def _parse_pending(pending_content: str | dict | None) -> dict:
@@ -882,6 +960,9 @@ def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decis
         existing = history.get_tool_result(conversation_id, tool_use_id, msg_id=msg_id)
         return {"status": "already_resolved", "result": existing}
     registry.conversation_id = conversation_id
+    # The batch a change-list card showed (#371); None for every other tool. It comes
+    # from the server's own placeholder, so the model cannot name a batch.
+    registry.change_batch_id = _parse_pending(claimed.get("content")).get("change_batch_id")
     claimed_msg_id, tool, args = claimed["msg_id"], claimed["tool"], claimed["args"]
     # Defense-in-depth: only a write should ever have been marked pending. If a
     # non-write somehow got here (a future bug in the gate), refuse rather than
@@ -920,7 +1001,9 @@ def resolve_confirmation(registry, conversation_id: str, tool_use_id: str, decis
     # loses only the prose framing on one already-approved write, and the static
     # untrusted-content instruction still tells it what a fence means everywhere else.
     _fenced, tainted = delimiters.fence_tool_result(tool, result)
-    if tainted:
+    # A lead import echoes deal titles taken from the uploaded list, and it may be
+    # approved from a conversation the preview never tainted (#370).
+    if tainted or tool in _SUMMARY_WRITE_TOOLS:
         # Best-effort, exactly as in the main loop — losing this must not strand an
         # approved write. The next turn's in-context scan is not a backstop here (nothing
         # was fenced), so this write IS the record; a failure degrades to the pre-#204

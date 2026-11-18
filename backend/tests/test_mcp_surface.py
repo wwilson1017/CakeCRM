@@ -25,6 +25,7 @@ NEVER = {
     "gmail_search", "gmail_read_thread", "gmail_create_draft", "notify_user",
     "crm_delete_contact", "memory_add_fact", "memory_invalidate_fact",
     "write_context_file", "delete_context_file", "append_daily_note",
+    "crm_apply_change_list",
 }
 
 
@@ -111,6 +112,7 @@ def test_the_exclusion_flags_synthetic_defs_and_passes_a_crm_read():
     assert surface.is_excluded({"name": "x", "kind": "memory", "writes": True})
     assert surface.is_excluded({"name": "x", "kind": "context", "writes": True})
     assert surface.is_excluded({"name": "crm_delete_contact", "kind": "integration", "writes": True})
+    assert surface.is_excluded({"name": "crm_apply_change_list", "kind": "integration", "writes": True})
     assert not surface.is_excluded({"name": "crm_find_contact", "kind": "integration", "writes": False})
     assert not surface.is_excluded({"name": "read_context_file", "kind": "context", "writes": False})
 

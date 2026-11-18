@@ -103,13 +103,18 @@ when the connection is dead; codes and consent requests are consumed with
 count only live connections against the cap of 25.
 
 **Surface.** `ToolRegistry(user=<seat>)` per request, minus `surface.is_excluded`: kinds
-`gmail` and `notification`, writes of kinds `memory` and `context`, and `crm_delete_contact`.
+`gmail` and `notification`, writes of kinds `memory` and `context`, `crm_delete_contact`, and
+`crm_apply_change_list` (#371: the engine stages its batch before the in-app Approve card and
+Undo is a button on that card, so outside the chat it can only refuse). A tool that needs the
+in-app chat to work (staging, the Approve card, a chat upload as its only input) joins
+`NEVER_CROSSES_NAMES`; one that also takes plain arguments crosses (`crm_preview_lead_import`
+takes pasted `text`; its `attachment_id` is seat-bound).
 Hints: reads `readOnlyHint`; routine writes not in `confirm_tier.HIDE_CAPABLE_TOOLS`
 `destructiveHint: false`; every other write `destructiveHint: true`; `openWorldHint: false`
 everywhere. A read-only connection is offered reads only, and `tools/call` refuses anything
 `tools/list` would not show. Results go through `delimiters.fence_tool_result`; the server
 `instructions` explain the fences. `tests/golden/mcp_surface.json` pins names, titles and
-hints in both todo modes (66 in GTD, 59 in normal); regenerate with
+hints in both todo modes (74 in GTD, 67 in normal); regenerate with
 `MCP_SURFACE_REGENERATE=1 python -m pytest -q tests/test_mcp_surface.py` and review the diff.
 
 **Provenance.** `crm.provenance_service.WRITE_SOURCE` is a context var the handlers set to

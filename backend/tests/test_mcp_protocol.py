@@ -187,7 +187,7 @@ async def test_a_read_only_connection_lists_no_write_and_a_write_is_refused_and_
 
 
 @pytest.mark.parametrize("name", ["gmail_search", "crm_delete_contact", "memory_add_fact",
-                                  "write_context_file", "notify_user"])
+                                  "write_context_file", "notify_user", "crm_apply_change_list"])
 async def test_an_excluded_tool_is_refused_even_though_the_registry_has_it(fake, executed, name):
     fake.add("good", seat=fake_admin(), role="admin")
     async with _client("good") as client:

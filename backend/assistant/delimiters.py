@@ -28,10 +28,13 @@ def _wrap(tag: str, attrs: str, text: str) -> str:
     )
 
 
-def wrap_untrusted_file(filename: str, text: str) -> str:
+def wrap_untrusted_file(filename: str, text: str, attachment_id: str | None = None) -> str:
     """Wrap extracted upload text in a nonce-fenced untrusted-content block."""
     safe_name = html.escape(filename or "upload", quote=True)
-    return _wrap("untrusted_file_content", f' filename="{safe_name}"', text)
+    attrs = f' filename="{safe_name}"'
+    if attachment_id:
+        attrs += f' attachment_id="{html.escape(attachment_id, quote=True)}"'
+    return _wrap("untrusted_file_content", attrs, text)
 
 
 IMAGE_PLACEHOLDER = "(photo attached)"
@@ -166,7 +169,11 @@ def strip_conversation_summary(text: str) -> str:
 # same content back to the model as raw JSON.
 #
 # Read tools whose output is untrusted EXTERNAL content (issue #8).
-UNTRUSTED_SOURCE_TOOLS = frozenset({"gmail_search", "gmail_read_thread"})
+# Lead previews return uploaded/pasted rows, possibly from another conversation of the
+# seat. Fence and taint them so every later write confirms, Auto included (#370).
+UNTRUSTED_SOURCE_TOOLS = frozenset({
+    "gmail_search", "gmail_read_thread", "crm_preview_lead_import",
+})
 # Reads whose result carries stored context-file text (issue #72). The list and search
 # tools belong here too even though they return "just metadata": `headline` is DERIVED
 # FROM THE BODY and honours an explicit `Headline:` line, so a file can plant arbitrary

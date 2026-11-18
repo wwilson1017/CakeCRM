@@ -492,7 +492,14 @@ async def _send_confirm(link: dict, chat_id, token: str, evt: dict) -> None:
     tool_use_id = evt.get("tool_use_id") or ""
     msg_id = evt.get("msg_id") or ""
     desc = evt.get("description") or evt.get("tool") or "this action"
-    args_str = _format_args(evt.get("args"))
+    summary = evt.get("summary")
+    if isinstance(summary, dict) and summary.get("headline"):
+        # A server-built card summary instead of a cut JSON blob of the arguments.
+        args_str = "\n".join(str(s) for s in [summary["headline"], *(summary.get("lines") or [])])
+    else:
+        args_str = _format_args(evt.get("args"))
+    if evt.get("change_batch_id"):
+        args_str += "\nThe full list is on the card in the app."
     body = f"🔧 {desc}"
     if args_str:
         body += f"\n\n{args_str}"

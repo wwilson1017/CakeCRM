@@ -74,7 +74,10 @@ const RESPONSES: Record<string, unknown> = {
   '/api/crm/fields': [],
   '/api/telegram/status': { connected: false, bot_username: '', linked: false, linked_name: '', link_code: '', link_url: '' },
   '/api/setup/status': { ai_ready: true },
-  '/api/heartbeat/status': { state: { proactive_enabled: true }, proactive_digest_hour: 8 },
+  '/api/heartbeat/status': { state: { proactive_enabled: true }, proactive_digest_hour: 8,
+    provider_ready: true, enabled: true,
+    heartbeat_settings: { enabled: true, interval_minutes: 30, quiet_hours: 'off', min_gap_hours: 4,
+      paused_until: null, timezone: 'UTC', operator_enabled: true } },
   '/api/gmail/status': {
     connected: false, email: '', connection_status: '', client_id: '',
     client_secret_present: false, scopes: [], redirect_uri: 'https://example.test/api/gmail/oauth/callback',
@@ -94,7 +97,7 @@ const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Export data', '
 // above stays admin-only.
 const MEMBER_TITLES = [
   'Notifications', 'Change password', 'Pipeline board', 'Link my Telegram', 'Todo app devices',
-  'Connect an AI tool', 'Assistant memory',
+  'Install on your phone', 'Connect an AI tool', 'Assistant memory',
 ];
 
 let container: HTMLDivElement;
@@ -187,13 +190,13 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     }
   });
 
-  it('reaches an admin all sixteen cards, across four sections', async () => {
+  it('reaches an admin all seventeen cards, across four sections', async () => {
     auth.isAdmin = true;
     await render();
     expect(navLabels()).toEqual(['Personal', 'Assistant', 'Workspace', 'Integrations']);
 
     const reachable = await allReachableTitles();
-    expect(reachable).toHaveLength(16);
+    expect(reachable).toHaveLength(17);
     expect(reachable.sort()).toEqual([...MEMBER_TITLES, ...ADMIN_ONLY_TITLES].sort());
   });
 
@@ -211,12 +214,26 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     expect(container.textContent).toContain('Daily digest and nudges');
   });
 
+  it('hides the background check-in controls from a member and from an install with no AI provider', async () => {
+    await render();
+    expect(container.textContent).not.toContain('background check-in');
+    auth.isAdmin = true;
+    await render();
+    expect(container.textContent).toContain('background check-in');
+    await clickTab('Assistant');
+    api.mockImplementation((path: string) => Promise.resolve(path === '/api/heartbeat/status'
+      ? { ...(RESPONSES[path] as object), provider_ready: false }
+      : RESPONSES[path.split('?')[0]] ?? {}));
+    await clickTab('Personal');
+    expect(container.textContent).not.toContain('background check-in');
+  });
+
   it('sends a member deep-linked to an admin section back to Personal', async () => {
     await render('/crm/settings?section=workspace');
     expect(navLabels()).not.toContain('Workspace');
     expect(container.querySelector('[aria-current="page"]')!.textContent).toBe('Personal');
     expect(cardTitles()).toEqual([
-      'Notifications', 'Change password', 'Pipeline board', 'Link my Telegram', 'Todo app devices',
+      'Notifications', 'Change password', 'Pipeline board', 'Link my Telegram', 'Todo app devices', 'Install on your phone',
       'Connect an AI tool',
     ]);
   });

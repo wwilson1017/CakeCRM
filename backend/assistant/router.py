@@ -37,6 +37,7 @@ import html
 import json
 import logging
 import re
+import secrets
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -46,6 +47,7 @@ from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from assistant import delimiters, engine, history, identity, turns, uploads
 from assistant.registry import ToolRegistry
 from core.auth import get_current_user, require_admin
+from crm import change_list
 from providers import get_ai_provider
 
 logger = logging.getLogger(__name__)
@@ -244,6 +246,7 @@ async def chat_upload(
 
     blocks: list[str] = []
     images: list[dict] = []
+    stored: list[dict] = []
     for f in files:
         name = f.filename or "upload"
         if uploads.is_image_name(name) and not provider.supports_images:
@@ -263,7 +266,10 @@ async def chat_upload(
                 images.append(await asyncio.to_thread(uploads.read_image, name, raw))
                 blocks.append(delimiters.wrap_untrusted_image(name))
             else:
-                blocks.append(await asyncio.to_thread(uploads.extract_upload, name, raw))
+                file_id = secrets.token_hex(8) if uploads.is_stored_name(name) else None
+                blocks.append(await asyncio.to_thread(uploads.extract_upload, name, raw, file_id))
+                if file_id:
+                    stored.append({"id": file_id, "filename": name, "data": raw})
         except uploads.UploadError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -287,7 +293,7 @@ async def chat_upload(
         provider, registry, messages,
         tool_mode=tool_mode, conversation_id=conversation_id,
         title_hint=original_text or " ".join(i["filename"] for i in images),
-        context=context, page=page, images=images or None, user=user,
+        context=context, page=page, images=images or None, files=stored or None, user=user,
     ))
 
 
@@ -346,6 +352,30 @@ def confirm(req: ConfirmRequest, user=Depends(get_current_user)):
     if result.get("status") == "not_found":
         raise HTTPException(status_code=404, detail="Conversation not found.")
     return result
+
+
+# ── Change lists (#371) ────────────────────────────────────────────────────
+
+@router.get("/change-batches/{batch_id}")
+def get_change_batch(batch_id: str, user=Depends(get_current_user)):
+    """The rows a change-list card shows and what apply and Undo did to each. Owner-only
+    like the conversation it belongs to: another seat's batch is a 404, never a 403."""
+    batch = change_list.view(batch_id, user_id=user["id"])
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Change list not found.")
+    return batch
+
+
+@router.post("/change-batches/{batch_id}/undo")
+def undo_change_batch(batch_id: str, user=Depends(get_current_user)):
+    """Undo an applied change list. The click is the consent, so this is not a Baker tool."""
+    try:
+        batch = change_list.undo(batch_id, user_id=user["id"])
+    except ValueError as e:  # already undone, never applied, or rows busy: nothing written
+        raise HTTPException(status_code=409, detail=str(e))
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Change list not found.")
+    return batch
 
 
 # ── Conversations ──────────────────────────────────────────────────────────

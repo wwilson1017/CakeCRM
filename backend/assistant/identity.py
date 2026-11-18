@@ -462,10 +462,9 @@ def build_page_note(page, section) -> str | None:
     and the English is interpolated only from the hardcoded table above plus the
     validated id. Never from client free text.
 
-    It also states that the assistant cannot change settings itself. There are no
-    settings write tools and there must not be: a key or an OAuth secret must never flow
-    through chat history, and a wrong settings write is install-wide where a wrong record
-    write is one record. Saying so in the note is what keeps the model from proposing one.
+    No settings write tool may ever take a key or a secret: neither belongs in chat
+    history. The single settings write is the background check-in schedule; every
+    other setting stays a human action in Settings.
     """
     if page == "todo_review":
         return TODO_REVIEW_PAGE_NOTE
@@ -480,7 +479,10 @@ def build_page_note(page, section) -> str | None:
         f"what they mean. The manual topics covering it are "
         f"{', '.join(topics)}; read one with help_read_topic before explaining how any "
         f"of it works. You cannot change settings yourself — say where the control is "
-        f"and what it does, and let them make the change."
+        f"and what it does, and let them make the change. "
+        "The one exception is your own background check-in schedule (how often it runs, "
+        "quiet hours, pausing it): an administrator can ask you to change it and you "
+        "do that with heartbeat_update_settings."
     )
 
 
@@ -519,14 +521,14 @@ _ROLE_NOTES: dict[str, str] = {
         "theirs to change: AI providers and the active model, your personality, "
         "branding, the team roster, custom field definitions, the todo mode, the capture "
         "link and the no-login todo app's on/off switch, the Telegram bot, the Gmail connection, the daily digest and "
-        "nudges, and the sample-data and clear-everything operations."
+        "nudges, your background check-in schedule, and the sample-data and clear-everything operations."
     ),
     "member": (
         "They are a member of this install, not an administrator. Install-wide settings "
         "are admin-only for them — AI providers and the active model, your personality, "
         "branding, the team roster, custom field definitions, the todo mode, the capture "
         "link and the no-login todo app's on/off switch, connecting the Telegram bot, connecting Gmail, the daily digest "
-        "and nudges, and the sample-data and clear-everything operations. If they ask to "
+        "and nudges, your background check-in schedule, and the sample-data and clear-everything operations. If they ask to "
         "change one, say it needs an administrator rather than walking them through a "
         "flow that will be refused. Your soul.md and MEMORY.md are admin-only too, on "
         "the Memory page and through you alike, so do not offer to rewrite either one "

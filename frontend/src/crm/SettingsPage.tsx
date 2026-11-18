@@ -40,6 +40,7 @@ import { ConnectAiToolCard } from './components/ConnectAiToolCard';
 import { CustomFieldSettings } from './components/CustomFieldSettings';
 import { ExportCard } from './components/ExportCard';
 import { GmailCard } from './components/GmailCard';
+import { InstallAppCard } from './components/InstallAppCard';
 import { MemoryCard } from './components/MemoryCard';
 import { NotificationSettings } from './components/NotificationSettings';
 import { PipelineBoardCard } from './components/PipelineBoardCard';
@@ -58,6 +59,7 @@ const CARD_COMPONENTS: Record<SettingsCardId, ComponentType<{ isMobile: boolean 
   pipeline_board: PipelineBoardCard,
   telegram_link: TelegramLinkCard,
   todo_devices: TodoDevicesCard,
+  install_app: InstallAppCard,
   connect_ai_tool: ConnectAiToolCard,
   memory: MemoryCard,
   todo_mode: TodoModeCard,

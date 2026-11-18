@@ -15,7 +15,7 @@ from heartbeat import service
 def mocks(monkeypatch):
     state = {
         "delivered": [], "alerts": [], "resolved": [],
-        "ran_turn": 0, "notified": [],
+        "ran_turn": 0, "notified": [], "saved": [],
     }
     def _deliver(title, message):
         state["delivered"].append((title, message))
@@ -28,6 +28,9 @@ def mocks(monkeypatch):
                         lambda **k: state["alerts"].append(k))
     monkeypatch.setattr(service.alerts, "resolve_by_source",
                         lambda s, sid: state["resolved"].append((s, sid)) or 0)
+    monkeypatch.setattr(service.dedupe, "current_items", lambda: {})
+    monkeypatch.setattr(service.dedupe, "announced", lambda: set())
+    monkeypatch.setattr(service.dedupe, "save", lambda items: state["saved"].append(set(items)))
     return state
 
 
@@ -268,3 +271,142 @@ def test_the_mcp_sweep_runs_on_the_tick_and_never_raises(monkeypatch):
 
     monkeypatch.setattr(store, "sweep", boom)
     assert service._maybe_sweep_mcp() is None
+
+
+@pytest.fixture
+def ready_turn(monkeypatch, mocks):
+    """A due turn with one newly overdue todo; no network or database."""
+    monkeypatch.setattr(service.settings, "heartbeat_enabled", True)
+    monkeypatch.setattr(service, "get_ai_provider", lambda: object())
+    monkeypatch.setattr(service, "pg_execute", lambda *a: 1)
+    monkeypatch.setattr(service.dedupe, "current_items", lambda: {("todo", 5): "Call"})
+    mocks["completions"] = []
+    mocks["messages"] = []
+    mocks["prompts"] = []
+
+    def complete(sql, params):
+        mocks["completions"].append((sql, params))
+        return {"consecutive_errors": 0}
+
+    def run(prompt, user_message, *, allowed_tools, registry, model_tier, timeout):
+        mocks["prompts"].append(prompt)
+        mocks["messages"].append(user_message)
+        return BackgroundResult(text="HEARTBEAT_OK")
+
+    monkeypatch.setattr(service, "pg_fetchone", complete)
+    monkeypatch.setattr(service.background, "run_background_turn", run)
+    return mocks
+
+
+def _forbid_model(*a, **k):
+    raise AssertionError("unchanged records must not wake the model")
+
+
+def test_second_turn_with_the_same_overdue_todo_sends_nothing(monkeypatch, ready_turn):
+    monkeypatch.setattr(service.dedupe, "announced", lambda: {("todo", 5)})
+    monkeypatch.setattr(service.background, "run_background_turn", _forbid_model)
+    result = service.maybe_run_heartbeat_turn()
+    assert result["status"] == "ok"
+    assert result["result"] == "Nothing new since the last check."
+    assert ready_turn["saved"] == [{("todo", 5)}]
+
+
+def test_closing_one_of_two_announced_todos_makes_no_model_call_and_prunes(monkeypatch, ready_turn):
+    monkeypatch.setattr(service.dedupe, "announced", lambda: {("todo", 5), ("todo", 6)})
+    monkeypatch.setattr(service.background, "run_background_turn", _forbid_model)
+    assert service.maybe_run_heartbeat_turn()["status"] == "ok"
+    assert ready_turn["saved"] == [{("todo", 5)}]
+
+
+def test_only_the_new_records_reach_the_user_message(monkeypatch, ready_turn):
+    monkeypatch.setattr(service.dedupe, "current_items", lambda: {("todo", 5): "Call", ("todo", 6): "Send quote"})
+    monkeypatch.setattr(service.dedupe, "announced", lambda: {("todo", 5)})
+    service.maybe_run_heartbeat_turn()
+    message = ready_turn["messages"][0]
+    assert "todo 6" in message and "Send quote" in message
+    assert "todo 5" not in message
+    assert "<untrusted_external_content" in message
+    assert 'include that count' in message
+    assert ready_turn["saved"] == [{("todo", 5), ("todo", 6)}]
+
+
+def test_heartbeat_prompt_carries_no_per_turn_data(monkeypatch, ready_turn):
+    monkeypatch.setattr(service.dedupe, "current_items", lambda: {("todo", 6): "Send quote"})
+    service.maybe_run_heartbeat_turn()
+    assert "Send quote" not in ready_turn["prompts"][0][0]
+    assert "Send quote" in ready_turn["messages"][0]
+
+
+def test_an_errored_turn_does_not_save_the_snapshot(monkeypatch, ready_turn):
+    monkeypatch.setattr(service.background, "run_background_turn", lambda *a, **k: BackgroundResult(text="error", error=True))
+    assert service.maybe_run_heartbeat_turn()["status"] == "error"
+    assert ready_turn["saved"] == []
+
+
+@pytest.mark.parametrize("delivered,error,remembered", [(True, True, True), (False, True, True), (False, False, False)])
+def test_send_delivery_and_timeout_control_the_snapshot_and_gap(monkeypatch, ready_turn, delivered, error, remembered):
+    def run(prompt, user_message, *, allowed_tools, registry, model_tier, timeout):
+        registry._notify_user_called = True
+        if delivered:
+            registry._notify_user_delivered = True
+        return BackgroundResult(text="timeout" if error else "ok", error=error)
+
+    monkeypatch.setattr(service.background, "run_background_turn", run)
+    service.maybe_run_heartbeat_turn()
+    assert ready_turn["saved"] == ([{("todo", 5)}] if remembered else [])
+    sql, params = ready_turn["completions"][-1]
+    assert "last_turn_notify_at" in sql
+    assert params[-1] is remembered
+
+
+def test_a_clean_turn_that_did_not_notify_does_not_stamp_the_gap(ready_turn):
+    service.maybe_run_heartbeat_turn()
+    assert ready_turn["completions"][-1][1][-1] is False
+    assert ready_turn["saved"] == [{("todo", 5)}]
+
+
+def test_the_snapshot_is_saved_before_the_turn_is_released(monkeypatch, ready_turn):
+    events = []
+    monkeypatch.setattr(service.dedupe, "save", lambda items: events.append("save"))
+    monkeypatch.setattr(service, "pg_fetchone", lambda *a: events.append("complete") or {"consecutive_errors": 0})
+    service.maybe_run_heartbeat_turn()
+    assert events == ["save", "complete"]
+
+
+def test_a_failed_save_makes_the_turn_an_error(monkeypatch, ready_turn):
+    def fail(items):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(service.dedupe, "save", fail)
+    assert service.maybe_run_heartbeat_turn()["status"] == "error"
+    assert ready_turn["completions"][-1][1][0] == "error"
+
+
+def test_run_now_bypasses_the_dedupe(monkeypatch, ready_turn):
+    monkeypatch.setattr(service.dedupe, "announced", lambda: {("todo", 5)})
+    assert service.maybe_run_heartbeat_turn(force=True)["status"] == "ok"
+    assert ready_turn["messages"] == ["Run your background heartbeat check now."]
+    assert ready_turn["saved"] == [{("todo", 5)}]
+
+
+def test_a_failed_pre_check_is_an_error_turn_with_no_model_call(monkeypatch, ready_turn):
+    def fail():
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(service.dedupe, "current_items", fail)
+    monkeypatch.setattr(service.background, "run_background_turn", _forbid_model)
+    assert service.maybe_run_heartbeat_turn()["status"] == "error"
+    assert ready_turn["saved"] == []
+
+
+def test_the_periodic_claim_reads_every_setting_in_sql_and_run_now_reads_none(monkeypatch, ready_turn):
+    claims = []
+    monkeypatch.setattr(service, "pg_execute", lambda sql, params: claims.append((sql, params)) or 1)
+    service.maybe_run_heartbeat_turn()
+    service.maybe_run_heartbeat_turn(force=True)
+    periodic, forced = claims
+    for column in ("turn_enabled", "paused_until", "COALESCE(interval_minutes", "last_turn_notify_at", "quiet_start"):
+        assert column in periodic[0]
+        assert column not in forced[0]
+    assert "local" in periodic[1] and "inflight" in periodic[1]
+    assert "last_turn_status <> 'running'" in periodic[0]

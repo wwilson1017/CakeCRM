@@ -8,6 +8,7 @@ surface exists; parsing the body before the size check hands an unauthenticated
 caller free work; a non-ASCII token turning into a 500 is an oracle.
 """
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -290,6 +291,7 @@ def test_page_with_a_session_serves_the_shell_with_no_token_in_it(client, on, se
     assert r.status_code == 200
     assert "SHELL" in r.text
     assert 'href="/todo/manifest.webmanifest"' in r.text
+    assert r.text.count('rel="manifest"') == 1
     assert '<meta name="referrer" content="no-referrer">' in r.text
     assert "__CAKECRM_TODO_BASE__" not in r.text
 
@@ -334,6 +336,11 @@ def test_the_page_opts_into_the_cover_viewport(monkeypatch):
     assert '<meta name="viewport" content="viewport-fit=cover, width=device-width' in body
     # The CRM's own shell is untouched — it pads no insets, so it must not take cover.
     assert "viewport-fit" not in index
+    assert body.count('rel="manifest"') == 1
+    assert 'href="/todo/manifest.webmanifest"' in body
+    assert 'rel="apple-touch-icon" href="/icon-192.png"' in body
+    assert 'href="/manifest.webmanifest"' in index
+
 
 
 def test_the_unbuilt_frontend_503_is_still_uncacheable(client, on, sessions, monkeypatch):
@@ -649,3 +656,18 @@ def test_no_todo_delete_route_on_any_mount():
         todo_paths = [r for r in mount.routes if r.path.endswith("/todos/{todo_id}")]
         assert todo_paths, mount  # vacuity: the todo routes are on this mount
         assert not any("DELETE" in r.methods for r in todo_paths), mount
+
+
+def test_crm_manifest_launches_crm_with_existing_home_screen_icons():
+    public = Path(__file__).resolve().parents[2] / "frontend" / "public"
+    manifest = json.loads((public / "manifest.webmanifest").read_text())
+    assert manifest["name"] == manifest["short_name"] == "CakeCRM"
+    assert manifest["start_url"] == "/crm"
+    assert manifest["scope"] == "/"
+    assert manifest["display"] == "standalone"
+    assert manifest["background_color"] == manifest["theme_color"] == "#f1f1e8"
+    assert {icon["sizes"] for icon in manifest["icons"]} == {"192x192", "512x512"}
+    for icon in manifest["icons"]:
+        assert icon["purpose"] == "any maskable"
+        assert icon["type"] == "image/png"
+        assert (public / icon["src"].lstrip("/")).is_file()

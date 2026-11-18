@@ -176,6 +176,32 @@
   `WRITE_BUDGET_BACKGROUND`, with untrusted CRM text kept in the user
   message, never the system prompt. So a prompt injection via CRM content
   can at worst send one notification, never create/log/update/delete a record.
+  **Heartbeat dedupe and settings (landed #360).** The turn stores its announced set in
+  `proactive_nudges` under kind `heartbeat`, reusing the existing polymorphic ledger and
+  CRM reset sweep. No new table; no whole-set hash, since removing one item must not
+  re-announce the rest. `heartbeat/dedupe.py` uses its own id+label queries with no LIMIT,
+  importing the dashboard/analytics predicates. Current minus announced wakes the model;
+  an empty delta prunes departed ids and finishes the claim without a model call. New
+  labels are nonce-fenced in the user message, never the static prompt. Ten per type
+  are listed with full counts; remembering the whole delta is an aggregate disposition.
+  All periodic gates (on/off, interval override, quiet window, pause and notification gap)
+  are read in the claim SQL. Local HH:MM comes from zoneinfo. The gap is in the claim,
+  not `notify_user`, so no tokens are spent during it and the digest is unaffected.
+  Defaults: 30-minute env interval, 4-hour gap; Settings accepts 30–1440 minutes and
+  0–24 hours. The env switch remains the operator's periodic hard-off. Force/run-now
+  bypasses settings, env, dedupe and gap, but keeps provider and in-flight guards.
+  Save the snapshot before releasing the claim after a clean decision, including
+  HEARTBEAT_OK, or a delivered notification; never after a clean send that delivered
+  nothing or another error. A failed save finishes as error. Simplification: an errored
+  turn that attempted delivery is remembered/stamped because the delivery thread may
+  outlive its timeout; joining that thread is the upgrade path. A CRM reset during the
+  model call may leave old ids announced until the next pruning pass.
+  `heartbeat_get_settings` is a keyless read, background-callable; the never-routine
+  `heartbeat_update_settings` executor refuses every non-admin seat, including no seat.
+  Ask and Telegram require approval; Auto applies it. No secrets pass through either.
+  REST: `/api/heartbeat/status` includes the shaped settings; admin-only
+  `PUT /api/heartbeat/settings` shares the strict validator. The Notifications card has
+  a provider-gated admin block beside the separate digest block.
   **Since #22 that ceiling is unchanged but the on-ramp is wider, deliberately:** the
   new read tools put raw per-record free text in front of the unattended turn for the
   first time — `crm_scan_gaps` returns `crm_field_provenance.value_snapshot` verbatim
@@ -190,8 +216,8 @@
   **Since #114 the allowlist is no longer derived from `writes` alone**, because
   `writes:False` means "changes nothing", not "safe unattended": `background_allowlist()`
   now subtracts `background.BACKGROUND_EXCLUDED_TOOLS`, which IS
-  `delimiters.UNTRUSTED_SOURCE_TOOLS` (the live external-account reads — today
-  `gmail_search`/`gmail_read_thread`) rather than a second hand-maintained list. For a
+  `delimiters.UNTRUSTED_SOURCE_TOOLS` (`gmail_search`/`gmail_read_thread` and, since #370,
+  `crm_preview_lead_import`'s uploaded/pasted rows) rather than a second hand-maintained list. For a
   future *Gmail* reader that is automatic: `test_gmail_guard`'s existing pin fails CI
   until the new tool is added to that set, and adding it excludes it here with no second
   edit. **It is NOT automatic for a future non-Gmail external read** (some other
@@ -518,7 +544,7 @@
   the English server-side from `_SETTINGS_SECTION_HELP` (section id → plain-words gloss +
   manual topic slugs) plus the validated id, never from client text, the same defence in
   depth `build_context_note` draws; the note names the section AND the topics covering it,
-  tying "where" to "how", and says the assistant cannot change settings itself. Those slugs
+  tying "where" to "how", and says the assistant cannot change settings itself except its admin-only background check-in schedule (#360). Those slugs
   are pinned against the real library by `test_help_library.py`, and the map's key set is
   pinned against the router's Literal, so a renamed topic or a drifted section fails CI
   rather than producing no note at all. **#193 landed between this branch's review and its
@@ -668,6 +694,26 @@
   estimate is added because bytes are not row content and only accompany their attached
   turn. Telegram photos and a look-again tool are out of scope.
 
+- **Stored spreadsheet uploads and card summaries (#370).** `uploads.STORED_EXTENSIONS`
+  limits retained documents to CSV/XLSX. `chat_upload` mints the id and places it on the
+  nonce fence as `attachment_id`; `save_message(files=)` stores bytes in the user row's
+  transaction. `history.get_message_file` joins through the conversation owner, so another
+  seat cannot read them. The message FK cascades deletion; like photos, files stay outside
+  `_truncate_all`. Batches are seat-scoped, so a tool can read a file from another of that
+  seat's conversations. `crm_preview_lead_import` joins `UNTRUSTED_SOURCE_TOOLS`: its
+  uploaded/pasted row results are fenced and durably taint the conversation, including
+  pasted-text previews in Auto, and are excluded from unattended turns.
+  `engine._SUMMARY_WRITE_TOOLS` also always confirms in the gate, every mode: a batch
+  outlives its preview's conversation, so the taint alone cannot promise the card.
+  Approving one also taints the approving conversation (`resolve_confirmation`): its result
+  echoes deal titles from the list. The preview stays out of #372's parallel read lane
+  (`registry.parallel_reads` drops `UNTRUSTED_SOURCE_TOOLS`) and records no deal finds.
+  It and `_card_summary` keep a server-built `summary` on the
+  pending placeholder and the `confirm` event. `mapServerMessages` reads it back after
+  reload. The summary's pending JSON must stay under `_UI_RESULT_PREVIEW_CAP` or the
+  reloaded result no longer parses as pending; `_summary` budgets 1500 serialized
+  characters with default ASCII escaping, reserving space for the omitted-row count.
+
 - **Voice (#338, port of cake_os #3832/#3820/#4019/#4020 — `backend/voice/`,
   `frontend/src/shared/voice/`).** `AIProvider.can_transcribe` defaults false and
   `transcribe` defaults to unsupported. Only OpenAI implements it, with a lazy SDK
@@ -774,3 +820,129 @@ output SDK; 20-second timeout and touch-count-style strict stream completion plu
 4,000-character cap. Won carries the explicit local day shown in the preview; already
 won/lost flags are dropped with a warning. No provider hides the box, keeping the screen
 fully keyless. A confirmed preview is a member edit with no assistant provenance.
+
+## Reads of one batch run first, side by side (#372, port of cake_os #4697)
+
+Within one tool batch of an attended turn, `engine._chat_impl` calls
+`read_batch.run_reads` before it gates or runs any write, then walks the model's order
+to record results, so `results` and `tool_end` keep that order. Two lanes:
+
+- `ToolRegistry.parallel_reads` — the non-write defs of the CRM and todo sources, chosen
+  by source so a connection read cannot join by accident — run concurrently on one
+  process-wide 4-thread pool (`MAX_PARALLEL_READS`): at most 4 of the Postgres pool's 10
+  connections, and a hung read never occupies the default executor that history saves use.
+- Every other read (Gmail, memory, context files, help, reminders) runs one at a time in
+  the model's order through `registry.execute_tool_sync` in a worker thread. A per-registry
+  lock stays held for the handler's whole run, including after a timeout. The next ordered
+  read waits for that lane within its own deadline; if the lane stays busy, it times out
+  without starting. Once the handler returns, the lane is usable again.
+
+Every read gets `READ_TIMEOUT_S` (120 s); a timeout is an ordinary error result
+(`status: "timeout"`) and the turn continues. Writes have no timeout. Threads cannot be
+killed: a timed-out read keeps its worker and connection until its handler returns, and
+four hung reads make later parallel reads time out unstarted (the `simplification:` note
+in `read_batch.py` names the upgrade).
+
+The #332 guard is exact because bookkeeping is deferred: the worker thread runs only
+`registry.run_read_sync` (epoch, then handler), and `registry.record_deals` runs later
+on the collector, one result at a time, when the engine records that result
+(`read_batch.accept`). So guard state is never touched by two threads, and a read that
+timed out, or was dropped by a write-budget stop, never becomes a find. Finds are still
+stamped with the current batch, so a search in the same batch as a write refuses it in
+either order. Every find-recording read must stay in `parallel_reads`
+(`test_read_batch.py` pins it).
+
+Taint from every read of the batch applies before any of its writes reach the
+confirmation gate, so a write the model listed before a Gmail read now confirms too
+(stricter than before). Reads listed after a write that stops the turn on the write
+budget have already run; their results are dropped and record nothing.
+
+Unchanged: background turns (`background._run_turn` keeps the model's order, no
+timeout), `resolve_confirmation`, and `ToolRegistry.execute_tool(name, args)` — which a
+future MCP dispatch (#323) calls directly and so gets neither lane nor timeout. Not
+ported: upstream's generic same-batch id provenance, per-turn parallel lanes, per-tool timeouts
+and order-kept kinds.
+
+Tests: `test_read_batch.py` (lanes, the process-wide bound across two registries, blocked
+synchronous ordered handlers and lane recovery, Stop, the audited set, background order),
+the #372 block in `test_assistant_engine.py` (overlap barrier, write-after-read, hung
+read, same-batch find) and `test_gmail_engine_taint.py`.
+
+## Change lists: one card for a bulk edit, with Undo (#371, port of cake_os #4706)
+
+`crm_apply_change_list` takes `{changes: [{record_type, id, field, value}], reason?}` for
+deals and todos (up to `change_list.MAX_ROWS` = 200). It is the one write the engine
+**stages before its card**: after the read-only, deal-guard and write-budget checks,
+`_chat_impl` calls `crm.change_list.stage(args, registry)`. An `{"error"}` answer is
+recorded as the tool result and no card is raised (malformed call, or no row can be
+applied). Otherwise the answer is the pending placeholder's binding,
+`{summary: {headline, lines}, change_batch_id}`, and the call confirms in every mode
+(`staged is not None` in the gate). Approving one does not taint the conversation:
+the sample excludes titles, notes and descriptions, including public-capture todo text. `_card_summary` copies the
+placeholder's `summary` and `change_batch_id` onto the `confirm` event, and
+`mapServerMessages` reads both back after a reload.
+
+- **The batch is the source of truth.** `assistant_change_batches` (id `chg_<hex>`,
+  `user_id`, `conversation_id` FK cascade, `status` proposed/applied/undone, `rows` JSONB)
+  holds every row with the server-read `label`, `old`, the normalized `new`, a `state` and
+  a `reason`. The card (`GET /api/assistant/change-batches/{id}`), the apply and the Undo
+  read it; the executor never reads the model's arguments. Owner-only by `user_id`
+  (404 for another seat), `NOT_EXPORTED`, and first in both `_truncate_all` branches
+  (apply locks the batch row, then deals, then todos).
+- **The model cannot name a batch.** The executor takes no arguments from the model:
+  `get_crm_tools(user, registry)` binds `registry`, and `engine.resolve_confirmation` sets
+  `registry.change_batch_id` from the claimed placeholder. A direct dispatch with no
+  approval (a future MCP call, #323) is refused with `ONLY_FROM_CARD`.
+- **Per-row rules**, asked at stage, again under the row locks at apply, and again at Undo
+  (`change_list._blocked`): no such record; archived deal; a stage row on a won or lost
+  deal; a status row to or from done on a repeating todo (it would spawn an occurrence
+  Undo cannot remove). Stage-only refusals: unknown record type, a field outside
+  `change_list.FIELDS`, a value its write path would not store (`_normalize` calls
+  `gtd_common.validate_*`, `normalize_deal_temperature`, `update_deal`'s clamp), the same
+  record and field twice, a value already held, and the #332 find-first rule
+  (`deal_write_guard.unfound`), which here refuses the ROW. `deal_write_guard.refusal`
+  does not see nested ids, so it never refuses the whole call for them. Malformed rows
+  become refused `row N` entries; only invalid whole lists and missing identity refuse the call.
+- **Stale rows.** Apply writes a row only when the locked record still holds the staged
+  `old`; Undo only when it still holds `new`. Others become `skipped` ("changed since the
+  card was shown") / `kept` ("changed since it was applied"). Every taken row of a record
+  succeeds or misses together. Value rows also compare current currency against the staged
+  currency (apply) or the currency the batch left (undo), and currency rows the value, the
+  same way (connector review). `_transition(direction="apply" | "undo")` derives
+  its states and value keys from one module-level mapping.
+- **Writes** go through `service._write_deal_update_cur` and
+  `service._apply_todo_update_cur`, one call per record, in one transaction with
+  `bulk_move_deals`' lock and statement timeouts; rescoring and the provenance badge run
+  after commit. An undone stage change adds a reverse `deal_stage_events` row. Lock timeout,
+  statement timeout and deadlock all roll back and ask the user to request a new change list.
+- **Bounds.** The placeholder (`SUMMARY_BUDGET`) and the result (`RESULT_BUDGET`) are cut
+  to stay valid JSON under `_UI_RESULT_PREVIEW_CAP`, because a reloaded conversation finds
+  the batch id in them. Summary lines start with up to five ready-row samples, values cut
+  to 40 characters, excluding title/notes/description; then refused lines. A truncated
+  no-card error says only "…and N more". The full list is served by the GET route.
+- **Frontend.** `ChangeList.tsx` renders the batch by status on the pending card, on the
+  resolved card (id taken from the RESULT, so a failed or declined card shows nothing) and
+  on the plain tool card a reload produces. Approve is disabled until the list loads;
+  failure offers Retry while Decline stays enabled. Long values are cut to 120 characters
+  with full text in a title attribute. Undo is `POST …/change-batches/{id}/undo`: a
+  person's click, not a tool, so Baker's transcript still says "applied" afterwards.
+- **Telegram** shows `summary.headline` and its lines in place of the argument dump
+  (`_send_confirm`), and points to the full list in the app; it has no Undo.
+- **Money.** A `value` row carries `currency: [before, after]` and a `currency` row
+  `value: [before, after]`; nothing sums.
+- **Reset.** Staging reads the records and inserts the batch in one transaction under
+  `crm_meta` `FOR KEY SHARE`, the row `clear_all` / `clear_demo_data` lock `FOR UPDATE`
+  before truncating, so a reset cannot land between them and leave a batch naming ids
+  that `RESTART IDENTITY` reuses.
+
+Not ported or left out: contacts, companies and custom fields (no cursor-taking writers);
+contact/company/deal links (company follow-merge gate precedes record locks); completed
+(status is the one spelling); repeat/auto-star settings (completion can spawn an occurrence);
+projects (assigning by name can create one); owners (a raw user id could name a
+deactivated teammate, and no Baker tool assigns a deal or todo owner, #237); closing or reopening deals;
+retries on deadlock.
+Notes/descriptions use validate_notes; tags use validate_tags as a whole-list replacement.
+
+Tests: `test_change_list.py`, the #371 block in `test_assistant_engine.py`,
+`test_integration_change_list_pg.py` (50 rows, refusals, stale row, Undo, ownership,
+reset, the engine end to end), `ChangeList.test.tsx`.

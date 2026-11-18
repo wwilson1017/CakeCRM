@@ -6,15 +6,17 @@ shots: []
 
 ## The short version
 
-Baker can read and change CRM records, work your todos, keep its own memory and knowledge files, search and read connected Gmail, and put drafts in your Gmail Drafts folder. It cannot send email, cannot change install settings, and cannot act outside CakeCRM.
+Baker can read and change CRM records, work your todos, keep its own memory and knowledge files, search and read connected Gmail, and put drafts in your Gmail Drafts folder. It cannot send email, cannot change install settings except its own background check-in schedule, and cannot act outside CakeCRM.
 
 ## CRM records and todos
 
 Baker can search, create and update contacts, companies and deals, move a deal's stage, mark a deal won or lost, log activities, and create, update and complete todos. Whether each change runs straight away or waits for your **Approve** depends on the mode you pick. See [Approvals](03-approvals.md).
 
+Asked for one edit across many deals or todos, Baker puts every change on a single card, old value to new, that you approve once and can undo. See [Approvals](03-approvals.md).
+
 Deleting a contact or a company is permanent; there is no recycle bin. Deals cannot be deleted at all: archiving is the way to remove one, and it can be restored. A todo is never deleted either: when you ask Baker to delete one, it drops it, and you can reopen it from Done → Dropped.
 
-One turn can make at most 20 changes. Past that, Baker's further changes are refused.
+One turn can carry out at most 20 actions that change data. A change list counts as one action, covering up to 200 field changes. Past that action limit, Baker's further changes are refused.
 
 ## Email
 
@@ -24,7 +26,9 @@ By default only admins can have Baker use the connected mailbox.
 
 ## Settings
 
-Baker has no settings tools at all. It cannot add an AI key, connect Gmail, switch todo mode, define a custom field, add a user or change branding. It can explain how to do these things and point you to the right screen; you do the clicking.
+Baker has one settings write tool, for its own background check-in: on/off, how often it runs, quiet hours, the minimum notification gap, and a pause that ends automatically. Only admins can use it. It is never routine: Ask shows an Approve card, Telegram asks for typed approval, and Auto applies it. No key or secret passes through it. See [Notifications](../01-getting-started/06-notifications.md).
+
+It cannot add an AI key, connect Gmail, switch todo mode, define a custom field, add a user or change branding. For everything else, Baker explains and points; you click.
 
 ## Files you upload
 
@@ -33,7 +37,7 @@ Use **Attach a file** in the drawer to give Baker a file to read:
 - up to 5 files per message, 10 MB each;
 - CSV, XLSX, MD, TXT, PDF or DOCX.
 
-Only the text is extracted; the file itself is not stored. Uploaded text is treated as untrusted, so for the rest of that conversation every change Baker proposes asks for your approval. Baker cannot attach a file to a record; you add attachments yourself.
+The text is extracted for Baker to read. A CSV or XLSX file is also kept with the conversation, so Baker can import it as a lead list (see [Importing](../04-contacts-and-companies/06-importing.md)); deleting the conversation deletes it. Other file types are not stored. Uploaded text is treated as untrusted, so for the rest of that conversation every change Baker proposes asks for your approval. Baker cannot attach a file to a record; you add attachments yourself.
 
 ## Photos
 
@@ -53,11 +57,12 @@ one is data, and every proposed change asks for approval for the rest of that co
 
 ## When nobody is watching
 
-Baker also runs on a schedule, with nobody in the chat, for the daily digest and nudges about deals and leads that have gone quiet. Those unattended turns are much more limited, and the server enforces it:
+Baker also runs on a schedule, with nobody in the chat, for the background check-in and the daily digest. Those unattended turns are much more limited, and the server enforces it:
 
 - Baker gets read tools and a single notification, nothing else. It cannot create, update, log or delete anything.
 - It cannot search or open your Gmail, even though those are reads.
 - It sends at most one notification per run.
+- It can read the background check-in settings but cannot change them unattended.
 
 So the worst a hostile instruction hidden in a note could achieve unattended is one notification.
 

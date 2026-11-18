@@ -1,6 +1,6 @@
 // CakeCRM — one chat message: user/assistant bubble, tool cards, confirm cards.
 
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import { IconAttach, IconBot, IconCheck, IconChevronRight, IconVolume, IconX } from '../shared/icons';
 import {
@@ -17,7 +17,8 @@ import {
   SAGE_TEXT,
 } from '../shared/styles';
 import { BulkItemList } from './BulkItemList';
-import { bulkItems } from './bulkItems';
+import { bulkItems, changeBatchId } from './bulkItems';
+import { ChangeList } from './ChangeList';
 import { MarkdownContent } from './MarkdownContent';
 import type { ChatMessage, PendingConfirmation, ToolCallInfo, WorkingState } from './types';
 import { WorkingIndicator } from './WorkingIndicator';
@@ -36,6 +37,8 @@ function ToolCallCard({ call }: { call: ToolCallInfo }) {
   const [open, setOpen] = useState(false);
   const isError = !!(call.result && typeof call.result === 'object' && 'error' in (call.result as object));
   const color = call.status === 'running' ? INK_SOFT : isError ? CORAL_TEXT : SAGE_TEXT;
+  // An applied change list reloads as this plain card; its outcome and Undo stay on it (#371).
+  const batchId = changeBatchId(call.result);
   return (
     <div style={{ border: `1px solid ${LINE}`, borderRadius: 8, background: BG_RAISED, margin: '6px 0', fontSize: 13 }}>
       <button
@@ -69,6 +72,7 @@ function ToolCallCard({ call }: { call: ToolCallInfo }) {
           )}
         </div>
       )}
+      {batchId && <div style={{ padding: '0 10px' }}><ChangeList batchId={batchId} /></div>}
     </div>
   );
 }
@@ -82,8 +86,15 @@ function ConfirmationCard({
   onApprove: () => void;
   onDeny: () => void;
 }) {
+  const [loadedBatch, setLoadedBatch] = useState<string | null>(null);
+  const onLoaded = useCallback((loaded: boolean) => {
+    setLoadedBatch(loaded ? confirm.changeBatchId ?? null : null);
+  }, [confirm.changeBatchId]);
+  const waitingForList = !!confirm.changeBatchId && loadedBatch !== confirm.changeBatchId;
   const args = Object.entries(confirm.args ?? {});
   const items = bulkItems(confirm.args);
+  // From the RESULT, so a failed or declined card shows no rows as if they were waiting.
+  const resultBatch = changeBatchId(confirm.result);
   if (confirm.status !== 'pending') {
     const approved = confirm.status === 'approved';
     const failed = confirm.status === 'failed';
@@ -106,6 +117,7 @@ function ConfirmationCard({
         {errMsg && (
           <span style={{ color: INK_SOFT, fontSize: 12, paddingLeft: 20 }}>{errMsg}</span>
         )}
+        {resultBatch && <ChangeList batchId={resultBatch} />}
       </div>
     );
   }
@@ -116,14 +128,28 @@ function ConfirmationCard({
       </div>
       <div style={{ fontSize: 12, color: INK_MUTE, marginBottom: 10 }}>
         <code>{confirm.tool}</code>
-        {!items && args.length > 0 && (
+        {!items && !confirm.changeBatchId && args.length > 0 && (
           <span> · {args.map(([k, v]) => `${k}: ${summarize(v)}`).join(', ')}</span>
         )}
       </div>
+      {confirm.summary && (
+        <div data-testid="confirm-summary" style={{ fontSize: 12, color: INK, marginBottom: 10 }}>
+          <div>{confirm.summary.headline}</div>
+          {!confirm.changeBatchId && (
+            <ul style={{ margin: '4px 0 0', paddingLeft: 20, color: INK_MUTE }}>
+              {confirm.summary.lines.map((line, i) => <li key={i}>{line}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+      {confirm.changeBatchId && (
+        <ChangeList batchId={confirm.changeBatchId} fallbackLines={confirm.summary?.lines} onLoaded={onLoaded} />
+      )}
       {items && <BulkItemList items={items} />}
       <div style={{ display: 'flex', gap: 8 }}>
         <button
           onClick={onApprove}
+          disabled={waitingForList}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 4, padding: '5px 12px', fontSize: 13, fontWeight: 600,
             background: ACCENT, color: ACCENT_INK, border: 'none', borderRadius: 7, cursor: 'pointer',

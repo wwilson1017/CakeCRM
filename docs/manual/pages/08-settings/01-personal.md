@@ -1,6 +1,6 @@
 ---
 title: Personal settings
-summary: Notifications, your password, how the pipeline board opens, linking your own Telegram, and connecting your own AI tool.
+summary: Notifications, your password, how the pipeline board opens, linking your own Telegram, installing CakeCRM on your phone, and connecting your own AI tool.
 shots: [settings-personal]
 ---
 
@@ -16,6 +16,8 @@ Open **Settings** at the top right. Settings has four tabs: **Personal**, **Assi
 Push works with no AI keys. See [Notifications](../01-getting-started/06-notifications.md) for what raises one.
 
 **Daily digest and nudges** is shown to admins only, because it is one setting for the whole team. It sends a pipeline summary each morning, plus a nudge when a deal goes cold or a contact with open business has not been spoken to. It also works with no AI keys.
+
+**Baker's background check-in** is a separate admin-only block, shown when an AI provider is ready. It reports newly overdue todos, cold deals and untouched contacts without repeating unchanged records. Set on/off, **Check every** (30 minutes to once a day), **Quiet hours** in the displayed install timezone, and **At most one notification every** (four hours by default). Quiet hours can cross midnight. Save applies the schedule; **Resume** ends a pause. Admins can also ask Baker to change these settings or pause for a number of days.
 
 ## Change password
 
@@ -39,6 +41,19 @@ Chat with Baker from your own phone. Once an admin has connected a Telegram bot:
 4. **Unlink my Telegram** ends your link. It affects nobody else.
 
 If no bot is connected yet, the card says so. See [Telegram](../09-integrations/02-telegram.md).
+
+## Install on your phone
+
+Everyone sees this card under **Personal**, on a computer or a phone. On a computer it shows this site's address: open it on your phone and sign in first. Expand the steps for your device.
+
+- **iPhone or iPad (Safari):** tap Share (the square with an upward arrow; tap **•••** first if hidden), then **Add to Home Screen**. Leave **Open as Web App** on if shown, then tap **Add**.
+- **Android (Chrome):** tap **⋮** beside the address bar → **Install and create shortcut** → **Install**. Older Chrome calls the menu item **Add to Home screen** or **Install app**.
+
+On **Chrome or Edge on a computer**, click the install icon at the right end of the address bar, then **Install**. If the browser offers a native prompt, the card also shows an **Install CakeCRM** button.
+
+Open CakeCRM from its home-screen icon from then on. There is nothing to download from an app store; the card confirms when you are using the installed app. If installation is missing, use an **https://** address and, on iPhone, Safari rather than an in-app browser.
+
+The [no-login todo app](../05-todos/11-no-login-links.md) can have its own home-screen icon: sign the phone in through **Todo app devices**, then follow the same steps on the todo page.
 
 ## Connect an AI tool
 

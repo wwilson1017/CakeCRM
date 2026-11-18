@@ -52,8 +52,13 @@ def _current_epoch():
     return row["updated_at"] if row else None
 
 
+# The lead-import preview (#370) returns rows from an uploaded list, never a CRM deal.
+_NOT_FINDERS = frozenset({"crm_preview_lead_import"})
+
+
 def _records_finds(name: str, is_write: bool) -> bool:
-    return name.startswith("crm_") and (not is_write or name == "crm_create_deal")
+    return (name.startswith("crm_") and name not in _NOT_FINDERS
+            and (not is_write or name == "crm_create_deal"))
 
 
 def epoch_before(name: str, is_write: bool):
@@ -107,6 +112,12 @@ def note_found(state, result, epoch) -> None:
             logger.warning("deal write guard: could not save finds", exc_info=True)
 
 
+def unfound(state, ids: list[int]) -> list[int]:
+    """The ``ids`` no CRM read of an EARLIER batch of this chat found, in the current epoch."""
+    found = _found(state, _current_epoch())
+    return [deal_id for deal_id in ids if deal_id not in found or found[deal_id] == state.tool_batch]
+
+
 def refusal(state, args: dict) -> str | None:
     try:
         ids = target_deal_ids(args)
@@ -114,8 +125,7 @@ def refusal(state, args: dict) -> str | None:
         return "Not written: deal ids must be integers from a CRM search; deal_ids must be a list."
     if not ids:
         return None
-    found = _found(state, _current_epoch())
-    missing = [deal_id for deal_id in ids if deal_id not in found or found[deal_id] == state.tool_batch]
+    missing = unfound(state, ids)
     if missing:
         named = ", ".join(map(str, missing))
         return (

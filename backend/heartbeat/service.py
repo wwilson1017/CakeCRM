@@ -23,15 +23,18 @@ The heartbeat AI turn is claimed with a rowcount UPDATE on ``heartbeat_state`` (
 connection / advisory lock), and the force path keeps an in-flight guard so a run-now
 can't launch a second concurrent turn. Repeated heartbeat failures raise a deduplicated
 alert with a cooldown.
+The turn diffs against the announced set in heartbeat/dedupe.py. Its schedule
+is read from heartbeat_state inside the claim.
 """
 
 import logging
 
 from alerts import service as alerts
-from assistant import background, identity
+from assistant import background, delimiters, identity
 from assistant.registry import ToolRegistry
 from core.config import settings
 from core.postgres import pg_execute, pg_fetchone
+from heartbeat import dedupe
 from notifications import delivery
 from providers import get_ai_provider
 
@@ -44,6 +47,43 @@ _FAILURE_ALERT_COOLDOWN_SECONDS = 3600
 # to_thread default executor on close — up to ~300s on 3.12 if a sync tool hangs),
 # so the guard stays honest even when a wedged tool holds the scheduler thread.
 _TURN_INFLIGHT_GUARD_SECONDS = 480
+
+_NOTHING_NEW = "Nothing new since the last check."
+_TURN_MESSAGE = "Run your background heartbeat check now."
+
+# Every user-tunable gate is read HERE, so a settings change cannot race a tick
+# and a refused claim touches nothing. The local HH:MM comes from zoneinfo.
+_PERIODIC_CLAIM_SQL = (
+    "UPDATE heartbeat_state SET last_turn_at = now(), last_turn_status = 'running' "
+    "WHERE id = 1 AND turn_enabled "
+    "AND (last_turn_status <> 'running' "
+    "OR last_turn_at <= now() - make_interval(secs => %(inflight)s)) "
+    "AND (paused_until IS NULL OR paused_until <= now()) "
+    "AND (last_turn_at IS NULL OR last_turn_at <= now() - "
+    "make_interval(mins => COALESCE(interval_minutes, %(default_interval)s))) "
+    "AND (last_turn_notify_at IS NULL OR last_turn_notify_at <= now() - "
+    "make_interval(hours => notify_min_gap_hours)) "
+    "AND NOT (quiet_start IS NOT NULL AND quiet_end IS NOT NULL AND CASE "
+    "WHEN quiet_start::time < quiet_end::time "
+    "THEN %(local)s::time >= quiet_start::time AND %(local)s::time < quiet_end::time "
+    "ELSE %(local)s::time >= quiet_start::time OR %(local)s::time < quiet_end::time END)"
+)
+
+
+def _local_hhmm() -> str:
+    from core import localtime
+    return localtime.now_local().strftime("%H:%M")
+
+
+def _turn_message(new: dict | None) -> str:
+    if new is None:  # run-now: look at everything
+        return _TURN_MESSAGE
+    return (
+        f"{_TURN_MESSAGE} Only the records below are new since your last check. "
+        "Everything else was already reported, so do not raise it again. "
+        'Where a type says "and N more", include that count in the notification.\n\n'
+        + delimiters.wrap_untrusted_external("crm_records", dedupe.describe(new))
+    )
 
 
 # ── scheduler job entrypoints ────────────────────────────────────────────────
@@ -75,7 +115,7 @@ def tick(*, force_turn: bool = False) -> dict:
 # ── system heartbeat turn ────────────────────────────────────────────────────
 
 def maybe_run_heartbeat_turn(force: bool = False) -> dict:
-    """Run the periodic system heartbeat AI turn, subject to three gates."""
+    """Run the periodic system heartbeat AI turn if due and something is new."""
     # Skips do NOT write last_turn_status — that column records the last ACTUAL turn
     # (so /status stays a coherent status+result pair). The current gate state is
     # reported live by the status endpoint from `enabled` + provider presence.
@@ -106,27 +146,63 @@ def maybe_run_heartbeat_turn(force: bool = False) -> dict:
         )
     else:
         claimed = pg_execute(
-            "UPDATE heartbeat_state SET last_turn_at = now(), last_turn_status = 'running' "
-            "WHERE id = 1 AND (last_turn_at IS NULL OR last_turn_at <= now() - make_interval(mins => %s))",
-            (settings.heartbeat_interval_minutes,),
+            _PERIODIC_CLAIM_SQL,
+            {"default_interval": settings.heartbeat_interval_minutes,
+             "local": _local_hhmm(), "inflight": _TURN_INFLIGHT_GUARD_SECONDS},
         )
     if claimed == 0:
+        # Throttled includes off, paused, quiet hours and the notification gap.
         return {"skipped": "in_progress" if force else "throttled"}
 
-    reg = ToolRegistry(background=True)
-    result = background.run_background_turn(
-        _heartbeat_prompt(),
-        "Run your background heartbeat check now.",
-        allowed_tools=background.background_allowlist(reg),
-        registry=reg, model_tier="light", timeout=120,
-    )
+    reg = None
+    current = None
+    try:
+        current = dedupe.current_items()
+        already = set() if force else dedupe.announced()
+        new = {k: v for k, v in current.items() if k not in already}
+    except Exception as e:
+        logger.warning("heartbeat pre-check failed", exc_info=True)
+        result = background.BackgroundResult(text=f"heartbeat pre-check failed: {e}"[:500], error=True)
+    else:
+        if not new and not force:
+            # No model call, but finish the claim so run-now is not refused as in flight.
+            result = background.BackgroundResult(text=_NOTHING_NEW)
+        else:
+            reg = ToolRegistry(background=True)
+            result = background.run_background_turn(
+                _heartbeat_prompt(),
+                _turn_message(None if force else new),
+                allowed_tools=background.background_allowlist(reg),
+                registry=reg, model_tier="light", timeout=120,
+            )
+
+    # The once-per-run flag precedes delivery; the delivered flag follows it. A timeout
+    # can return an empty tool_log, so only registry flags reliably record delivery.
+    attempted = bool(getattr(reg, "_notify_user_called", False))
+    # simplification: an errored/timed-out turn that attempted a send counts as notified,
+    # because the delivery thread can outlive the turn's timeout and deliver_notification
+    # logs the bell row first; only a clean turn trusts the delivered flag. Upgrade path:
+    # join the delivery thread before finalizing.
+    notified = bool(getattr(reg, "_notify_user_delivered", False)) or (attempted and result.error)
+
+    # Save BEFORE releasing the claim. Remember clean decisions (including HEARTBEAT_OK)
+    # and delivered notifications even on failure; retry failed sends and other errors.
+    if current is not None and (notified or (not result.error and not attempted)):
+        try:
+            dedupe.save(current)
+        except Exception as e:
+            logger.warning("heartbeat snapshot save failed", exc_info=True)
+            result = background.BackgroundResult(
+                text=f"heartbeat snapshot save failed: {e}"[:500], error=True,
+                tool_log=result.tool_log)
 
     status = "error" if result.error else "ok"
     row = pg_fetchone(
         "UPDATE heartbeat_state SET last_turn_status = %s, last_turn_result = %s, "
-        "consecutive_errors = CASE WHEN %s THEN 0 ELSE consecutive_errors + 1 END "
+        "consecutive_errors = CASE WHEN %s THEN 0 ELSE consecutive_errors + 1 END, "
+        "last_turn_notify_at = CASE WHEN %s THEN now() ELSE last_turn_notify_at END "
         "WHERE id = 1 RETURNING consecutive_errors",
-        (status, result.text[:2000], not result.error),
+        (status, result.text[:2000], not result.error, notified),
     )
     consecutive = int((row or {}).get("consecutive_errors") or 0)
 
@@ -161,7 +237,11 @@ def _heartbeat_prompt() -> tuple[str, str]:
         f"todos ({todo_tool}), deals going cold (crm_get_stale_deals), and contacts "
         "nobody has followed up with (crm_get_contact_staleness). If, and ONLY if, "
         "something genuinely needs the user's attention, call notify_user ONCE with a "
-        "short, actionable summary. You cannot modify CRM records. If nothing needs "
+        "short, actionable summary. "
+        "When the message lists records that are new since your last check, those are the only "
+        "ones to tell the user about: look them up with your READ tools and leave everything else "
+        "out, because it was already reported. "
+        "You cannot modify CRM records. If nothing needs "
         "attention, reply exactly HEARTBEAT_OK.\n\n"
         # Tool results now carry raw per-record free text (deal titles, contact names,
         # unconfirmed field values), not just aggregates. Nobody is watching this turn,

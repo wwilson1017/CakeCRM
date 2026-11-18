@@ -231,6 +231,8 @@ def test_no_read_is_routine(todo_mode):
 @pytest.mark.parametrize("name", [
     "crm_delete_contact", "crm_archive_deal", "crm_merge_deals", "crm_merge_companies",
     "crm_bulk_move_deals", "crm_recompute_lead_scores", "crm_add_note",
+    "crm_apply_change_list",
+    "crm_execute_lead_import",
     "memory_add_fact", "memory_invalidate_fact",
     "write_context_file", "delete_context_file", "append_daily_note",
 ])
@@ -474,3 +476,11 @@ def test_reminder_tools_are_never_routine(todo_mode):
         assert reg.is_write(name) is True, name
         assert reg.is_routine_write(name) is False, name
     assert reg.is_write("reminder_list") is False
+
+
+def test_the_heartbeat_settings_write_is_never_routine(todo_mode):
+    todo_mode("normal")
+    reg = ToolRegistry()
+    assert reg.is_write("heartbeat_update_settings")
+    assert not reg.is_routine_write("heartbeat_update_settings")
+    assert reg.is_write("heartbeat_get_settings") is False

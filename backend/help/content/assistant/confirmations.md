@@ -16,6 +16,8 @@ The drawer's mode switch reads **Read / Ask / Auto**.
 - **Auto** — changes run straight away, with the exceptions below. You turn it on yourself.
 
 Read tools never ask, in any mode.
+Baker runs the lookups of one step side by side, and a lookup that has not answered within
+two minutes is stopped; Baker is told it timed out and carries on.
 
 ## What asking looks like
 
@@ -33,10 +35,15 @@ rather than trusting what comes back from the browser, marks the call as running
 runs it so a crash cannot double-execute it, and answers a repeated approval with the result
 it already produced.
 
-## Two things that ask even in Auto
+## Four things that ask even in Auto
 
 - **Writing or deleting one of Baker's two protected knowledge files.** See
   `assistant/context-files`.
+- **Importing a lead list.** A lead import always shows one Approve card with the server's
+  count and sample, in every mode and from any conversation. See
+  `contacts-and-companies/lead-import`.
+- **A change list.** One edit across many deals or todos always shows one card listing
+  every change, old value to new, with Undo afterwards. See `assistant/change-lists`.
 - **A conversation that has read untrusted outside content.** Reading mail, uploading a
   file or a photo, or listing a todo that arrived through the capture link while no token was
   configured (anyone could have posted it), brings in text somebody else wrote. A capture
@@ -44,7 +51,9 @@ it already produced.
   conversation drops back to
   asking before every change, for the rest of its life — even after the message that brought
   the content in has aged out of view. The taint is recorded against the conversation itself,
-  so it cannot be shaken off by talking for long enough.
+  so it cannot be shaken off by talking for long enough. Within one step Baker's lookups
+  always finish before its changes run, so a change sent in the same step as an email read
+  asks too.
 
 That is the defence against prompt injection: text arriving from outside is wrapped and
 labelled as data, so it cannot pose as an instruction, and if it somehow steered Baker anyway

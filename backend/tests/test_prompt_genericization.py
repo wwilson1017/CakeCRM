@@ -327,6 +327,7 @@ def _all_tool_defs() -> list[dict]:
     from crm.gtd_tools import GTD_TOOL_DEFS
     from crm.tools import CRM_TOOL_DEFS
     from gmail.tools import GMAIL_TOOL_DEFS
+    from heartbeat.tools import HEARTBEAT_TOOL_DEFS
     from help.tools import HELP_TOOL_DEFS
     from memory.tools import get_memory_tools
     from notifications.tools import get_notification_tools
@@ -338,6 +339,7 @@ def _all_tool_defs() -> list[dict]:
     defs += list(get_memory_tools()[0])
     defs += list(get_context_file_tools()[0])
     defs += list(HELP_TOOL_DEFS)
+    defs += list(HEARTBEAT_TOOL_DEFS)
     defs += list(REMINDER_TOOL_DEFS)
     defs += list(get_notification_tools(ToolRegistry())[0])
     return defs

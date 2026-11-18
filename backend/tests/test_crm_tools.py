@@ -23,11 +23,14 @@ def test_def_and_executor_counts():
     # Phase 2: get_deal_health, get_pipeline_analytics) + 2 (#70 todo parity:
     # crm_update_todo, crm_delete_todo) + 1 (#55 crm_bulk_move_deals) + 1 (#200
     # crm_get_setup_status) - 1 (#299 removed crm_delete_todo) + N (sibling
-    # additions) + 2 (#334 crm_preview_company_merge, crm_merge_companies) — SUM the additions, never overwrite the number. On rebase behind a
-    # sibling that also adds a tool, recompute cumulative (do NOT keep-both a single
-    # number). The executor count is always defs + 1 (crm_log_note alias).
-    assert len(CRM_TOOL_DEFS) == 49
-    assert len(TOOL_EXECUTORS) == 50
+    # additions) + 2 (#334 crm_preview_company_merge, crm_merge_companies)
+    # + 2 (#370 crm_preview_lead_import, crm_execute_lead_import).
+    # + 1 (#371 crm_apply_change_list).
+    # SUM the additions, never overwrite the number. On rebase behind a sibling that
+    # also adds a tool, recompute cumulative (do NOT keep-both a single number).
+    # The executor count is always defs + 1 (crm_log_note alias).
+    assert len(CRM_TOOL_DEFS) == 52
+    assert len(TOOL_EXECUTORS) == 53
     # Relative invariant (robust to any future additions): exactly one alias-only executor.
     assert len(TOOL_EXECUTORS) == len(CRM_TOOL_DEFS) + 1
 
@@ -934,9 +937,8 @@ def test_crm_recompute_lead_scores_passes_scope_and_wraps_error(monkeypatch):
 # ── Install setup status (issue #200) ─────────────────────────────────────────
 
 def test_setup_status_is_a_read_with_no_arguments():
-    """A READ, and there is no settings WRITE tool beside it — an API key or an OAuth
-    secret must never flow through chat history, and a wrong settings write is
-    install-wide where a wrong record write is one record."""
+    """A READ; no settings write tool takes a key or a secret. Neither belongs in
+    chat history; the only settings write is the background check-in schedule."""
     d = next(t for t in CRM_TOOL_DEFS if t["name"] == "crm_get_setup_status")
     assert d["writes"] is False
     # Only a write may carry a confirmation tier; the registry fails loud otherwise.
@@ -977,3 +979,20 @@ def test_the_model_cannot_name_the_seat_the_setup_status_answers_for(monkeypatch
     assert executors["crm_get_setup_status"](user_id=99) == {"seat": 4}
     _, unattended = get_crm_tools(user=None)
     assert unattended["crm_get_setup_status"](user_id=99) == {"seat": None}
+
+
+def test_lead_import_targets_bounded_to_ten(monkeypatch):
+    monkeypatch.setattr(tools.lead_import, "execute", lambda *a, **kw: {
+        "ok": True, "deals_created": 12, "deal_ids": list(range(1, 13)),
+    })
+    monkeypatch.setattr(tools, "pg_fetchall", lambda *a, **kw: [
+        {"id": i, "title": f"Lead {i}", "owner_id": 7} for i in range(1, 11)
+    ])
+    result = tools.crm_execute_lead_import("b", user_id=7)
+    assert result["deals_created"] == 12
+    assert len(result["targets"]) == 10
+    assert "deal_ids" not in result
+    assert all(t["url"].endswith(f"?deal={t['id']}") for t in result["targets"])
+    error = {"error": "expired"}
+    monkeypatch.setattr(tools.lead_import, "execute", lambda *a, **kw: error)
+    assert tools.crm_execute_lead_import("b", user_id=7) is error

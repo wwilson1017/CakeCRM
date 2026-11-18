@@ -69,7 +69,7 @@ class Store:
         return (text or "")[:60]
 
     def save_message(self, cid, mid, role, content, tool_calls=None, model="",
-                     context_tokens=None, context_boundary_seq=None, images=None):
+                     context_tokens=None, context_boundary_seq=None, images=None, files=None):
         self.context_tokens.append(context_tokens)
         self.convs.setdefault(cid, {"id": cid, "messages": []})["messages"].append(
             {"id": mid, "role": role, "content": content, "tool_calls": tool_calls, "tool_results": None})
@@ -358,3 +358,22 @@ async def test_without_a_gmail_read_the_same_routine_write_runs(store):
     events = await _run(prov, reg, [{"role": "user", "content": "log a call"}], tool_mode="normal")
     assert "confirm" not in [e["type"] for e in events]
     assert reg.calls == [("crm_list_deals", {}), ("crm_log_activity", {"contact_id": 7})]
+
+
+@pytest.mark.asyncio
+async def test_a_write_listed_before_the_gmail_read_is_gated_too(store):
+    """#372: reads of a batch run before its writes, so the taint of a read the model
+    listed AFTER a write is already in force when that write reaches the gate."""
+    reg = Registry(writes={"crm_create_deal"})
+    prov = FakeProvider([
+        [_complete(
+            [_tc("crm_create_deal", "w1", {"name": "Deal"}),
+             _tc("gmail_search", "r1", {"query": "x"})],
+            stop="tool_use",
+        )],
+        [{"type": "text", "text": "?"}, _complete()],
+    ])
+    events = await _run(prov, reg, [{"role": "user", "content": "act on that email"}], tool_mode="power")
+    assert reg.calls == [("gmail_search", {"query": "x"})]  # the write did not run
+    assert any(e["type"] == "confirm" and e["tool"] == "crm_create_deal" for e in events)
+    assert store.untrusted_marks  # and the durable taint is still recorded

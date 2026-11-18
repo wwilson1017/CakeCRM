@@ -137,6 +137,14 @@ It returns nothing.
   The server verifies type by magic bytes and enforces 3.75 MB / 8000 px per side per photo.
   Photos are untrusted content and tighten confirmation rules like uploaded documents.
 
+- **Spreadsheet uploads.** A CSV or XLSX file attached in chat is stored in
+  `assistant_message_files` with the conversation, so the assistant can import it by id,
+  and is deleted through its message FK cascade. Other document types are text-only:
+  their bytes are not stored. A lead-import preview keeps parsed rows in
+  `assistant_lead_import_previews`, readable only by the seat that made it and usable for
+  60 minutes. Execute consumes it atomically; the next preview sweeps expired rows.
+  Preview results are untrusted content and tighten confirmation rules, Auto included.
+
 - **Live transcription (off by default, admin switch).** Live transcription shows your words
   while you speak. To do that, your browser hands the microphone audio to its own speech
   recognition service, which is usually run online by the browser maker (for example Google
@@ -200,11 +208,13 @@ of those: capturing a todo, updating one, and creating or updating a project.
 
 **Everything else still asks**, and absence of the classification is the deny state — a
 tool nobody has classified confirms, so a capability added later is never silently
-exempt. Deletes, archives, merges, bulk moves, lead-score recomputation, Gmail drafts,
+exempt. Deletes, archives, merges, bulk moves, change lists, lead-score recomputation, Gmail drafts,
 notifications, memory facts, and any write to `soul.md` or `MEMORY.md` all
 keep their Approve card. Bulk todo updates and project deletes are in that group too. A todo is never deleted: the
 assistant has no todo delete tool, and dropping one keeps its card.
 Setting, changing and voiding a reminder keep their card too: a reminder notifies people later.
+Changing the background check-in's schedule is not routine either: it gets a card in Ask
+mode and on Telegram like every other non-routine write, and only an admin's seat can run it.
 Five of the twenty can take a record out of your lists by setting its `status` —
 archiving a contact or a company, or dropping a todo or a project; that
 particular call keeps its card even though the tool is routine. Giving a todo a
@@ -213,9 +223,12 @@ its card too; clearing one does not. Finishing something is
 not the same as removing it, so marking a todo done or a project completed runs without
 asking, and so does filing either one to someday.
 
-Three rules override the tier entirely, in every mode:
+Five rules override the tier entirely, in every mode:
 
 - a write to a protected context file always confirms (see below);
+- a lead import always confirms, whichever conversation it is approved from;
+- a change list (one edit across many deals or todos) always confirms, on one card that
+  lists every change from the server's own read of the records;
 - untrusted content in the conversation — an uploaded document or photo, or email the assistant
   read, this turn or an earlier one — makes every write confirm;
 - the unattended assistant (heartbeat, proactive nudges) cannot reach any of

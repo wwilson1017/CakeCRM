@@ -204,3 +204,17 @@ def test_image_name_case_insensitive():
     assert uploads.is_image_name("card.JPG")
     assert not uploads.is_image_name("notes.txt")
     assert not uploads.is_image_name("card.gif")
+
+
+def test_stored_spreadsheet_tag_has_server_attachment_id():
+    from assistant import uploads
+
+    tagged = uploads.extract_upload("l.csv", b"a,b", "ab12")
+    assert 'filename="l.csv" attachment_id="ab12"' in tagged.splitlines()[0]
+    plain = uploads.extract_upload("l.csv", b"a,b")
+    assert 'filename="l.csv">' in plain.splitlines()[0]
+    assert "attachment_id=" not in plain
+    for name in ("l.csv", "l.CSV", "l.xlsx", "l.XLSX"):
+        assert uploads.is_stored_name(name)
+    for name in ("l.txt", "l.json", "l.png", "l.docx", "l.pdf", "l.xls", "csv"):
+        assert not uploads.is_stored_name(name)

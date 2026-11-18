@@ -28,7 +28,7 @@ registry's own handler turns any failure into one tool error.
 
 ## Why help results are NOT fenced as untrusted
 
-``delimiters.UNTRUSTED_SOURCE_TOOLS`` encodes THIRD-PARTY origin: a Gmail body is text a
+``delimiters.UNTRUSTED_SOURCE_TOOLS`` encodes THIRD-PARTY origin: a Gmail body or a lead-list row may be text a
 stranger wrote. Help content is our own committed prose, reviewed in a pull request and
 scanned by ``tests/test_prompt_genericization.py``. It is the one payload class that
 cannot carry hostile user text, so — exactly like a context-file read — a help read must

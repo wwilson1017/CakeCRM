@@ -629,3 +629,67 @@ def test_a_list_past_the_cap_is_reachable_by_the_id_sweep(pg_db):
 
     refused = client.get("/api/crm/gtd/todos", params={"status": "inbox", "after_id": 1})
     assert refused.status_code == 400
+
+
+# ── #374: compact model-facing pages ─────────────────────────────────────────
+
+def test_tool_pages_cover_250_todos_in_stable_order(pg_db):
+    from crm import gtd_service, gtd_tools
+
+    gtd_service.bulk_create([{"title": f"Page item {i}", "notes": "Details"} for i in range(250)])
+    execute = gtd_tools.GTD_TOOL_EXECUTORS["todo_list"]
+    full = execute(detail=True, limit=500)
+    assert full["total"] == 250
+    assert {"notes", "created_at"} <= full["todos"][0].keys()
+    compact_keys = {"id", "title", "status", "source", "context", "project", "due_date",
+                    "bring_back_on", "star", "tags", "repeat", "has_notes"}
+    seen = []
+    offset = 0
+    for size, next_offset in [(100, 100), (100, 200), (50, None)]:
+        page = execute(offset=offset)
+        assert page["count"] == len(page["todos"]) == size
+        assert page["total"] == 250
+        assert page["next_offset"] == next_offset
+        for row in page["todos"]:
+            assert row.keys() <= compact_keys
+            assert "source" in row
+        seen.extend(row["id"] for row in page["todos"])
+        offset = page["next_offset"]
+    assert seen == [row["id"] for row in full["todos"]]
+    assert len(set(seen)) == 250
+    empty = execute(project="no such")
+    assert empty["todos"] == [] and empty["total"] == 0 and empty["next_offset"] is None
+
+
+def test_tool_count_and_list_share_corpus_filters(pg_db):
+    from core.postgres import pg_fetchone
+    from crm import gtd_service, gtd_tools, service
+
+    owner = pg_fetchone(
+        "INSERT INTO users (email, name, password_hash) "
+        "VALUES ('paging@example.test', 'Paging Rep', '!') RETURNING id",
+    )["id"]
+    owned = gtd_service.create_todo("Owned", owner_id=owner, context="@calls", tags=["phone"],
+                                    star=True, due_date="2026-12-01", project="Launch")
+    unassigned = gtd_service.create_todo("Unassigned")
+    deferred = gtd_service.create_todo("Future return")
+    gtd_service.update_todo(deferred["id"], {"bring_back_on": "9999-12-31"})
+    deal = service.create_deal("Archived deal")
+    gtd_service.create_todo("Archived follow-up", deal_id=deal["id"])
+    service.archive_deal(deal["id"], reason="Closed")
+    execute = gtd_tools.GTD_TOOL_EXECUTORS["todo_list"]
+    cases = [
+        ({}, {owned["id"], unassigned["id"]}),
+        ({"owner_id": owner}, {owned["id"]}),
+        ({"owner_id": service.UNASSIGNED}, {unassigned["id"]}),
+        ({"search": "Future return"}, {deferred["id"]}),
+        ({"include_deferred": True}, {owned["id"], unassigned["id"], deferred["id"]}),
+        ({"status": "inbox", "project": "Launch", "context": "@CALLS", "tag": "phone",
+          "starred": True, "due_before": "2026-12-01", "due_after": "2026-12-01"}, {owned["id"]}),
+        ({"search": "Launch"}, {owned["id"]}),
+        ({"status": "dropped"}, set()),
+    ]
+    for filters, expected in cases:
+        result = execute(detail=True, limit=500, **filters)
+        assert result["total"] == len(result["todos"]) == len(expected)
+        assert {row["id"] for row in result["todos"]} == expected

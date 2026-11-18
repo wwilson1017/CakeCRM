@@ -42,3 +42,31 @@ A CSV must have a name column. A row with a blank name is skipped and counted.
 ## Duplicates are not checked
 
 Import does not look for people already in the CRM. Every row becomes a new contact, even if someone with that email exists. Tidy your file first. See [Duplicates](07-duplicates.md).
+
+
+## Importing leads with Baker
+
+For a lead list that should become companies, contacts **and deals**, use Baker instead of
+the Contacts page import. An AI provider must be set up for Baker.
+
+1. Use **Attach a file** in Baker to attach a CSV or XLSX, and ask to import the leads. You can also paste CSV or tab-separated rows with a header line.
+2. Read the preview: how many deals, new and existing contacts and companies, plus a sample. Ask Baker to map any useful columns it missed and preview again.
+3. Press **Approve** on the one card. Its count and sample come from the saved preview and survive a page reload. Baker always asks for your approval before a lead import writes anything, Auto mode included.
+
+You get:
+
+- Companies matched by name or created, with new companies left unassigned.
+- Contacts matched by email to a contact that is not archived, or created and owned by you. Existing contacts are not changed. A company-only row makes no contact.
+- One new **Lead** deal per usable row, owned by you, titled “Company - New Lead” (or the person's name) unless a title column is mapped. Value starts at 0 USD unless a value column is mapped. Columns mapped to notes go in the deal's notes field.
+- If you supply a note, one chatter note on every new deal, written as you. It can be up to 2000 characters and counts as contact, giving the deal a last-contact date.
+
+The limit is **500 rows per import**; an XLSX uses its first sheet. A preview lasts **60 minutes**
+and imports once. Companies, contacts, deals and notes are saved together, all or nothing.
+An expired or already-imported preview says so; ask Baker for a new preview.
+
+**Deals are never checked for duplicates.** Importing the same list twice doubles the deals.
+A person row without an email always creates a new contact. Custom-field columns and import
+undo are not supported; you can archive imported deals normally.
+
+CSV and XLSX bytes stay with the conversation and are deleted with it. See
+[What Baker can do](../07-baker/02-what-baker-can-do.md).

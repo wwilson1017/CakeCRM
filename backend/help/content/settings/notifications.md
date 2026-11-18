@@ -1,13 +1,13 @@
 ---
 title: Notifications
 description: Browser push, the bell, and Telegram delivery. Works with no AI keys.
-aliases: notifications, push, web push, alerts, bell, digest, nudges, mentions, @-mention
+aliases: notifications, push, web push, alerts, bell, digest, nudges, mentions, @-mention, heartbeat, check-in, quiet hours
 admin: false
 ---
 ## Who can do this
 
-The Notifications card is in Settings, **Personal**, and every signed-in user sees it. One
-control inside it is admin-only — see the digest section below.
+The Notifications card is in Settings, **Personal**, and every signed-in user sees it. The digest and
+background check-in controls inside it are admin-only — see their sections below.
 
 ## Browser push
 
@@ -15,7 +15,7 @@ The toggle *is* the subscription: turning it on asks your browser for permission
 registers this browser to receive push. Turning it off unregisters it. It is per browser and
 per device, so turning it on at your desk does nothing for your phone.
 
-Push works with **no AI provider configured**. Nothing in notifications needs a key.
+Push works with **no AI provider configured**. Delivery itself never needs a key.
 
 ## The bell
 
@@ -66,6 +66,34 @@ though the card around it is not. The digest itself is plain database work: a pi
 summary, stale deals, contacts nobody has touched. With an AI provider configured it may add
 at most one extra notification; with none, it still runs.
 
+## Baker's background check-in
+
+Separate from the daily digest, Baker checks for newly overdue todos, deals going cold and
+contacts nobody has followed up with. It only speaks when something is new. A record stays
+quiet until it leaves that watched set and later comes back, for example after a deal is
+touched and then goes cold again. Closing one overdue todo does not repeat the others.
+
+This is **install-wide and admin-only**, and needs an AI provider. In Settings, Personal,
+Notifications, admins with a provider see **Baker's background check-in**:
+
+- **Turn on check-ins / Turn off check-ins** controls these check-ins separately from the daily digest.
+- **Check every** ranges from 30 minutes to once a day.
+- **Quiet hours** use the install's local timezone, shown beside the controls. A window such
+  as 22:00–07:00 can cross midnight. Clear both times to remove it.
+- **At most one notification every** sets the minimum gap: four hours by default, from zero
+  (no minimum) to 24 hours. New records wait through the gap and quiet hours for a later check.
+
+Press **Save** to apply the interval, quiet hours and gap. An admin can also ask Baker
+"only check once a day", "stop at night" or "pause for a week". A pause resumes by itself
+when the requested number of days ends; **Resume** ends it early. Switching on does not
+end a pause. Baker reads the values with `heartbeat_get_settings` and changes them with
+`heartbeat_update_settings`. In Ask mode it shows an **Approve** card first; on Telegram
+it asks for typed approval. In Auto it applies the change, like any other non-routine write.
+No key or secret is involved.
+
+The server operator's environment switch overrides these preferences. The admin run-now
+check is for testing: it bypasses the schedule, pause, quiet hours, gap and repeat guard.
+
 ## What raises a notification
 
 A teammate can mention you in a note on a deal, contact or company by typing `@` and picking
@@ -74,7 +102,7 @@ never notified about mentioning yourself, and editing a note only notifies peopl
 newly added to it.
 
 Baker can raise one from a background turn, and it is limited to a single notification per
-run. When its text names a deal Baker looked at during that run, the deal number is replaced
+run. A background check-in notification is not repeated for an unchanged record. When its text names a deal Baker looked at during that run, the deal number is replaced
 with the deal's title and a link that opens it, since a push or a Telegram message cannot
 open a deal from its number. A number Baker did not look at is left as written. Baker cannot
 mention anyone. The digest and nudges raise their own, each claimed before it is sent so two ticks can

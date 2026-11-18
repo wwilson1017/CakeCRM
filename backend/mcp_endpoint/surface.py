@@ -10,7 +10,10 @@ that, an exclusion that is structural, not a list someone must remember to exten
   * every WRITE to Baker's memory or context files (`kind` memory/context with
     `writes`) — those land in Baker's system prompt; their reads cross;
   * `crm_delete_contact`, the one irreversible write (the contact, its activities and
-    its todos).
+    its todos);
+  * `crm_apply_change_list` (#371), which only the in-app chat can run: the engine stages
+    the batch before its Approve card and Undo is a button on that card, so over `/mcp`
+    it could only ever answer "applied only from its approval card".
 
 Everything else crosses with honest hints: reads `readOnlyHint`; a routine write
 `destructiveHint:false`; every other write, and every routine write that can hide a
@@ -26,7 +29,7 @@ from assistant.confirm_tier import HIDE_CAPABLE_TOOLS
 
 NEVER_CROSSES_KINDS = frozenset({"gmail", "notification"})
 READ_ONLY_KINDS = frozenset({"memory", "context"})  # their reads cross, their writes never
-NEVER_CROSSES_NAMES = frozenset({"crm_delete_contact"})
+NEVER_CROSSES_NAMES = frozenset({"crm_delete_contact", "crm_apply_change_list"})
 
 INSTRUCTIONS = """\
 This server is one person's seat in CakeCRM, a self-hosted CRM: contacts, companies, \

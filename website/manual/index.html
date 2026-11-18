@@ -306,7 +306,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <li>If your browser blocks site storage, the choice lasts until you close the tab.</li>
 </ul>
 <p>The theme is a personal display choice. It does not affect anyone else on your team.</p><nav class="pn"><a href="#/getting-started/mobile"><small>Previous</small>Using CakeCRM on a phone</a><a class="next" href="#/getting-started/notifications"><small>Next</small>Notifications</a></nav></article>
-<article data-route="getting-started/notifications" data-title="Notifications" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/getting-started/what-cakecrm-is">Getting started</a></p><h1>Notifications</h1><p class="lead">The bell, browser push, Telegram and the daily digest, and what raises a notification in the first place.</p><p>CakeCRM tells you when something needs you through the bell in the header, and optionally through browser push and Telegram. None of it needs an AI provider.</p>
+<article data-route="getting-started/notifications" data-title="Notifications" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/getting-started/what-cakecrm-is">Getting started</a></p><h1>Notifications</h1><p class="lead">The bell, browser push, Telegram and the daily digest, and what raises a notification in the first place.</p><p>CakeCRM tells you when something needs you through the bell in the header, and optionally through browser push and Telegram. Delivery needs no AI provider; Baker's check-in does.</p>
 <h2>The bell</h2>
 <p>The bell sits in the header on every page, on a phone too. Its badge counts your unread notifications. Open it to read them, dismiss one with its <strong>✕</strong>, or clear the lot with <strong>Dismiss all</strong>.</p>
 <p>When the system itself has a problem to report, an alert appears at the top of the list with <strong>Acknowledge</strong> and <strong>Resolve</strong> buttons. Alerts are shared by the whole install.</p>
@@ -320,7 +320,7 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <ul>
 <li><strong>Mentions.</strong> A teammate types <code>@</code> in a note on a deal, contact or company and picks your name. The notification's title opens that record. See <a href="#/contacts-and-companies/notes-mentions-attachments">Notes, mentions and attachments</a>.</li>
 <li><strong>The daily digest and nudges</strong>, when an admin has turned them on (below).</li>
-<li><strong>Baker</strong>, at most one notification per background run, once an AI provider is connected.</li>
+<li><strong>Baker</strong>, at most one notification per background run, once an AI provider is connected. Its background check-in only reports newly watched records, without repeating unchanged ones.</li>
 </ul>
 <h2>Browser push</h2>
 <p>In Settings, Personal, the <strong>Notifications</strong> card has <strong>Enable Web Push</strong>. Pressing it asks your browser for permission and registers this browser. It works per browser and per device: turning it on at your desk does nothing for your phone. <strong>Disable Web Push</strong> turns it off again.</p>
@@ -329,7 +329,12 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <h2>Telegram</h2>
 <p>If you link your Telegram account from Settings, Personal, <strong>Link my Telegram</strong>, your notifications also go to that chat. There is no separate on/off switch for it. See <a href="#/integrations/telegram">Telegram</a>.</p>
 <h2>The daily digest and nudges (admins)</h2>
-<p>The same card has a <strong>Daily digest and nudges</strong> section with <strong>Turn on</strong> and <strong>Turn off</strong>. It sends a pipeline summary each morning, plus a nudge when a deal goes cold or a contact with open business has not been spoken to. It applies to the whole install, so only admins see the control.</p><nav class="pn"><a href="#/getting-started/light-and-dark"><small>Previous</small>Light and dark mode</a><a class="next" href="#/dashboard/dashboard"><small>Next</small>The dashboard</a></nav></article>
+<p>The same card has a <strong>Daily digest and nudges</strong> section with <strong>Turn on</strong> and <strong>Turn off</strong>. It sends a pipeline summary each morning, plus a nudge when a deal goes cold or a contact with open business has not been spoken to. It applies to the whole install, so only admins see the control.</p>
+<h2>Baker's background check-in (admins)</h2>
+<p>Separate from the daily digest, Baker looks for newly overdue todos, deals going cold and contacts nobody has followed up with. It sends one summary when something is new. A record stays quiet until it leaves that watched set and later comes back, for example after a deal is touched and then goes cold again. Closing one overdue todo does not repeat the others.</p>
+<p>With an AI provider connected, admins see <strong>Baker's background check-in</strong> in Settings, Personal, Notifications. It applies to the whole install. <strong>Turn on check-ins / Turn off check-ins</strong> controls the check-in; <strong>Check every</strong> ranges from 30 minutes to <strong>Once a day</strong>. <strong>Quiet hours</strong> use the install's displayed timezone and may cross midnight, such as 22:00–07:00; clear both times to remove them. <strong>At most one notification every</strong> sets a gap of zero to 24 hours, four by default. Press <strong>Save</strong> after changing these controls.</p>
+<p>An admin can ask Baker “only check once a day”, “stop at night” or “pause for a week”. In <strong>Ask</strong>, Baker shows an <strong>Approve</strong> card; on Telegram it asks for typed approval. <strong>Auto</strong> applies the change as with other non-routine writes. A pause ends automatically; <strong>Resume</strong> in Settings ends it early. Turning on does not end a pause.</p>
+<p>The server operator's environment switch overrides these settings. The admin <strong>run now</strong> check bypasses the schedule, quiet hours, pause, notification gap and repeat guard so it can test the turn.</p><nav class="pn"><a href="#/getting-started/light-and-dark"><small>Previous</small>Light and dark mode</a><a class="next" href="#/dashboard/dashboard"><small>Next</small>The dashboard</a></nav></article>
 <article data-route="dashboard/dashboard" data-title="The dashboard" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/dashboard/dashboard">Dashboard</a></p><h1>The dashboard</h1><p class="lead">The first page after you sign in: what needs you today, then the shape of the pipeline and recent work.</p><p>The Dashboard is the first page you see after signing in. It reads from top to bottom: first what needs you now, then how the pipeline looks, then what has happened lately. Everything on it is plain database work and works with no AI provider.</p>
 <figure class="shot"><img data-shot="dashboard" width="1400" height="954" alt="The dashboard screenshot"></figure>
 
@@ -413,6 +418,8 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <article data-route="pipeline/board" data-title="The pipeline board" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/pipeline/board">Pipeline</a></p><h1>The pipeline board</h1><p class="lead">Every deal as a card in its stage&#x27;s column; drag a card to move it, click it to open it.</p><p><strong>Pipeline</strong> shows your deals as cards in columns, one column per stage. Under the page title a line reads how much is open and how many open deals there are.</p>
 <figure class="shot"><img data-shot="pipeline-board" width="1400" height="954" alt="The pipeline board screenshot"></figure>
 
+<h2>Hiding the header</h2>
+<p>On desktop, the arrow at the right of the search row folds away the title, totals line and top <strong>Add Deal</strong> button so the board shows more cards. While folded, a <strong>+</strong> button beside the arrow adds a deal. Click the arrow again to bring the header back, including <strong>Show all</strong> for hidden stages. The arrow stays available even on an empty board. This browser remembers the choice for you; phones keep the header as before.</p>
 <h2>The columns</h2>
 <p>There are six stages: lead, qualified, proposal, negotiation, won and lost. The board opens with the four open stages showing. Won and Lost are hidden by default, so the board is about work that is still live.</p>
 <p>When any stage is hidden, the line under the title says how many, with a <strong>Show all</strong> link beside it. Nothing is ever secretly missing. To hide or show a single column, use the stage checkboxes in the toolbar above the board. See <a href="#/pipeline/stages-and-closing">Stages and closing a deal</a> for how to make Won and Lost show by default.</p>
@@ -612,7 +619,8 @@ footer { margin-top:56px; font-size:13px; color:var(--muted) }
 <h2>Moving into Won or Lost</h2>
 <p><strong>Move to…</strong> does list Won and Lost, but a bulk move closes the deals with today as their Closed on date and no lost reason. If the date or reason matters, close the deals one at a time with <strong>Mark Won</strong> or <strong>Mark Lost</strong>. See <a href="#/pipeline/stages-and-closing">Stages and closing a deal</a>.</p>
 <h2>Asking Baker</h2>
-<p>With an AI provider connected, you can ask Baker to move a set of deals. It has the same 200-deal limit, but it only moves deals into open stages. It refuses to win or lose deals in bulk, and closes them one at a time instead so each date and reason is captured. See <a href="#/baker/what-baker-can-do">What Baker can do</a>.</p><nav class="pn"><a href="#/pipeline/stages-and-closing"><small>Previous</small>Stages and closing a deal</a><a class="next" href="#/pipeline/archived-deals"><small>Next</small>Archived deals</a></nav></article>
+<p>With an AI provider connected, you can ask Baker to move a set of deals. It has the same 200-deal limit, but it only moves deals into open stages. It refuses to win or lose deals in bulk, and closes them one at a time instead so each date and reason is captured. See <a href="#/baker/what-baker-can-do">What Baker can do</a>.</p>
+<p>If you ask for more than a stage move, such as a new stage and a new close date together, Baker puts every change on one card that you approve once and can undo. See <a href="#/baker/approvals">Approvals and modes</a>.</p><nav class="pn"><a href="#/pipeline/stages-and-closing"><small>Previous</small>Stages and closing a deal</a><a class="next" href="#/pipeline/archived-deals"><small>Next</small>Archived deals</a></nav></article>
 <article data-route="pipeline/archived-deals" data-title="Archived deals" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/pipeline/board">Pipeline</a></p><h1>Archived deals</h1><p class="lead">Archiving hides a junk deal without deleting it, and Restore brings it back.</p><p>Archiving is a soft hide. The deal keeps every note, activity and todo; it simply stops appearing. Nothing is deleted.</p>
 <h2>Archived is not Lost</h2>
 <ul>
@@ -957,7 +965,30 @@ automatically retries a save.</p><nav class="pn"><a href="#/pipeline/adding-a-de
 <li>A row that fails is listed as an error, and the rest still import.</li>
 </ul>
 <h2>Duplicates are not checked</h2>
-<p>Import does not look for people already in the CRM. Every row becomes a new contact, even if someone with that email exists. Tidy your file first. See <a href="#/contacts-and-companies/duplicates">Duplicates</a>.</p><nav class="pn"><a href="#/contacts-and-companies/notes-mentions-attachments"><small>Previous</small>Notes, mentions and attachments</a><a class="next" href="#/contacts-and-companies/duplicates"><small>Next</small>Duplicates</a></nav></article>
+<p>Import does not look for people already in the CRM. Every row becomes a new contact, even if someone with that email exists. Tidy your file first. See <a href="#/contacts-and-companies/duplicates">Duplicates</a>.</p>
+<h2>Importing leads with Baker</h2>
+<p>For a lead list that should become companies, contacts <strong>and deals</strong>, use Baker instead of
+the Contacts page import. An AI provider must be set up for Baker.</p>
+<ol>
+<li>Use <strong>Attach a file</strong> in Baker to attach a CSV or XLSX, and ask to import the leads. You can also paste CSV or tab-separated rows with a header line.</li>
+<li>Read the preview: how many deals, new and existing contacts and companies, plus a sample. Ask Baker to map any useful columns it missed and preview again.</li>
+<li>Press <strong>Approve</strong> on the one card. Its count and sample come from the saved preview and survive a page reload. Baker always asks for your approval before a lead import writes anything, Auto mode included.</li>
+</ol>
+<p>You get:</p>
+<ul>
+<li>Companies matched by name or created, with new companies left unassigned.</li>
+<li>Contacts matched by email to a contact that is not archived, or created and owned by you. Existing contacts are not changed. A company-only row makes no contact.</li>
+<li>One new <strong>Lead</strong> deal per usable row, owned by you, titled “Company - New Lead” (or the person's name) unless a title column is mapped. Value starts at 0 USD unless a value column is mapped. Columns mapped to notes go in the deal's notes field.</li>
+<li>If you supply a note, one chatter note on every new deal, written as you. It can be up to 2000 characters and counts as contact, giving the deal a last-contact date.</li>
+</ul>
+<p>The limit is <strong>500 rows per import</strong>; an XLSX uses its first sheet. A preview lasts <strong>60 minutes</strong>
+and imports once. Companies, contacts, deals and notes are saved together, all or nothing.
+An expired or already-imported preview says so; ask Baker for a new preview.</p>
+<p><strong>Deals are never checked for duplicates.</strong> Importing the same list twice doubles the deals.
+A person row without an email always creates a new contact. Custom-field columns and import
+undo are not supported; you can archive imported deals normally.</p>
+<p>CSV and XLSX bytes stay with the conversation and are deleted with it. See
+<a href="#/baker/what-baker-can-do">What Baker can do</a>.</p><nav class="pn"><a href="#/contacts-and-companies/notes-mentions-attachments"><small>Previous</small>Notes, mentions and attachments</a><a class="next" href="#/contacts-and-companies/duplicates"><small>Next</small>Duplicates</a></nav></article>
 <article data-route="contacts-and-companies/duplicates" data-title="Duplicates" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/contacts-and-companies/contacts-list">Contacts &amp; companies</a></p><h1>Duplicates</h1><p class="lead">How to find duplicate records, and why contacts cannot be merged.</p><p>Duplicate records are the commonest way a CRM goes stale. CakeCRM helps you avoid them, but it cannot merge contacts, so prevention matters most.</p>
 <h2>Preventing duplicates</h2>
 <ul>
@@ -1412,7 +1443,7 @@ There is no undo, and a merged duplicate cannot be restored. Baker can do this t
 <p><strong>Sort</strong> offers Open first, then due (the default), Due date, Priority, Title and Recently added. <strong>Clear filters</strong> resets them. <strong>Views</strong> saves a search and filters for the whole team.</p>
 <h2>Repeating todos</h2>
 <p>A repeating todo still repeats in this mode. Ticking it creates the next one.</p><nav class="pn"><a href="#/todos/contexts-and-search"><small>Previous</small>Contexts and search</a><a class="next" href="#/todos/no-login-links"><small>Next</small>No-login links</a></nav></article>
-<article data-route="todos/no-login-links" data-title="No-login links" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>No-login links</h1><p class="lead">Add todos, or work your whole list, from a phone without signing in.</p><p>Two links let you reach your todos with no sign-in. They are <strong>not equally open</strong>, so read this before you turn them on. An admin sets both up in <strong>Settings → Assistant → Todo mode</strong>, under <strong>No-login links</strong>. See <a href="#/settings/assistant">Assistant settings</a>.</p>
+<article data-route="todos/no-login-links" data-title="No-login links" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>No-login links</h1><p class="lead">Capture todos or sign a phone in once to work your whole list without logging in to CakeCRM.</p><p>Two surfaces let you reach your todos without logging in to CakeCRM. They are <strong>not equally open</strong>: capture uses a public or secret address; the full todo app uses a separate device sign-in. An admin configures them in <strong>Settings → Assistant → Todo mode</strong>, under <strong>No-login links</strong>. See <a href="#/settings/assistant">Assistant settings</a>.</p>
 <h2>Quick capture (write-only)</h2>
 <p>A phone bookmark that drops text straight into your inbox. It cannot read anything back.</p>
 <ul>
@@ -1422,19 +1453,23 @@ There is no undo, and a merged duplicate cannot be restored. Baker can do this t
 </ul>
 <p>Items that arrive this way carry a <strong>Capture link</strong> label. Read them before acting on them.</p>
 <h2>Full todo app (read and write)</h2>
-<p>The whole todo app, sized for a phone, with no login. It is <strong>off by default</strong>.</p>
+<p>The whole todo app, sized for a phone, at <code>/todo</code>. It is <strong>off by default</strong>. An admin turns on <strong>Enable the no-login todo app</strong> in Todo mode. Then each person signs in their own devices:</p>
+<ol>
+<li>Open <strong>Settings → Personal → Todo app devices</strong> and press <strong>Show a sign-in code</strong>.</li>
+<li>Scan the QR code with your phone or open the link there. The code is <strong>single-use and expires after one hour</strong>.</li>
+<li>Press <strong>Open my list on this device</strong>. Opening the link alone does not sign you in.</li>
+<li>Once signed in, add the todo page to your home screen:</li>
+</ol>
 <ul>
-<li>Tick <strong>Enable the no-login todo app</strong>. A secret link is made in the same step, so it is never published at a guessable address.</li>
-<li>On a phone, the lists sit in a bar along the bottom: <strong>Inbox</strong>, <strong>Today</strong>, <strong>To Do</strong>, <strong>Projects</strong> and <strong>More</strong> (Contexts, Waiting, Someday, Review and Done).</li>
-<li>Renaming contexts and saved Views are not available here.</li>
+<li><strong>iPhone or iPad (Safari):</strong> tap Share (the square with an upward arrow; tap <strong>•••</strong> first if hidden), then <strong>Add to Home Screen</strong>. Leave <strong>Open as Web App</strong> on if shown, then tap <strong>Add</strong>.</li>
+<li><strong>Android (Chrome):</strong> tap <strong>⋮</strong> beside the address bar → <strong>Install and create shortcut</strong> → <strong>Install</strong>. Older Chrome calls the menu item <strong>Add to Home screen</strong> or <strong>Install app</strong>.</li>
 </ul>
-<h2>Treat these links like passwords</h2>
-<p>Anyone holding the todo app link can read and change every todo. The link is not tied to any account, so deactivating the person who shared it does not stop it.</p>
-<ul>
-<li><strong>Copy</strong> puts a link on your clipboard. Open it on the device that needs it, rather than pasting it into a chat or ticket.</li>
-<li><strong>New secret link</strong> replaces the link at once. The old one stops working, including any home-screen app installed from it. This is how you revoke access.</li>
-</ul>
-<p>Neither link reaches anything else in the CRM: no contacts, deals, settings or assistant. Both work in either todo mode.</p>
+<p>On a phone, the lists sit in a bar along the bottom: <strong>Inbox</strong>, <strong>Today</strong>, <strong>To Do</strong>, <strong>Projects</strong> and <strong>More</strong> (Contexts, Waiting, Someday, Review and Done). Renaming contexts and saved Views are not available here.</p>
+<h2>Protect your codes and capture link</h2>
+<p>Anyone who uses a todo sign-in code can read and change the whole todo list. Show it only to your own devices; do not paste it into a chat or ticket. Each phone stays signed in after using its code. <strong>Sign out</strong> in the todo app ends that device's session. <strong>Sign out everywhere</strong> in Todo app devices ends all devices you signed in and cancels your unused codes. Deactivating your account also signs your devices out.</p>
+<p>Treat the <strong>capture link</strong> like a password too: anyone holding it can add to the inbox. <strong>New secret link</strong> replaces it and stops the old one working. This capture control does not revoke todo app sessions.</p>
+<p>Old secret links to the full todo app are no longer used. Sign the phone in with a fresh code and replace any old home-screen icon with the signed-in <code>/todo</code> page.</p>
+<p>Neither surface reaches anything else in the CRM: no contacts, deals, settings or assistant. Both work in either todo mode.</p>
 <h2>Capture from Telegram</h2>
 <p>If your phone is linked to the team's Telegram bot, in GTD mode a message starting with <code>capture</code> adds an inbox todo instantly, with no AI involved. See <a href="#/integrations/telegram">Telegram</a>.</p><nav class="pn"><a href="#/todos/simple-list"><small>Previous</small>The simple list</a><a class="next" href="#/todos/reminders"><small>Next</small>Reminders</a></nav></article>
 <article data-route="todos/reminders" data-title="Reminders" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/todos/todo-modes">Todos</a></p><h1>Reminders</h1><p class="lead">A fixed note sent to chosen teammates at a date and time, once or on repeat. Pause one to hold it, resume it to pick up again.</p><p>A reminder is a note you write once that is delivered, word for word, to the people you choose at a date and optional time. It is not a todo: it never appears in todo lists and there is nothing to finish. Use a todo for work you need to do; use a reminder for "tell these people this, then". Reminders live on the <strong>Reminders</strong> page.</p>
@@ -1583,23 +1618,25 @@ any reply or completed step still shows an error without adding an assistant mes
 <p>Live transcription shows your words while you speak. To do that, your browser hands the microphone audio to its own speech recognition service, which is usually run online by the browser maker (for example Google for Chrome, Apple for Safari). That audio goes straight from the browser, not through this install, under that company's terms, and cancelling a recording cannot take back audio it has already heard. The text that is sent or saved still comes from the normal transcription after you let go. When the switch is off (the default), audio goes only through this install to your transcribing provider.</p>
 <p>Desktop Chrome, Edge and Safari, and iOS Safari where speech recognition exists, can show a preview. Some browsers, including Firefox and Android, show no live text; the recording works as usual.</p><nav class="pn"><a href="#/reports/company-report"><small>Previous</small>The company report</a><a class="next" href="#/baker/what-baker-can-do"><small>Next</small>What Baker can and cannot do</a></nav></article>
 <article data-route="baker/what-baker-can-do" data-title="What Baker can and cannot do" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/baker/meet-baker">Baker, the assistant</a></p><h1>What Baker can and cannot do</h1><p class="lead">The honest boundary of what Baker may touch, what it never touches, and what it does with nobody watching.</p><h2>The short version</h2>
-<p>Baker can read and change CRM records, work your todos, keep its own memory and knowledge files, search and read connected Gmail, and put drafts in your Gmail Drafts folder. It cannot send email, cannot change install settings, and cannot act outside CakeCRM.</p>
+<p>Baker can read and change CRM records, work your todos, keep its own memory and knowledge files, search and read connected Gmail, and put drafts in your Gmail Drafts folder. It cannot send email, cannot change install settings except its own background check-in schedule, and cannot act outside CakeCRM.</p>
 <h2>CRM records and todos</h2>
 <p>Baker can search, create and update contacts, companies and deals, move a deal's stage, mark a deal won or lost, log activities, and create, update and complete todos. Whether each change runs straight away or waits for your <strong>Approve</strong> depends on the mode you pick. See <a href="#/baker/approvals">Approvals</a>.</p>
+<p>Asked for one edit across many deals or todos, Baker puts every change on a single card, old value to new, that you approve once and can undo. See <a href="#/baker/approvals">Approvals</a>.</p>
 <p>Deleting a contact or a company is permanent; there is no recycle bin. Deals cannot be deleted at all: archiving is the way to remove one, and it can be restored. A todo is never deleted either: when you ask Baker to delete one, it drops it, and you can reopen it from Done → Dropped.</p>
-<p>One turn can make at most 20 changes. Past that, Baker's further changes are refused.</p>
+<p>One turn can carry out at most 20 actions that change data. A change list counts as one action, covering up to 200 field changes. Past that action limit, Baker's further changes are refused.</p>
 <h2>Email</h2>
 <p>Gmail is <strong>read and create-draft only</strong>. Baker can search your mail, read a thread and write a draft into your Gmail Drafts folder. It can never send an email. No tool in CakeCRM sends mail, and a test fails the build if one is ever added. You review and send every draft yourself, from Gmail. See <a href="#/integrations/gmail">Gmail</a>.</p>
 <p>By default only admins can have Baker use the connected mailbox.</p>
 <h2>Settings</h2>
-<p>Baker has no settings tools at all. It cannot add an AI key, connect Gmail, switch todo mode, define a custom field, add a user or change branding. It can explain how to do these things and point you to the right screen; you do the clicking.</p>
+<p>Baker has one settings write tool, for its own background check-in: on/off, how often it runs, quiet hours, the minimum notification gap, and a pause that ends automatically. Only admins can use it. It is never routine: Ask shows an Approve card, Telegram asks for typed approval, and Auto applies it. No key or secret passes through it. See <a href="#/getting-started/notifications">Notifications</a>.</p>
+<p>It cannot add an AI key, connect Gmail, switch todo mode, define a custom field, add a user or change branding. For everything else, Baker explains and points; you click.</p>
 <h2>Files you upload</h2>
 <p>Use <strong>Attach a file</strong> in the drawer to give Baker a file to read:</p>
 <ul>
 <li>up to 5 files per message, 10 MB each;</li>
 <li>CSV, XLSX, MD, TXT, PDF or DOCX.</li>
 </ul>
-<p>Only the text is extracted; the file itself is not stored. Uploaded text is treated as untrusted, so for the rest of that conversation every change Baker proposes asks for your approval. Baker cannot attach a file to a record; you add attachments yourself.</p>
+<p>The text is extracted for Baker to read. A CSV or XLSX file is also kept with the conversation, so Baker can import it as a lead list (see <a href="#/contacts-and-companies/importing">Importing</a>); deleting the conversation deletes it. Other file types are not stored. Uploaded text is treated as untrusted, so for the rest of that conversation every change Baker proposes asks for your approval. Baker cannot attach a file to a record; you add attachments yourself.</p>
 <h2>Photos</h2>
 <p>When the active model can see images, <strong>Attach a file</strong> also accepts JPEG, PNG and WebP,
 and <strong>Take photo</strong> opens the rear camera on a phone. Photos share the 5-file limit and
@@ -1614,11 +1651,12 @@ tool steps and an approval continuation. Later turns carry only a placeholder; a
 it again if Baker needs another look. Photos are untrusted: anything written inside
 one is data, and every proposed change asks for approval for the rest of that conversation.</p>
 <h2>When nobody is watching</h2>
-<p>Baker also runs on a schedule, with nobody in the chat, for the daily digest and nudges about deals and leads that have gone quiet. Those unattended turns are much more limited, and the server enforces it:</p>
+<p>Baker also runs on a schedule, with nobody in the chat, for the background check-in and the daily digest. Those unattended turns are much more limited, and the server enforces it:</p>
 <ul>
 <li>Baker gets read tools and a single notification, nothing else. It cannot create, update, log or delete anything.</li>
 <li>It cannot search or open your Gmail, even though those are reads.</li>
 <li>It sends at most one notification per run.</li>
+<li>It can read the background check-in settings but cannot change them unattended.</li>
 </ul>
 <p>So the worst a hostile instruction hidden in a note could achieve unattended is one notification.</p>
 <h2>Roles</h2>
@@ -1647,7 +1685,8 @@ one is data, and every proposed change asks for approval for the rest of that co
 </tr>
 </tbody>
 </table></div>
-<p>Looking things up never asks, in any mode.</p>
+<p>Looking things up never asks, in any mode.
+Baker runs the lookups of one step side by side. If a lookup has not answered within two minutes, Baker stops waiting, is told it timed out, and carries on.</p>
 <h2>What Ask runs straight away</h2>
 <p>In Ask mode, a change runs without a card only when it stays inside a CakeCRM record, notifies nobody, removes nothing from view, is not a bulk change, and sends nothing outside your install. In practice that means:</p>
 <ul>
@@ -1659,15 +1698,31 @@ one is data, and every proposed change asks for approval for the rest of that co
 </ul>
 <p>A few of those calls still ask, because of what they would do: archiving a contact or company, dropping a todo or project, or setting a bring-back date that hides a todo. Marking a todo done, completing a project, or filing either to someday runs without asking.</p>
 <h2>What always asks in Ask mode</h2>
-<p>Deleting, archiving, merging, bulk moves and bulk todo updates, recomputing lead scores, creating a Gmail draft, sending a notification, recording a memory fact, and any change to Baker's protected files. Anything new that has not been classified asks too.</p>
+<p>Deleting, archiving, merging, bulk moves, lead imports, change lists and bulk todo updates, recomputing lead scores, creating a Gmail draft, sending a notification, recording a memory fact, and any change to Baker's protected files. Anything new that has not been classified asks too.</p>
 <h2>What asks even in Auto</h2>
 <ul>
 <li><strong>Writing Baker's protected files</strong>, soul.md and MEMORY.md. These always ask, in every mode, and only an admin can change them. See <a href="#/baker/memory">Memory</a>.</li>
-<li><strong>A conversation that has read outside content.</strong> Once Baker has read an email, an uploaded file, a photo, or a todo that came in through the public quick-capture link while no token was set, every change it proposes asks for approval for the rest of that conversation, even after that message has scrolled out of view. Text someone else wrote can never quietly steer Baker into changing your data. The Telegram chat is one long conversation, so once it has read such outside content it asks before every change from then on.</li>
+<li><strong>Importing a lead list.</strong> A lead import always shows one Approve card with the count and a sample, in every mode and from any conversation. See <a href="#/contacts-and-companies/importing">Importing</a>.</li>
+<li><strong>A change list.</strong> One edit across many deals or todos always shows one card listing every change, in every mode. See "Changing many records at once" below.</li>
+<li><strong>A conversation that has read outside content.</strong> Once Baker has read an email, an uploaded file, a photo, or a todo that came in through the public quick-capture link while no token was set, every change it proposes asks for approval for the rest of that conversation, even after that message has scrolled out of view. Text someone else wrote can never quietly steer Baker into changing your data. The Telegram chat is one long conversation, so once it has read such outside content it asks before every change from then on. Within one step, Baker finishes its lookups before running changes, so a change proposed alongside an email read asks for approval too.</li>
 </ul>
 <h2>Approving a change</h2>
 <p>When Baker wants to make a change that needs approval, its message carries a card naming the action and showing exactly what it will do, with <strong>Approve</strong> and <strong>Deny</strong>. Until you answer, nothing has happened.</p>
 <p>In Telegram the same thing arrives as two buttons, Approve and Deny, and only the linked account can press them. A button answers that one action; replying <strong>yes</strong> approves every pending change. Any other message cancels the pending changes. Telegram chats always run in Ask mode.</p>
+<h2>Changing many records at once</h2>
+<p>Ask Baker for one edit across several deals or todos ("move these 40 deals to Proposal and set their close date to the 30th") and you get <strong>one card</strong> instead of one per record.</p>
+<ul>
+<li>The card lists every change as <em>record · field: old value → new value</em>. CakeCRM reads the old values and the record names itself. A long list shows its first 20 rows; press <strong>Show all</strong> for the rest.</li>
+<li>A <strong>Will not be changed</strong> box lists every row CakeCRM refused, with the reason. Those rows are never written.</li>
+<li><strong>Approve</strong> becomes available once the full list loads; a failed load offers <strong>Retry</strong>, and <strong>Decline</strong> stays available. Approve applies all the listed changes together. If any proposed field changed while the card waited, every proposed change for that record is skipped and listed as "changed since the card was shown".</li>
+<li>After Approve, the card shows how many changes were applied and an <strong>Undo</strong> button. One click puts every applied row back. If any applied field has changed since, every change for that record is left alone and listed as "changed since it was applied". A batch can be undone once, and the card still shows its state when you reopen the conversation.</li>
+</ul>
+<p>A change list can set, on deals: title, stage, value, expected close date, probability, currency, temperature and notes. On todos: title, status, due date, bring-back date, star, context, priority, description and tags. Tags replace the whole list. Owners are not set by a change list; change a deal's or todo's owner on the record itself. Up to 200 rows fit on one card.</p>
+<p>Long values show their first 120 characters; hover for the full value. Links, repeat settings and projects remain outside change lists. Use status rather than a separate completed flag.</p>
+<p>Some rows are always refused: an archived deal, a deal Baker has not looked up in this conversation, moving a deal into or out of Won or Lost (close and reopen deals one at a time, so the date and reason are captured), and completing or reopening a repeating todo. A malformed row is listed as <strong>row N</strong>; other valid rows can still be approved. If all rows are refused, there is nothing to approve and no card.</p>
+<p>Each value row shows its own currency. If that currency changes before Approve or Undo, or the amount changes under a currency row, all changes for that deal are skipped or left alone. Amounts in different currencies are never added up, so the card shows no total.</p>
+<p>If the records are busy and the transaction fails, nothing changes. Ask Baker to send the change list again.</p>
+<p>In Telegram the approval message shows the count, up to five sample changes (excluding titles, notes and descriptions), and the refused rows. The full list and Undo are in the app.</p>
 <h2>Baker looks a deal up before changing it</h2>
 <p>Baker must find the deal in this conversation and check its title before changing it.
 The lookup must finish in an earlier step, so a guessed id cannot be sent alongside a
@@ -1850,7 +1905,7 @@ tell you which deal it changed and check that it is the one you meant.</p><nav c
 <p>Models are grouped into three tiers: top, mid and light. Cheap background work uses the light tier, so routine automation does not cost top-tier prices. Each connected card except Ollama's lets an admin override which model sits in each tier, or leave it on <strong>Use inferred default</strong>.</p>
 <h2>Disconnecting</h2>
 <p><strong>Disconnect</strong> deletes that provider's stored key. If it was the active provider, the active provider and model are cleared too, and AI features hide again.</p><nav class="pn"><a href="#/baker/playbooks"><small>Previous</small>Sales playbooks and help</a><a class="next" href="#/settings/personal"><small>Next</small>Personal settings</a></nav></article>
-<article data-route="settings/personal" data-title="Personal settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Personal settings</h1><p class="lead">Notifications, your password, how the pipeline board opens, linking your own Telegram, and connecting your own AI tool.</p><p>Open <strong>Settings</strong> at the top right. Settings has four tabs: <strong>Personal</strong>, <strong>Assistant</strong>, <strong>Workspace</strong> and <strong>Integrations</strong>. Everyone sees Personal and Assistant. Workspace and Integrations are for admins only, and members do not see those tabs at all.</p>
+<article data-route="settings/personal" data-title="Personal settings" hidden><p class="crumb"><a href="#/">Manual</a> › <a href="#/settings/personal">Settings</a></p><h1>Personal settings</h1><p class="lead">Notifications, your password, how the pipeline board opens, linking your own Telegram, installing CakeCRM on your phone, and connecting your own AI tool.</p><p>Open <strong>Settings</strong> at the top right. Settings has four tabs: <strong>Personal</strong>, <strong>Assistant</strong>, <strong>Workspace</strong> and <strong>Integrations</strong>. Everyone sees Personal and Assistant. Workspace and Integrations are for admins only, and members do not see those tabs at all.</p>
 <figure class="shot"><img data-shot="settings-personal" width="1400" height="1829" alt="Personal settings screenshot"></figure>
 
 <h2>Notifications</h2>
@@ -1860,6 +1915,7 @@ tell you which deal it changed and check that it is the one you meant.</p><nav c
 </ul>
 <p>Push works with no AI keys. See <a href="#/getting-started/notifications">Notifications</a> for what raises one.</p>
 <p><strong>Daily digest and nudges</strong> is shown to admins only, because it is one setting for the whole team. It sends a pipeline summary each morning, plus a nudge when a deal goes cold or a contact with open business has not been spoken to. It also works with no AI keys.</p>
+<p><strong>Baker's background check-in</strong> is a separate admin-only block, shown when an AI provider is ready. It reports newly overdue todos, cold deals and untouched contacts without repeating unchanged records. Set on/off, <strong>Check every</strong> (30 minutes to once a day), <strong>Quiet hours</strong> in the displayed install timezone, and <strong>At most one notification every</strong> (four hours by default). Quiet hours can cross midnight. Save applies the schedule; <strong>Resume</strong> ends a pause. Admins can also ask Baker to change these settings or pause for a number of days.</p>
 <h2>Change password</h2>
 <p>Enter your <strong>Current password</strong>, a <strong>New password</strong> of at least 8 characters, and confirm it. If two-step sign-in is on for your account, the form also asks for a code.</p>
 <p>When the change succeeds, every other session you have ends straight away. You stay signed in where you are. A wrong current password is refused and does not sign you out.</p>
@@ -1875,6 +1931,15 @@ tell you which deal it changed and check that it is the one you meant.</p><nav c
 <li><strong>Unlink my Telegram</strong> ends your link. It affects nobody else.</li>
 </ol>
 <p>If no bot is connected yet, the card says so. See <a href="#/integrations/telegram">Telegram</a>.</p>
+<h2>Install on your phone</h2>
+<p>Everyone sees this card under <strong>Personal</strong>, on a computer or a phone. On a computer it shows this site's address: open it on your phone and sign in first. Expand the steps for your device.</p>
+<ul>
+<li><strong>iPhone or iPad (Safari):</strong> tap Share (the square with an upward arrow; tap <strong>•••</strong> first if hidden), then <strong>Add to Home Screen</strong>. Leave <strong>Open as Web App</strong> on if shown, then tap <strong>Add</strong>.</li>
+<li><strong>Android (Chrome):</strong> tap <strong>⋮</strong> beside the address bar → <strong>Install and create shortcut</strong> → <strong>Install</strong>. Older Chrome calls the menu item <strong>Add to Home screen</strong> or <strong>Install app</strong>.</li>
+</ul>
+<p>On <strong>Chrome or Edge on a computer</strong>, click the install icon at the right end of the address bar, then <strong>Install</strong>. If the browser offers a native prompt, the card also shows an <strong>Install CakeCRM</strong> button.</p>
+<p>Open CakeCRM from its home-screen icon from then on. There is nothing to download from an app store; the card confirms when you are using the installed app. If installation is missing, use an <strong>https://</strong> address and, on iPhone, Safari rather than an in-app browser.</p>
+<p>The <a href="#/todos/no-login-links">no-login todo app</a> can have its own home-screen icon: sign the phone in through <strong>Todo app devices</strong>, then follow the same steps on the todo page.</p>
 <h2>Connect an AI tool</h2>
 <p>Connect an AI tool you already use, such as ChatGPT, Claude, Claude Code or Codex, so it can work in CakeCRM as you. It sees what you can see, and what it adds or changes is recorded as you, made through that tool. CakeCRM needs no AI keys for this. Members can connect once an admin has switched it on under <a href="#/settings/workspace">Workspace settings</a>; admins always can.</p>
 <ul>

@@ -8,7 +8,8 @@ admin: false
 
 Baker can read and change CRM records, work your todos, keep its own memory and knowledge
 files, search and read your mail, and compose drafts. It cannot deliver mail, cannot change
-install settings, and cannot act outside this product.
+install settings, with one narrow exception for its own background check-in schedule, and
+cannot act outside this product.
 
 ## Mail
 
@@ -19,10 +20,15 @@ See `settings/gmail`.
 
 ## Settings
 
-Baker has **no settings tools at all**. It cannot add an AI key, connect a mailbox, switch
-todo mode, define a custom field, add a user or change branding. Keys and OAuth secrets must
-never flow through a chat transcript, and a wrong settings change is install-wide where a
-wrong record change is one record. Baker explains and points; you click.
+Baker has exactly one settings write tool, `heartbeat_update_settings`, for its own
+background check-in schedule: how often it runs, quiet hours, the minimum gap, on/off and
+pausing it. It is admin-only and never a routine write: Ask mode requires an Approve card,
+Telegram requires typed approval, and Auto applies it. No key or secret can pass through it.
+See `settings/notifications`.
+
+It cannot add an AI key, connect a mailbox, switch todo mode, define a custom field, add a
+user or change branding. Keys and OAuth secrets must never flow through a chat transcript.
+For everything else, Baker explains and points; you click.
 
 That means Baker can tell you a flow is admin-only and walk you through it, and should say so
 up front rather than sending a member into a screen they cannot see.
@@ -48,7 +54,7 @@ what was saved.
 
 ## Unattended turns
 
-Baker also runs on a schedule with nobody watching, for the daily digest and nudges. There
+Baker also runs on a schedule with nobody watching, for the background check-in and daily digest. There
 the rules are much tighter and enforced by the server, not by instructions:
 
 - **Read tools plus a single notification, and nothing else.** No record changes at all,
@@ -56,6 +62,7 @@ the rules are much tighter and enforced by the server, not by instructions:
 - **Live mail reads are excluded too**, even though they are reads, because an unattended
   turn has nobody to notice a fence.
 - One notification per run.
+- It can read the check-in settings but never change them unattended.
 
 So the very worst a hostile instruction hidden in a note or a record can achieve unattended is
 one notification. It cannot create, log, update or delete anything.
@@ -66,10 +73,12 @@ or open a thread, not that it can see nothing mail-derived.
 
 ## Uploads
 
-Up to 5 files per message, 10 MB each, from this list: CSV, XLSX, MD, TXT, PDF and DOCX. Only
-the text is extracted — the original bytes are never stored — and it is wrapped as untrusted
-content, which tightens the confirmation rules for the rest of that conversation. Baker has no
-way to upload a file to a record; note attachments are added by you.
+Up to 5 files per message, 10 MB each, from this list: CSV, XLSX, MD, TXT, PDF and DOCX.
+The text is extracted and wrapped as untrusted content, which tightens the confirmation rules
+for the rest of that conversation. A CSV or XLSX file is also kept with the conversation so
+Baker can import it as a lead list; deleting the conversation deletes it. Other documents
+are not stored. Baker has no way to upload a file to a record; note attachments are added by you.
+Baker always asks for your approval before a lead import writes anything.
 
 Photos (JPEG, PNG, WebP) are accepted when the active model can see images. The photo
 is kept with the conversation and accompanies the provider requests for its attached turn,

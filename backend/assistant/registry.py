@@ -12,6 +12,9 @@ features append cleanly):
   * always: ``crm.tools.get_crm_tools()`` + ``crm.gtd_tools.get_gtd_tools()``
   * always: ``reminders.tools.get_reminder_tools(user=…)`` (issue #283) — six tools,
     keyless, no enable gate; owner bound server-side; none routine (they notify).
+  * always: ``heartbeat.tools.get_heartbeat_tools(user=…)`` (#360) — two keyless
+    tools, no enable gate. The write is never routine and its executor refuses a
+    non-admin seat; the read is secret-free install configuration, background-callable.
   * background only (``ToolRegistry(background=True)``): ``notify_user`` — Chatty
     gates it behind background mode; interactive chat never needs it.
   * always: ``memory.tools.get_memory_tools()`` (issue #5 — long-term facts).
@@ -43,6 +46,11 @@ Executors are synchronous, blocking psycopg2 code. ``execute_tool_sync`` is the
 real dispatch; ``execute_tool`` offloads it to a thread so a call never blocks the
 async SSE event loop.
 
+Since #372 the attended loop runs a batch's audited reads (``parallel_reads``) side by
+side through ``run_read_sync`` and records their deals afterwards with ``record_deals``;
+``execute_tool_sync`` is those same two halves back to back, plus the write checks. See
+``assistant.read_batch``.
+
 **Identity (issue #190).** ``ToolRegistry(user=…)`` is where the caller's seat enters the
 tool layer. A registry is built fresh for every turn — per SSE request, per confirmation,
 per Telegram message, per background run — so handing the ``get_current_user`` row to the
@@ -69,6 +77,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 
+from assistant import delimiters
 from assistant.confirm_tier import ROUTINE
 from context_files.tools import get_context_file_tools
 from crm import deal_write_guard
@@ -76,6 +85,7 @@ from crm.gtd_tools import get_gtd_tools
 from crm.links import remember_deal_refs
 from crm.tools import get_crm_tools
 from gmail.tools import get_gmail_tools
+from heartbeat.tools import get_heartbeat_tools
 from help.tools import get_help_tools
 from memory.tools import get_memory_tools
 from reminders.tools import get_reminder_tools
@@ -95,6 +105,9 @@ class ToolRegistry:
         self.tool_batch = 0
         self.found_deals: dict[int, int] | None = None
         self.found_epoch = None
+        # The staged change list an approval is resolving (#371). Set only by
+        # engine.resolve_confirmation, from the pending placeholder the server wrote.
+        self.change_batch_id: str | None = None
 
         # ``{deal_id: (title, url)}`` for every deal record a tool returned through this
         # registry (#238). A registry is built per turn, so the map never outlives the
@@ -110,10 +123,14 @@ class ToolRegistry:
 
         # Ordered tool sources — the extension point. Each is a (defs, executors)
         # pair. Features append here; second-to-land resolves keep-both.
+        # The CRM source is handed this registry for one executor: the change list reads
+        # the approved batch id and the deal finds off it (#371).
+        crm_source, gtd_source = get_crm_tools(user=user, registry=self), get_gtd_tools(user=user)
         sources: list[tuple[list[dict], dict[str, Callable[..., dict]]]] = [
-            get_crm_tools(user=user),
-            get_gtd_tools(user=user),
+            crm_source,
+            gtd_source,
             get_reminder_tools(user=user),
+            get_heartbeat_tools(user=user),
             get_memory_tools(),
             get_context_file_tools(user=user),
             get_gmail_tools(user=user),
@@ -165,6 +182,16 @@ class ToolRegistry:
         self.routine_writes: frozenset[str] = frozenset(
             t["name"] for t in self.tool_defs if t.get("confirm_tier") == ROUTINE
         )
+        # Reads audited as safe to run side by side in one tool batch (#372): the CRM and
+        # todo sources' reads — Postgres only, the same service calls REST handlers already
+        # run concurrently. By SOURCE, so a Gmail or other connection read can never join by
+        # accident. Every find-recording read is in here, which is what lets the engine
+        # defer their bookkeeping (``run_read_sync`` / ``record_deals``). An untrusted-source
+        # CRM read (the lead-import preview, #370) stays in the ordered lane like Gmail.
+        self.parallel_reads: frozenset[str] = frozenset(
+            d["name"] for defs, _ in (crm_source, gtd_source) for d in defs
+            if not d["writes"] and d["name"] not in delimiters.UNTRUSTED_SOURCE_TOOLS
+        )
 
     def next_tool_batch(self) -> None:
         self.tool_batch += 1
@@ -208,34 +235,58 @@ class ToolRegistry:
             out.append({k: v for k, v in t.items() if k not in _INTERNAL_KEYS})
         return out
 
-    def execute_tool_sync(self, name: str, args: dict | None) -> dict:
+    def _invoke(self, name: str, args: dict | None) -> tuple[dict, object]:
+        """Run a declared tool's handler: ``(result, epoch)``, with NOTHING recorded.
+
+        ``epoch`` is the CRM epoch read before the handler ran — what ``record_deals``
+        needs — or ``NO_EPOCH`` when the call failed or the tool records no finds.
+        """
         # Fail closed: only DECLARED tools (those with a def, hence a writes flag)
         # are executable.
-        if name not in self.writes_map:
-            return {"error": f"Unknown tool: {name}"}
-        fn = self.executors.get(name)
+        fn = self.executors.get(name) if name in self.writes_map else None
         if fn is None:
-            return {"error": f"Unknown tool: {name}"}
+            return {"error": f"Unknown tool: {name}"}, deal_write_guard.NO_EPOCH
+        epoch = deal_write_guard.epoch_before(name, self.is_write(name))
+        try:
+            return fn(**(args or {})), epoch
+        except TypeError as e:  # LLM passed bad/unexpected arguments
+            logger.warning("assistant tool %s bad args: %s", name, e)
+            return {"error": f"The tool '{name}' could not run with those arguments."}, deal_write_guard.NO_EPOCH
+        except Exception:  # DB / service failure — log detail, return a generic message
+            logger.exception("assistant tool %s failed", name)
+            return {"error": f"The tool '{name}' failed. Please try again."}, deal_write_guard.NO_EPOCH
+
+    def record_deals(self, result, epoch) -> None:
+        """Remember the deals a result returned: link refs, and finds for the write guard.
+
+        NOT thread-safe (it mutates ``deal_refs`` and the guard's find cache), so it is
+        only ever called by one thread at a time per registry."""
+        try:
+            remember_deal_refs(result, self.deal_refs)
+            deal_write_guard.note_found(self, result, epoch)
+        except Exception:  # bookkeeping must never cost a tool (a write!) its result
+            logger.exception("assistant: could not record deal refs")
+
+    def run_read_sync(self, name: str, args: dict | None) -> tuple[dict, object]:
+        """Worker-thread half of a parallel read (#372): run it, record nothing.
+
+        The caller passes the pair to ``record_deals`` only if it accepts the result, so a
+        read that answers after its timeout never becomes a find. Refuses anything outside
+        ``parallel_reads`` — a write must never reach a handler without its refusal check.
+        """
+        if name not in self.parallel_reads:
+            return {"error": f"Unknown tool: {name}"}, deal_write_guard.NO_EPOCH
+        return self._invoke(name, args)
+
+    def execute_tool_sync(self, name: str, args: dict | None) -> dict:
         refusal = self.deal_write_refusal(name, args or {})
         if refusal:
             return {"ok": False, "error": refusal}
         warning = None
         if self.is_write(name):
             warning = deal_write_guard.closed_warning(deal_write_guard.target_deal_ids(args or {}))
-        epoch = deal_write_guard.epoch_before(name, self.is_write(name))
-        try:
-            result = fn(**(args or {}))
-        except TypeError as e:  # LLM passed bad/unexpected arguments
-            logger.warning("assistant tool %s bad args: %s", name, e)
-            return {"error": f"The tool '{name}' could not run with those arguments."}
-        except Exception:  # DB / service failure — log detail, return a generic message
-            logger.exception("assistant tool %s failed", name)
-            return {"error": f"The tool '{name}' failed. Please try again."}
-        try:
-            remember_deal_refs(result, self.deal_refs)
-            deal_write_guard.note_found(self, result, epoch)
-        except Exception:  # bookkeeping must never cost a tool (a write!) its result
-            logger.exception("assistant: could not record deal refs from %s", name)
+        result, epoch = self._invoke(name, args)
+        self.record_deals(result, epoch)
         if warning and isinstance(result, dict) and "error" not in result and result.get("ok") is not False:
             result["closed_deal_warning"] = warning
         return result

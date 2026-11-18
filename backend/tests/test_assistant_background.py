@@ -391,3 +391,12 @@ def test_the_reminder_read_is_background_callable_and_its_writes_are_not(todo_mo
     allowed = background.background_allowlist(ToolRegistry(background=True))
     assert "reminder_list" in allowed
     assert not {"reminder_create", "reminder_update", "reminder_void", "reminder_pause", "reminder_resume"} & allowed
+
+
+def test_the_heartbeat_settings_read_is_background_callable_and_its_write_is_not(todo_mode):
+    from assistant.registry import ToolRegistry
+
+    todo_mode("normal")
+    allowed = background.background_allowlist(ToolRegistry(background=True))
+    assert "heartbeat_get_settings" in allowed
+    assert "heartbeat_update_settings" not in allowed

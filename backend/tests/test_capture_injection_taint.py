@@ -247,7 +247,7 @@ class Store:
         return (text or "")[:60]
 
     def save_message(self, cid, mid, role, content, tool_calls=None, model="",
-                     context_tokens=None, context_boundary_seq=None, images=None):
+                     context_tokens=None, context_boundary_seq=None, images=None, files=None):
         self.convs.setdefault(cid, {"id": cid, "messages": []})["messages"].append(
             {"id": mid, "role": role, "content": content})
 
@@ -507,6 +507,22 @@ def test_an_approved_write_on_an_ordinary_row_does_not_taint(store, monkeypatch)
     conv, _ = _approve_a_capture_write(store, monkeypatch, _own_row())
     assert store.untrusted_marks == []
     assert conv
+
+
+def test_an_approved_lead_import_taints_the_conversation(store, monkeypatch):
+    """#370: the import's result names deals titled from the uploaded list, and a batch can
+    be approved from a conversation its preview never touched, so approval itself taints."""
+    reg = Registry({"crm_execute_lead_import": {"ok": True, "targets": [{"title": _INJECTION}]}},
+                   writes={"crm_execute_lead_import"})
+    conv = store.create_conversation()["id"]
+    store.convs[conv]["messages"].append({"id": "m1", "role": "assistant", "content": ""})
+    claimed = {"msg_id": "m1", "tool": "crm_execute_lead_import", "args": {"batch_id": "b"}, "content": None}
+    monkeypatch.setattr(history, "claim_pending_tool", lambda *a, **k: claimed)
+
+    out = engine.resolve_confirmation(reg, conv, "w1", "approve", user=None)
+
+    assert out["decision"] == "approve"
+    assert store.untrusted_marks == [conv]
 
 
 def test_the_public_source_set_is_a_real_todos_source_value():

@@ -377,7 +377,7 @@ def test_clear_demo_data_truncates_when_sample_loaded(monkeypatch, fake_conn):
     # referenced table without its child in the same statement — dropping it here makes
     # every CRM reset raise.
     assert any(
-        "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
+        "TRUNCATE assistant_lead_import_previews, assistant_change_batches, companies, contacts, deals, activity_log, todos, todo_projects, "
         "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_values, "
         "crm_field_provenance, deal_stage_events, proactive_nudges, deal_ai_touch_evidence, "
         "crm_stage_criteria, reminders, assistant_deal_finds, mcp_audit RESTART IDENTITY"
@@ -415,7 +415,7 @@ def test_clear_all_truncates_and_resets_flag(monkeypatch, fake_conn):
     # consistent with both set_field_values entity→defs and delete_field_definition
     # defs→values); crm_field_provenance trails both.
     assert any(
-        "TRUNCATE companies, contacts, deals, activity_log, todos, todo_projects, "
+        "TRUNCATE assistant_lead_import_previews, assistant_change_batches, companies, contacts, deals, activity_log, todos, todo_projects, "
         "crm_chatter, crm_chatter_attachments, crm_chatter_mentions, crm_field_definitions, "
         "crm_field_values, crm_field_provenance, deal_stage_events, proactive_nudges, "
         "deal_ai_touch_evidence, crm_stage_criteria, reminders, assistant_deal_finds, mcp_audit "
@@ -1410,3 +1410,24 @@ def test_list_deals_unknown_sort_refused_before_io(rec):
     with pytest.raises(ValueError, match="sort_by"):
         service.list_deals(sort_by="bogus")
     assert rec.calls == []
+
+
+def test_company_resolution_can_share_the_callers_cursor(fake_conn, monkeypatch):
+    """The bulk import must never escape to an autocommit helper (#370)."""
+    from unittest.mock import Mock
+
+    from crm import service
+
+    forbidden = Mock(side_effect=AssertionError("autocommit escaped the import"))
+    monkeypatch.setattr(service, "pg_execute", forbidden)
+    monkeypatch.setattr(service, "pg_fetchall", forbidden)
+    conn = fake_conn(monkeypatch, service, fetchall_results=[[("Northwind", 9), (" northwind ", 9)]])
+    result = service.resolve_or_create_company_ids(["Northwind", " northwind ", "Northwind", ""], cur=conn.cursor())
+    assert result == {"Northwind": 9, " northwind ": 9}
+    assert len(conn.executed) == 2
+    assert "INSERT INTO companies" in conn.executed[0][0]
+    assert "company_follow_merge(co.id)" in conn.executed[1][0]
+    assert all(params == (["Northwind", " northwind "],) for _, params in conn.executed)
+    assert service.resolve_or_create_company_ids(["", "  "], cur=conn.cursor()) == {}
+    assert len(conn.executed) == 2
+    forbidden.assert_not_called()

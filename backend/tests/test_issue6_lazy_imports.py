@@ -44,6 +44,7 @@ def test_modules_import_clean():
         "notifications.delivery", "notifications.tools", "notifications.router",
         "alerts.service", "alerts.router",
         "heartbeat.service", "heartbeat.scheduler", "heartbeat.router",
+        "heartbeat.settings", "heartbeat.dedupe", "heartbeat.tools",
         "assistant.background",
     ]:
         importlib.import_module(mod)
