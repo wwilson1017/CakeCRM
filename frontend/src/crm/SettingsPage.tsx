@@ -38,6 +38,7 @@ import { BrandingCard } from './components/BrandingCard';
 import { ChangePasswordCard } from './components/ChangePasswordCard';
 import { ConnectAiToolCard } from './components/ConnectAiToolCard';
 import { CustomFieldSettings } from './components/CustomFieldSettings';
+import { BackupsCard } from './components/BackupsCard';
 import { ExportCard } from './components/ExportCard';
 import { GmailCard } from './components/GmailCard';
 import { InstallAppCard } from './components/InstallAppCard';
@@ -68,6 +69,7 @@ const CARD_COMPONENTS: Record<SettingsCardId, ComponentType<{ isMobile: boolean 
   team: TeamSettings,
   custom_fields: CustomFieldSettings,
   export: ExportCard,
+  backups: BackupsCard,
   ai_tool_connections: AiToolConnectionsCard,
   telegram: TelegramSettings,
   gmail: GmailCard,

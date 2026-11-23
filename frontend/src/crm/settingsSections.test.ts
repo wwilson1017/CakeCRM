@@ -36,6 +36,7 @@ const ADMIN_ONLY_CARDS: SettingsCardId[] = [
   'todo_mode', 'voice_live',
   // #302: the whole database as CSV.
   'export',
+  'backups',
   // #322: the members switch and every seat's AI tool connections.
   'ai_tool_connections',
 ];
@@ -49,10 +50,10 @@ describe('settingsSections — the member/admin partition', () => {
     expect(visibleCardIds(false).sort()).toEqual([...MEMBER_CARDS].sort());
   });
 
-  it('shows an admin all seventeen cards, each exactly once', () => {
+  it('shows an admin all eighteen cards, each exactly once', () => {
     const ids = visibleCardIds(true);
-    expect(ids).toHaveLength(17);
-    expect(new Set(ids).size).toBe(17);
+    expect(ids).toHaveLength(18);
+    expect(new Set(ids).size).toBe(18);
     expect(ids.sort()).toEqual([...MEMBER_CARDS, ...ADMIN_ONLY_CARDS].sort());
   });
 
@@ -153,7 +154,7 @@ describe('settingsSections — every card has a home', () => {
   it('declares each card id exactly once across all sections', () => {
     const ids = SETTINGS_SECTIONS.flatMap(s => s.cards).map(c => c.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(17);
+    expect(ids).toHaveLength(18);
   });
 
   it('gives every section a non-empty label', () => {
@@ -185,6 +186,7 @@ describe('SettingsCard is the only owner of card chrome', () => {
     'ConnectAiToolCard.tsx': 'connect_ai_tool',
     'CustomFieldSettings.tsx': 'custom_fields',
     'ExportCard.tsx': 'export',
+    'BackupsCard.tsx': 'backups',
     'GmailCard.tsx': 'gmail',
     'MemoryCard.tsx': 'memory',
     'NotificationSettings.tsx': 'notifications',

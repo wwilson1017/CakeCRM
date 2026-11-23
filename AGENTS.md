@@ -33,6 +33,7 @@ not `@` imports (imports load eagerly).
 | Providers, assistant engine/prompt/confirm tiers, background turns, memory, context files, help library, playbooks | `assistant.md` |
 | Users, roles, auth, ownership, conversation access, Settings visibility | `accounts-and-ownership.md` |
 | Migrations, secrets, login credential, deploy storage | `database.md` |
+| Database backups, S3 destinations, encryption and restore | `backups.md` |
 | CRM records, pipeline, forms, chatter, custom fields, lead score, theme tokens | `crm-core.md` |
 | Date-range facets, saved views | `saved-views.md` |
 | Contacts/Companies/Todos list pages, corpus sweep | `list-pages.md` |

@@ -63,6 +63,8 @@ _TOOL_SHAPED = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+")
 # three are stored status VALUES a user types and Baker writes through `todo_update`, so
 # the manual has to spell them exactly.
 _NOT_TOOLS = {
+    "pg_dump": "PostgreSQL command-line backup program, not an assistant tool",
+    "pg_restore": "PostgreSQL command-line restore program, not an assistant tool",
     "next_action": "a GTD status value the user and the todo tools both write",
     "waiting_for": "a GTD status value the user and the todo tools both write",
     "someday_maybe": "a GTD status value the user and the todo tools both write",

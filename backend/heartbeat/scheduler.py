@@ -1,6 +1,6 @@
 """APScheduler wiring for the heartbeat (issue #6).
 
-A single ``BackgroundScheduler`` with SIX jobs, deliberately decoupled so a slow
+A single ``BackgroundScheduler`` with SEVEN jobs, deliberately decoupled so a slow
 system AI turn (or a slow inbox scan) never stalls the bounded maintenance passes:
   * ``maintenance_tick`` — every 60s: stamp the clock, drive dreaming + the lead-score
     refresh (fast, bounded, local SQL).
@@ -14,9 +14,10 @@ system AI turn (or a slow inbox scan) never stalls the bounded maintenance passe
     per settled conversation, so AI-bound: same reasoning again).
   * ``reminders_tick`` — every 60s: fire #283's due reminders (claims in one local
     transaction, then delivers over web push / Telegram: same reasoning again).
-Each job is ``max_instances=1, coalesce=True`` so a slow run never stacks. The six
+  * ``backups_tick`` — every 300s: upload a verified backup when a destination is due.
+Each job is ``max_instances=1, coalesce=True`` so a slow run never stacks. The seven
 jobs share APScheduler's default thread pool, whose default width (10) far exceeds the
-six low-frequency jobs here, so a slow scan can't starve maintenance_tick of a worker. No persistent job store — jobs are re-registered on every boot
+seven low-frequency jobs here, so a slow scan can't starve maintenance_tick of a worker. No persistent job store — jobs are re-registered on every boot
 (the ticks are idempotent). ``get_scheduler()`` exposes the scheduler so other
 features (e.g. #5 dreaming, if it ever wants its own job) can register without
 touching this module.
@@ -85,9 +86,13 @@ def start_scheduler() -> None:
         service.reminders_tick, "interval", seconds=60, id="reminders_tick",
         max_instances=1, coalesce=True,
     )
+    _scheduler.add_job(
+        service.backups_tick, "interval", seconds=300, id="backups",
+        max_instances=1, coalesce=True,
+    )
     _scheduler.start()
     logger.info("Heartbeat scheduler started (maintenance_tick 60s + heartbeat_turn 300s "
-                "+ gmail_scan 60s + proactive 60s + observer 60s + reminders_tick 60s)")
+                "+ gmail_scan 60s + proactive 60s + observer 60s + reminders_tick 60s + backups 300s)")
 
 
 def shutdown_scheduler() -> None:

@@ -78,6 +78,7 @@ const RESPONSES: Record<string, unknown> = {
     provider_ready: true, enabled: true,
     heartbeat_settings: { enabled: true, interval_minutes: 30, quiet_hours: 'off', min_gap_hours: 4,
       paused_until: null, timezone: 'UTC', operator_enabled: true } },
+  '/api/backups/status': { configured: false, endpoint: null, bucket: null, region: 'us-east-1', prefix: '', access_key_id: null, has_secret: false, has_passphrase: false, retention: 30, last_success_at: null, last_success_bytes: null, last_error: null, stale: false },
   '/api/gmail/status': {
     connected: false, email: '', connection_status: '', client_id: '',
     client_secret_present: false, scopes: [], redirect_uri: 'https://example.test/api/gmail/oauth/callback',
@@ -91,7 +92,7 @@ const RESPONSES: Record<string, unknown> = {
 
 // 'Todo mode' is admin-only as of #102, which makes its routes require_admin.
 // 'AI tool connections' (#322) holds the members switch and every seat's connections.
-const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Export data', 'AI tool connections',
+const ADMIN_ONLY_TITLES = ['Branding', 'Team', 'Custom Fields', 'Export data', 'Backups', 'AI tool connections',
   'Telegram', 'Gmail', 'Todo mode', 'Live transcription'];
 // 'Link my Telegram' is the personal half of the Telegram split (#193); the bot card
 // above stays admin-only.
@@ -190,13 +191,13 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     }
   });
 
-  it('reaches an admin all seventeen cards, across four sections', async () => {
+  it('reaches an admin all eighteen cards, across four sections', async () => {
     auth.isAdmin = true;
     await render();
     expect(navLabels()).toEqual(['Personal', 'Assistant', 'Workspace', 'Integrations']);
 
     const reachable = await allReachableTitles();
-    expect(reachable).toHaveLength(17);
+    expect(reachable).toHaveLength(18);
     expect(reachable.sort()).toEqual([...MEMBER_TITLES, ...ADMIN_ONLY_TITLES].sort());
   });
 
@@ -242,7 +243,7 @@ describe('SettingsPage — the gating partition survives the restructure', () =>
     auth.isAdmin = true;
     await render('/crm/settings?section=workspace');
     expect(container.querySelector('[aria-current="page"]')!.textContent).toBe('Workspace');
-    expect(cardTitles()).toEqual(['Branding', 'Team', 'Custom Fields', 'Export data', 'AI tool connections']);
+    expect(cardTitles()).toEqual(['Branding', 'Team', 'Custom Fields', 'Export data', 'Backups', 'AI tool connections']);
   });
 });
 

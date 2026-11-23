@@ -1,6 +1,6 @@
 """The heartbeat — the background half of the assistant (issue #6).
 
-Five independent scheduler jobs (plus #72's observer), split by one rule: bounded local SQL rides
+Seven independent scheduler jobs (including the observer and backups), split by one rule: bounded local SQL rides
 ``maintenance_tick``; network- or AI-bound work gets its OWN job, so a hung request
 never stalls the others.
   * ``maintenance_tick()`` (every 60s): stamps ``heartbeat_state.last_tick_at`` and
@@ -15,6 +15,9 @@ never stalls the others.
     (delivers over the network, so same reasoning as gmail_scan).
   * ``reminders_tick()`` (every 60s): fires #283's due reminders (claims in one
     transaction, then delivers over the network, so same reasoning again).
+
+  * ``backups_tick()`` (every 300s): makes a verified off-site database backup if due
+    and configured by an admin.
 
 ``tick()`` is the run-now workhorse behind ``POST /api/heartbeat/run-now``; it drives
 the same maintenance work synchronously and only runs the AI turn when explicitly forced.
@@ -440,3 +443,16 @@ def _maybe_fire_reminders():
         return fire_due()
     except Exception:
         logger.warning("reminders tick errored", exc_info=True)
+
+
+# Off-site backups have their own network-bound job, enabled only by admin setup.
+def backups_tick() -> None:
+    return _maybe_run_backups()
+
+
+def _maybe_run_backups():
+    try:
+        from backups.service import run_if_due
+        return run_if_due()
+    except Exception:
+        logger.warning("backups tick errored", exc_info=True)
