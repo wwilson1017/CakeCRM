@@ -27,6 +27,7 @@ from starlette.routing import compile_path
 
 from alerts.router import router as alerts_router
 from assistant.router import router as assistant_router
+from backups.router import router as backups_router
 from branding.router import MAX_LOGO_BYTES, router as branding_router
 from context_files.router import router as context_files_router
 from core import logscrub, postgres
@@ -363,6 +364,7 @@ app.include_router(telegram_router, prefix="/api/telegram", tags=["telegram"])
 app.include_router(gmail_router, prefix="/api/gmail", tags=["gmail"])
 app.include_router(saved_views_router, prefix="/api/saved-views", tags=["saved-views"])
 app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
+app.include_router(backups_router, prefix="/api/backups", tags=["backups"])
 app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])
 app.include_router(heartbeat_router, prefix="/api/heartbeat", tags=["heartbeat"])
 app.include_router(context_files_router, prefix="/api/context-files", tags=["context-files"])

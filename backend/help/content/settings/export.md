@@ -1,7 +1,7 @@
 ---
 title: Export your data
 description: Download everything in the CRM as CSV files in one ZIP, from Settings. Admin only.
-aliases: export, csv, download my data, backup, spreadsheet, excel, get my data out, zip
+aliases: export, csv, download my data, spreadsheet, excel, get my data out, zip
 admin: true
 ---
 ## What it is
@@ -32,5 +32,7 @@ It is a snapshot, not a sync. Download again for fresh numbers.
 
 ## Admin only
 
-The export is the whole database in one file, so only an admin sees the card. Members
+The export contains shared CRM data, so only an admin sees the card. Members
 cannot request it.
+
+For a full restorable database copy, including attachments and credentials, use Settings → Workspace → **Backups**. CSV exports cannot be restored with pg_restore.

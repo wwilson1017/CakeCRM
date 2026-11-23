@@ -25,7 +25,7 @@ export type SettingsCardId =
   | 'notifications' | 'change_password' | 'pipeline_board' | 'telegram_link' | 'todo_devices' | 'install_app'
   | 'connect_ai_tool'
   | 'memory' | 'todo_mode' | 'voice_live'
-  | 'branding' | 'team' | 'custom_fields' | 'export' | 'ai_tool_connections'
+  | 'branding' | 'team' | 'custom_fields' | 'export' | 'backups' | 'ai_tool_connections'
   | 'telegram' | 'gmail';
 
 export interface SettingsCardDef {
@@ -90,6 +90,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
       { id: 'team', adminOnly: true },
       { id: 'custom_fields', adminOnly: true },
       { id: 'export', adminOnly: true },
+      // Full database backups and destination credentials: all routes require_admin.
+      { id: 'backups', adminOnly: true },
       // #322. The members switch and every seat's AI tool connections: /api/mcp/admin/*,
       // all `require_admin` (pinned in test_route_authz.ADMIN_ONLY).
       { id: 'ai_tool_connections', adminOnly: true },

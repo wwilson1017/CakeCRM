@@ -4079,6 +4079,8 @@ def dismiss_ai_prompt() -> dict:
 
 
 def _truncate_all(cur, include_definitions: bool = False) -> None:
+    # backup_settings stays outside both branches, like the MCP credential tables:
+    # a CRM reset must never silently stop the owner's off-site backups.
     # Pending lead-import previews hold lead names/emails (#370), and change-list batches
     # (#371) hold deal and todo titles and values, so CRM resets clear them. Listed FIRST:
     # TRUNCATE locks in list order; an import holds its preview row, and apply and Undo

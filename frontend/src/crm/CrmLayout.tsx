@@ -11,6 +11,7 @@ import { MobileMenuDrawer } from '../shared/MobileMenuDrawer';
 import { confirmDialog } from '../shared/confirm';
 import { INK, INK_SOFT, INK_MUTE, LINE, LINE_STRONG, ACCENT, GOLD_FILL, GOLD_TEXT, FONT_DISPLAY, FONT_SANS, CORAL_TEXT, tint } from '../shared/styles';
 import { modalOverlay, modalContent, btnPrimary, btnSecondary, LAUNCHER_CLEARANCE_PX } from './styles';
+import { BackupWarning } from './components/BackupWarning';
 import { AiKeyNudge } from './components/AiKeyNudge';
 import { AssistantLauncher } from './components/AssistantLauncher';
 import { BrandLogo } from './components/BrandLogo';
@@ -415,6 +416,7 @@ export function CrmLayout() {
           destructive global operation, and the AI nudge links to provider setup — so
           a member is shown neither. Same rule as the settings cards: don't offer an
           action that can only 403. */}
+      <BackupWarning isAdmin={isAdmin} />
       {status?.sample_data_loaded && isAdmin && (
         <DemoBanner onClear={handleClearDemo} isMobile={isMobile} />
       )}
