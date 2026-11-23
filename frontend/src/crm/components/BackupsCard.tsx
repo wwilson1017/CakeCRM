@@ -30,6 +30,8 @@ const fields = [
 ] as const;
 const backupInput = { ...inputStyle, textTransform: 'none', letterSpacing: 'normal' } as const;
 const actions = { display: 'flex', flexWrap: 'wrap', gap: 8 } as const;
+const para = { margin: '8px 0' } as const;
+const heading = { margin: '24px 0 8px', fontSize: 15 } as const;
 
 export function BackupsCard({ isMobile }: { isMobile: boolean }) {
   const [status, setStatus] = useState<BackupStatus | null>(null);
@@ -79,22 +81,22 @@ export function BackupsCard({ isMobile }: { isMobile: boolean }) {
 
   return <SettingsCard id="backups" title="Backups" isMobile={isMobile}
     description="Download a restorable copy of the full database, including attachments and account data, or copy it daily to your own bucket.">
-    {loadError && <p role="alert">Could not load backup settings. Reload this page to try again.</p>}
-    {!status && !loadError && <p>Loading backups…</p>}
+    {loadError && <p role="alert" style={para}>Could not load backup settings. Reload this page to try again.</p>}
+    {!status && !loadError && <p style={para}>Loading backups…</p>}
     {status && <>
       <button type="button" style={btnPrimary} disabled={busy} onClick={() => void perform(download)}>
         {busy ? 'Working…' : 'Download backup now'}
       </button>
-      <p style={{ color: INK_MUTE }}>Downloads are {status.has_passphrase ? 'encrypted (.dump.age)' : 'plain PostgreSQL dumps (.dump)'}.</p>
-      {status.stale && <p role="alert">No successful off-site backup in more than two days. Check the destination and test the connection.</p>}
-      <p>Last successful upload: {status.last_success_at
+      <p style={{ ...para, color: INK_MUTE }}>Downloads are {status.has_passphrase ? 'encrypted (.dump.age)' : 'plain PostgreSQL dumps (.dump)'}.</p>
+      {status.stale && <p role="alert" style={para}>No successful off-site backup in more than two days. Check the destination and test the connection.</p>}
+      <p style={para}>Last successful upload: {status.last_success_at
         ? `${parseUTC(status.last_success_at).toLocaleString()} · ${((status.last_success_bytes ?? 0) / 1024 / 1024).toFixed(1)} MB`
         : 'None yet'}</p>
-      {status.last_error && <p role="alert">Last error: {status.last_error}</p>}
+      {status.last_error && <p role="alert" style={para}>Last error: {status.last_error}</p>}
       <form onSubmit={e => { e.preventDefault(); void perform(() => update('destination', 'PUT', form)); }}>
-        <h3>Daily off-site copy</h3>
-        <p>Use a bucket or prefix dedicated to this install. Older CakeCRM backups there are removed according to retention. Saving starts daily backups; failures retry hourly.</p>
-        <p style={{ color: INK_MUTE }}>Use your provider’s region (default us-east-1; for R2 use auto). Test connection uses the saved settings.</p>
+        <h3 style={heading}>Daily off-site copy</h3>
+        <p style={para}>Use a bucket or prefix dedicated to this install. Older CakeCRM backups there are removed according to retention. Saving starts daily backups; failures retry hourly.</p>
+        <p style={{ ...para, color: INK_MUTE }}>Use your provider’s region (default us-east-1; for R2 use auto). Test connection uses the saved settings.</p>
         {fields.map(([key, label]) => <label key={key} style={{ ...labelStyle, display: 'block', marginBottom: 10 }}>
           {label}
           <input style={backupInput}
@@ -120,9 +122,9 @@ export function BackupsCard({ isMobile }: { isMobile: boolean }) {
       <form onSubmit={e => { e.preventDefault(); void perform(async () => {
         await update('passphrase', 'PUT', { passphrase: phrase }); setPhrase('');
       }); }}>
-        <h3>Optional encryption</h3>
-        <p>If you lose this passphrase, your backups cannot be opened. CakeCRM cannot recover it.</p>
-        <p>Without a passphrase, backups still work. Changing or removing it affects future backups only. Keep old passphrases for old files.</p>
+        <h3 style={heading}>Optional encryption</h3>
+        <p style={para}>If you lose this passphrase, your backups cannot be opened. CakeCRM cannot recover it.</p>
+        <p style={para}>Without a passphrase, backups still work. Changing or removing it affects future backups only. Keep old passphrases for old files.</p>
         <label style={labelStyle}>Backup passphrase
           <input type="password" autoComplete="new-password" minLength={8} maxLength={1024} required
             style={{ ...backupInput, marginBottom: 10 }}
@@ -135,7 +137,7 @@ export function BackupsCard({ isMobile }: { isMobile: boolean }) {
             onClick={() => void perform(async () => { await update('passphrase', 'PUT', { passphrase: null }); setPhrase(''); })}>Remove passphrase</button>
         </div>
       </form>
-      <p style={{ color: INK_MUTE }}>Keep your install’s ENCRYPTION_KEY and branding logo separately. See the manual for restore steps.</p>
+      <p style={{ ...para, color: INK_MUTE }}>Keep your install’s ENCRYPTION_KEY and branding logo separately. See the manual for restore steps.</p>
     </>}
   </SettingsCard>;
 }
