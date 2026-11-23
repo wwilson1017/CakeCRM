@@ -106,3 +106,12 @@ def test_endpoint_base_path_is_in_the_signed_request(monkeypatch):
     target = s3.S3Destination("https://storage.example.com/proxy%20path/", "bucket", "us-east-1", "id", "secret", "")
     target.put_bytes("a +é", b"x")
     assert calls[0].url.raw_path == b"/proxy%20path/bucket/a%20%2B%C3%A9"
+
+
+@pytest.mark.parametrize("endpoint, expected", [
+    ("https://s3.example.com:443/", "https://s3.example.com"),
+    ("http://127.0.0.1:80", "http://127.0.0.1"),
+    ("http://127.0.0.1:9000", "http://127.0.0.1:9000"),
+])
+def test_default_port_is_dropped_to_match_the_host_header(endpoint, expected):
+    assert s3.validate_endpoint(endpoint) == expected

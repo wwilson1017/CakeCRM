@@ -31,7 +31,9 @@ def validate_endpoint(endpoint: str) -> str:
     host = url.hostname.encode("idna").decode().lower()
     if ":" in host:
         host = f"[{host}]"
-    origin = host + (f":{port}" if port is not None else "")
+    # httpx drops a default port from the Host header, so the signed host must too.
+    default = {"http": 80, "https": 443}[url.scheme]
+    origin = host + (f":{port}" if port not in (None, default) else "")
     return urlunsplit((url.scheme, origin, quote(unquote(url.path), safe="/-_.~"), "", ""))
 
 
