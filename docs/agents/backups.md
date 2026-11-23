@@ -20,7 +20,7 @@ never erases evidence of a good upload.
 Downloads and scheduled generation share a nonblocking process lock. Busy downloads return
 409; a busy scheduled run records no attempt. Temp files live in private directories under
 the system temp directory's cakecrm-backups folder; failed generation and completed
-FileResponses clean them, and the next generation reaps directories older than an hour.
+FileResponses clean them, and the next generation reaps directories older than a day (not an hour: a slow download keeps streaming its file after the lock is released).
 The download is a bodyless GET, so it needs no request-limit row. FileResponse streams from
 disk. The browser still uses authenticated res.blob(), like ExportCard: a few hundred MB is
 the practical range; a short-lived signed link is the upgrade path for huge downloads.

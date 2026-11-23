@@ -30,7 +30,9 @@ def database_env() -> dict[str, str]:
         options = parse_dsn(dsn)
     except Exception:
         raise BackupError("DATABASE_URL is invalid") from None
-    env = {k: v for k, v in os.environ.items() if not k.startswith("PG")}
+    # Keep inherited libpq settings (PGSSLROOTCERT etc.) the app's own connections use;
+    # the DSN's own values override them.
+    env = dict(os.environ)
     for key, value in options.items():
         env["PG" + _PG_NAMES.get(key, key.upper())] = value
     return env
@@ -60,8 +62,9 @@ def _run(args: list[str], env: dict[str, str]) -> None:
 def make_backup(passphrase: str | None) -> tuple[Path, str]:
     root = Path(tempfile.gettempdir()) / "cakecrm-backups"
     root.mkdir(mode=0o700, exist_ok=True)
+    # A day, not an hour: a slow download still streams its file after the lock is released.
     for old in root.iterdir():
-        if old.is_dir() and old.stat().st_mtime < time.time() - 3600:
+        if old.is_dir() and old.stat().st_mtime < time.time() - 86400:
             shutil.rmtree(old, ignore_errors=True)
     folder = Path(tempfile.mkdtemp(dir=root))
     name = datetime.now(timezone.utc).strftime("cakecrm-%Y%m%dT%H%M%SZ.dump")

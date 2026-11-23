@@ -9,6 +9,7 @@ from backups import BackupError, dump
 def test_dump_failures_remove_temporary_files(monkeypatch, tmp_path, failure):
     monkeypatch.setattr(dump.tempfile, "gettempdir", lambda: str(tmp_path))
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:test-password@localhost/database?sslmode=require")
+    monkeypatch.setenv("PGSSLROOTCERT", "/certs/root.crt")
     calls = []
 
     def run(args, **kw):
@@ -25,6 +26,7 @@ def test_dump_failures_remove_temporary_files(monkeypatch, tmp_path, failure):
     assert list((tmp_path / "cakecrm-backups").iterdir()) == []
     assert calls[0][1]["env"]["PGSSLMODE"] == "require"
     assert calls[0][1]["env"]["PGPASSWORD"] == "test-password"
+    assert calls[0][1]["env"]["PGSSLROOTCERT"] == "/certs/root.crt"
     assert "test-password" not in " ".join(calls[0][0])
 
 
@@ -39,7 +41,9 @@ def test_abandoned_temp_directories_are_reaped_but_recent_ones_survive(monkeypat
     old, recent = root / "abandoned", root / "recent"
     old.mkdir(parents=True)
     recent.mkdir()
-    os.utime(old, (time.time() - 7200, time.time() - 7200))
+    os.utime(old, (time.time() - 90000, time.time() - 90000))
+    # Two hours old: a slow download may still be streaming it.
+    os.utime(recent, (time.time() - 7200, time.time() - 7200))
     calls = []
 
     def run(args, env):
