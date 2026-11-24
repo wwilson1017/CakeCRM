@@ -1,22 +1,15 @@
-import {
-  useCallback,
-  useLayoutEffect,
-  useMemo,
-  useReducer,
-  useRef,
-  useState,
-} from "react";
-import type { ReactNode } from "react";
-import { toast } from "../../../shared/toast";
-import { createProject, updateTodo } from "../api";
-import type { Todo, TodoProject, TodoStatus } from "../types";
-import { todoSourceLabel } from "../sourceLabel";
-import { parseTags } from "../util";
-import { useTriageLayout } from "../triageLayout";
-import { dropUndo, queueUndo } from "../undoQueue";
-import { InlineTitle } from "./InlineTitle";
-import { SourceLabel } from "./SourceLabel";
-import { RecordChip } from "./RecordChip";
+import { useCallback, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { toast } from '../../../shared/toast';
+import { createProject, updateTodo } from '../api';
+import type { Todo, TodoProject, TodoStatus } from '../types';
+import { todoSourceLabel } from '../sourceLabel';
+import { parseTags } from '../util';
+import { useTriageLayout } from '../triageLayout';
+import { dropUndo, queueUndo } from '../undoQueue';
+import { InlineTitle } from './InlineTitle';
+import { SourceLabel } from './SourceLabel';
+import { RecordChip } from './RecordChip';
 
 interface Props {
   todo: Todo;
@@ -36,31 +29,27 @@ interface Props {
 // written until the context step, so the item stays in the inbox (and on this card)
 // while you keep clarifying it.
 const DESTINATIONS: { label: string; status: TodoStatus; list: string }[] = [
-  { label: "Next action", status: "next_action", list: "To Do" },
-  { label: "Waiting", status: "waiting_for", list: "Waiting For" },
-  { label: "Delegated", status: "delegated", list: "Delegated" },
-  { label: "Someday", status: "someday_maybe", list: "Someday / Maybe" },
+  { label: 'Next action', status: 'next_action', list: 'To Do' },
+  { label: 'Waiting', status: 'waiting_for', list: 'Waiting For' },
+  { label: 'Delegated', status: 'delegated', list: 'Delegated' },
+  { label: 'Someday', status: 'someday_maybe', list: 'Someday / Maybe' },
 ];
 
 // The context picker's option values are INDICES, never the context strings: a context
 // a user really named "new" would otherwise collide with the sentinel and be
 // impossible to select.
-const NEW_CONTEXT = "new";
+const NEW_CONTEXT = 'new';
 // The project picker's values are numeric ids, so a non-numeric sentinel cannot
 // collide with a real one however the project is named.
-const NEW_PROJECT = "new";
+const NEW_PROJECT = 'new';
 
-const stepCls =
-  "text-sm font-heading font-bold uppercase tracking-wide text-charcoal";
-const badgeCls =
-  "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded bg-ck-accent font-heading text-[10px] font-bold leading-none text-ck-accent-ink";
-const destCls =
-  "rounded-lg border px-3 py-2 text-sm font-heading transition-colors disabled:opacity-50";
-const inputCls =
-  "rounded-lg border border-line bg-cream px-2 py-1.5 text-sm text-charcoal focus:border-brand focus:outline-none disabled:opacity-50";
-const linkCls = "text-sm underline disabled:opacity-50";
+const stepCls = 'text-sm font-heading font-bold uppercase tracking-wide text-charcoal';
+const badgeCls = 'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded bg-ck-accent font-heading text-[10px] font-bold leading-none text-ck-accent-ink';
+const destCls = 'rounded-lg border px-3 py-2 text-sm font-heading transition-colors disabled:opacity-50';
+const inputCls = 'rounded-lg border border-line bg-cream px-2 py-1.5 text-sm text-charcoal focus:border-brand focus:outline-none disabled:opacity-50';
+const linkCls = 'text-sm underline disabled:opacity-50';
 // The visible name over each step-2 field, so nothing there is a guess.
-const fieldCls = "mb-1 block text-xs font-semibold text-charcoal";
+const fieldCls = 'mb-1 block text-xs font-semibold text-charcoal';
 // Tag suggestions shown at once under the Tags field.
 const MAX_TAGS_OFFERED = 8;
 
@@ -79,28 +68,20 @@ const MAX_TAGS_OFFERED = 8;
  * pinned at AA in `core/theme/hueContrast.test.ts`; the star is text, so it routes through
  * `text-ck-accent-text` per the #119 FILL/TEXT split.
  */
-function StepHeading({
-  step,
-  required,
-  children,
-}: {
+function StepHeading({ step, required, children }: {
   step: number;
   required?: boolean;
   children: ReactNode;
 }) {
   return (
     <div className="mb-2 flex items-center gap-2">
-      <span aria-hidden="true" className={badgeCls}>
-        {String(step).padStart(2, "0")}
-      </span>
+      <span aria-hidden="true" className={badgeCls}>{String(step).padStart(2, '0')}</span>
       <h3 className={stepCls}>
         <span className="sr-only">{`Step ${step}: `}</span>
         {children}
         {required && (
           <>
-            <span aria-hidden="true" className="ml-1 text-ck-accent-text">
-              ★
-            </span>
+            <span aria-hidden="true" className="ml-1 text-ck-accent-text">★</span>
             <span className="sr-only"> (required)</span>
           </>
         )}
@@ -129,9 +110,7 @@ function useSerialCommit<T>(send: () => Promise<T>): () => Promise<T> {
   const inFlight = useRef<Promise<T> | null>(null);
   // A live view of `send`, which closes over the render that created it.
   const sendRef = useRef(send);
-  useLayoutEffect(() => {
-    sendRef.current = send;
-  });
+  useLayoutEffect(() => { sendRef.current = send; });
   return useCallback((): Promise<T> => {
     const run = () => sendRef.current();
     const tail = inFlight.current;
@@ -139,9 +118,7 @@ function useSerialCommit<T>(send: () => Promise<T>): () => Promise<T> {
     inFlight.current = next;
     // Let the chain be garbage once it has drained, so an idle field starts a fresh one
     // rather than accumulating continuations for the life of the session.
-    const release = () => {
-      if (inFlight.current === next) inFlight.current = null;
-    };
+    const release = () => { if (inFlight.current === next) inFlight.current = null; };
     void next.then(release, release);
     return next;
   }, []);
@@ -149,7 +126,7 @@ function useSerialCommit<T>(send: () => Promise<T>): () => Promise<T> {
 
 const subMs = (iso: string): number => {
   const frac = /\.(\d+)/.exec(iso);
-  return frac ? Number(frac[1].slice(3, 6).padEnd(3, "0")) : 0;
+  return frac ? Number(frac[1].slice(3, 6).padEnd(3, '0')) : 0;
 };
 
 /**
@@ -199,12 +176,12 @@ interface CardState {
 
 type CardAction =
   /** A newer view of the row, from the parent's prop or a write's own response. */
-  | { type: "adopt"; row: Todo }
-  | { type: "notes-draft"; value: string }
-  | { type: "tags-draft"; value: string }
-  | { type: "due"; value: string | null }
-  | { type: "back"; value: string | null }
-  | { type: "title"; value: string | null };
+  | { type: 'adopt'; row: Todo }
+  | { type: 'notes-draft'; value: string }
+  | { type: 'tags-draft'; value: string }
+  | { type: 'due'; value: string | null }
+  | { type: 'back'; value: string | null }
+  | { type: 'title'; value: string | null };
 
 /**
  * Take a newer view of the row. An older or equal one is ignored: that is this card's own
@@ -221,9 +198,8 @@ type CardAction =
  * back to the value the override exists to hide, and hands the Edit sheet the old value,
  * whose full-row save then reverts the change.
  */
-const tagsText = (tags: string[]): string => tags.join(", ");
-const tagsClean = (draft: string, row: Todo): boolean =>
-  tagsText(parseTags(draft)) === tagsText(row.tags);
+const tagsText = (tags: string[]): string => tags.join(', ');
+const tagsClean = (draft: string, row: Todo): boolean => tagsText(parseTags(draft)) === tagsText(row.tags);
 
 function adopt(s: CardState, r: Todo): CardState {
   if (!isNewer(r.updated_at, s.row.updated_at)) return s;
@@ -237,17 +213,17 @@ function adopt(s: CardState, r: Todo): CardState {
 
 function reduce(s: CardState, a: CardAction): CardState {
   switch (a.type) {
-    case "adopt":
+    case 'adopt':
       return adopt(s, a.row);
-    case "notes-draft":
+    case 'notes-draft':
       return s.notesDraft === a.value ? s : { ...s, notesDraft: a.value };
-    case "tags-draft":
+    case 'tags-draft':
       return s.tagsDraft === a.value ? s : { ...s, tagsDraft: a.value };
-    case "due":
+    case 'due':
       return s.pendingDue === a.value ? s : { ...s, pendingDue: a.value };
-    case "back":
+    case 'back':
       return s.pendingBack === a.value ? s : { ...s, pendingBack: a.value };
-    case "title":
+    case 'title':
       return s.pendingTitle === a.value ? s : { ...s, pendingTitle: a.value };
   }
 }
@@ -266,20 +242,12 @@ const initState = (todo: Todo): CardState => ({
  * of action it is, optional detail, then the context that files it. Setting a context
  * is the ONLY way out of the inbox.
  */
-export function TriageCard({
-  todo,
-  projects,
-  contexts,
-  tags: knownTags = [],
-  onProcessed,
-  onChanged,
-  onEdit,
-}: Props) {
-  const compact = useTriageLayout()[0] === "compact";
-  const gap = compact ? "mt-3" : "mt-5";
+export function TriageCard({ todo, projects, contexts, tags: knownTags = [], onProcessed, onChanged, onEdit }: Props) {
+  const compact = useTriageLayout()[0] === 'compact';
+  const gap = compact ? 'mt-3' : 'mt-5';
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [destination, setDestination] = useState<TodoStatus>("next_action");
+  const [error, setError] = useState('');
+  const [destination, setDestination] = useState<TodoStatus>('next_action');
   // null = the picker is showing; a string = the inline create input is.
   const [newContext, setNewContext] = useState<string | null>(null);
   const [newProject, setNewProject] = useState<string | null>(null);
@@ -316,22 +284,15 @@ export function TriageCard({
   // the same state and React bails out of the re-render entirely. `InboxPage` keys the card
   // by todo id, so a same-id reload does not remount it: this is the only way a change from
   // elsewhere (the Edit sheet, most often) gets in.
-  useLayoutEffect(() => {
-    apply({ type: "adopt", row: todo });
-  }, [todo, apply]);
+  useLayoutEffect(() => { apply({ type: 'adopt', row: todo }); }, [todo, apply]);
 
-  const { row, notesDraft, tagsDraft, pendingDue, pendingBack, pendingTitle } =
-    state;
-  const dest =
-    DESTINATIONS.find((d) => d.status === destination) ?? DESTINATIONS[0];
+  const { row, notesDraft, tagsDraft, pendingDue, pendingBack, pendingTitle } = state;
+  const dest = DESTINATIONS.find(d => d.status === destination) ?? DESTINATIONS[0];
   // Looked up in the shared list so a purpose edited on the project page shows here on the
   // next meta refresh; a project missing from the list (just created) simply shows nothing.
-  const pickedProject =
-    row.project_id == null
-      ? undefined
-      : projects.find((p) => p.id === row.project_id);
+  const pickedProject = row.project_id == null ? undefined : projects.find(p => p.id === row.project_id);
   const dueValue = pendingDue ?? row.due_date;
-  const backValue = pendingBack ?? row.bring_back_on ?? "";
+  const backValue = pendingBack ?? (row.bring_back_on ?? '');
 
   // What the Edit sheet is handed: this card's best view of the record, never the lagging
   // prop. Built from `stateRef` at the moment it is needed rather than captured at click
@@ -346,10 +307,7 @@ export function TriageCard({
       notes: live.notesDraft,
       tags: parseTags(live.tagsDraft),
       due_date: live.pendingDue ?? live.row.due_date,
-      bring_back_on:
-        live.pendingBack === null
-          ? live.row.bring_back_on
-          : live.pendingBack || null,
+      bring_back_on: live.pendingBack === null ? live.row.bring_back_on : (live.pendingBack || null),
     };
   };
 
@@ -362,9 +320,7 @@ export function TriageCard({
   // would flush the notes and then silently do nothing, in every dev run.
   useLayoutEffect(() => {
     mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
+    return () => { mounted.current = false; };
   }, []);
 
   /**
@@ -379,7 +335,7 @@ export function TriageCard({
   const flushNotes = useSerialCommit(async (): Promise<boolean> => {
     const { notesDraft: draft, row: live } = stateRef.current;
     if (draft === live.notes) return true;
-    setError("");
+    setError('');
     try {
       // Just an adoption — the response is the authoritative row, which stops a slow refetch
       // dispatched by an earlier write from reverting what this card has since written, and
@@ -392,14 +348,11 @@ export function TriageCard({
       // text, making such a rule a no-op, or a later write replaced ours — and there, marking
       // the box clean would strand a paragraph the server does not have, silently and with no
       // error. Leaving it dirty re-sends it, the same last-write-wins rule `adopt` follows.
-      apply({
-        type: "adopt",
-        row: await updateTodo(live.id, { notes: draft }),
-      });
+      apply({ type: 'adopt', row: await updateTodo(live.id, { notes: draft }) });
       onChanged();
       return true;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Update failed";
+      const msg = e instanceof Error ? e.message : 'Update failed';
       setError(msg);
       // A toast AS WELL, for the reason `createAndAssign` gives below: this card can unmount
       // mid-flight — filing swaps the head item and `InboxPage` keys the card by todo id —
@@ -415,15 +368,12 @@ export function TriageCard({
   const flushTags = useSerialCommit(async (): Promise<void> => {
     const { tagsDraft: draft, row: live } = stateRef.current;
     if (tagsClean(draft, live)) return;
-    setError("");
+    setError('');
     try {
-      apply({
-        type: "adopt",
-        row: await updateTodo(live.id, { tags: parseTags(draft) }),
-      });
+      apply({ type: 'adopt', row: await updateTodo(live.id, { tags: parseTags(draft) }) });
       onChanged();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Update failed";
+      const msg = e instanceof Error ? e.message : 'Update failed';
       setError(msg);
       toast.error(msg); // same unmount reasoning as the notes save
     }
@@ -431,23 +381,16 @@ export function TriageCard({
 
   // Known tags not already on the item; what follows the last comma narrows them, unless it
   // is already a whole known tag (so "home" does not hide "homework").
-  const tagParts = tagsDraft.split(",");
+  const tagParts = tagsDraft.split(',');
   const tagLast = tagParts[tagParts.length - 1].trim();
-  const tagTyping = knownTags.includes(tagLast) ? "" : tagLast.toLowerCase();
+  const tagTyping = knownTags.includes(tagLast) ? '' : tagLast.toLowerCase();
   const tagsOffered = knownTags
-    .filter(
-      (t) =>
-        !parseTags(tagsDraft).includes(t) &&
-        t.toLowerCase().includes(tagTyping),
-    )
+    .filter(t => !parseTags(tagsDraft).includes(t) && t.toLowerCase().includes(tagTyping))
     .slice(0, MAX_TAGS_OFFERED);
   /** A picked tag replaces the fragment being typed, or joins the finished entries. */
   const pickTag = (tag: string) => {
     const kept = tagTyping ? tagParts.slice(0, -1) : tagParts;
-    apply({
-      type: "tags-draft",
-      value: tagsText([...parseTags(kept.join(",")), tag]),
-    });
+    apply({ type: 'tags-draft', value: tagsText([...parseTags(kept.join(',')), tag]) });
     void flushTags();
   };
 
@@ -472,23 +415,17 @@ export function TriageCard({
     // — a date typed away and back reads the same as the one a failed write was carrying.
     const edit = dateEdits.current.due;
     const release = () => {
-      if (dateEdits.current.due === edit) apply({ type: "due", value: null });
+      if (dateEdits.current.due === edit) apply({ type: 'due', value: null });
     };
     // Typed back to the date the row already holds: nothing to write, so stop shadowing the
     // row — a pinned override hides every later change and is written back over it.
-    if (pending === live.due_date) {
-      release();
-      return;
-    }
-    setError("");
+    if (pending === live.due_date) { release(); return; }
+    setError('');
     try {
-      apply({
-        type: "adopt",
-        row: await updateTodo(live.id, { due_date: pending }),
-      });
+      apply({ type: 'adopt', row: await updateTodo(live.id, { due_date: pending }) });
       onChanged();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Update failed";
+      const msg = e instanceof Error ? e.message : 'Update failed';
       setError(msg);
       toast.error(msg); // same unmount reasoning as the notes save
     } finally {
@@ -508,21 +445,15 @@ export function TriageCard({
     if (pending === null) return;
     const edit = dateEdits.current.back;
     const release = () => {
-      if (dateEdits.current.back === edit) apply({ type: "back", value: null });
+      if (dateEdits.current.back === edit) apply({ type: 'back', value: null });
     };
-    if (pending === (live.bring_back_on ?? "")) {
-      release();
-      return;
-    }
-    setError("");
+    if (pending === (live.bring_back_on ?? '')) { release(); return; }
+    setError('');
     try {
-      apply({
-        type: "adopt",
-        row: await updateTodo(live.id, { bring_back_on: pending || null }),
-      });
+      apply({ type: 'adopt', row: await updateTodo(live.id, { bring_back_on: pending || null }) });
       onChanged();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Update failed";
+      const msg = e instanceof Error ? e.message : 'Update failed';
       setError(msg);
       toast.error(msg); // same unmount reasoning as the notes save
     } finally {
@@ -538,16 +469,13 @@ export function TriageCard({
     // Trimmed and de-duplicated. The shared meta is a list of values other rows carry, so a
     // legacy row with stray whitespace — or two rows differing only by it — would otherwise
     // put a near-duplicate in the picker and give two options the same React key.
-    const known = [...new Set(contexts.map((c) => c.trim()).filter(Boolean))];
+    const known = [...new Set(contexts.map(c => c.trim()).filter(Boolean))];
     const own = row.context.trim();
     return own && !known.includes(own) ? [own, ...known] : known;
   }, [contexts, row.context]);
 
   /** One write. `resolves` says whether it takes the item out of the inbox. */
-  const patch = async (
-    fields: Record<string, unknown>,
-    resolves: boolean,
-  ): Promise<boolean> => {
+  const patch = async (fields: Record<string, unknown>, resolves: boolean): Promise<boolean> => {
     if (busy) return false;
     setBusy(true);
     // A note jotted in step 2 belongs to the same triage gesture, so it is committed WITH
@@ -566,7 +494,7 @@ export function TriageCard({
       if (resolves) await commitDue();
       if (resolves) await commitBack();
       if (resolves) await flushTags();
-      if (notesOk) setError("");
+      if (notesOk) setError('');
       // Adopt the response for the same reason the notes save does. Star and project are
       // written straight through here and never rendered optimistically, so this is the ONLY
       // thing that keeps them current for `payload()` — without it the Edit sheet can open
@@ -578,7 +506,7 @@ export function TriageCard({
       // of the await, because the adoption below moves the row on to the post-write state
       // and the undo row has to carry the pre-write one.
       const before = stateRef.current.row;
-      apply({ type: "adopt", row: await updateTodo(todo.id, fields) });
+      apply({ type: 'adopt', row: await updateTodo(todo.id, fields) });
       // The 7s undo row (#231), guarded HERE rather than on the Done button so any future
       // completing write from this card is covered by construction. The same row for the
       // OTHER write that ends an item's time in the inbox: `fileUnder` is the only caller
@@ -588,12 +516,9 @@ export function TriageCard({
       // — both are restored, because an item that arrived carrying "@errands" from Quick
       // Add must go back to '@errands' and not to empty. Delete restores the prior status.
       // Other status writes retire an offer that no longer describes a pending change.
-      if (fields.status === "done" && before.status !== "done")
-        queueUndo(before);
-      else if (fields.context !== undefined && before.status === "inbox")
-        queueUndo(before, "filed");
-      else if (fields.status === "dropped" && before.status !== "dropped")
-        queueUndo(before, "deleted");
+      if (fields.status === 'done' && before.status !== 'done') queueUndo(before);
+      else if (fields.context !== undefined && before.status === 'inbox') queueUndo(before, 'filed');
+      else if (fields.status === 'dropped' && before.status !== 'dropped') queueUndo(before, 'deleted');
       else if (fields.status !== undefined) dropUndo(todo.id);
       if (resolves) {
         // Deliberately STAYS busy — this card is spent. The parent's reload is async
@@ -610,7 +535,7 @@ export function TriageCard({
       }
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Update failed");
+      setError(e instanceof Error ? e.message : 'Update failed');
       setBusy(false);
       return false;
     }
@@ -640,13 +565,12 @@ export function TriageCard({
     const value = name.trim();
     if (busy || !value) return;
     setBusy(true);
-    setError("");
+    setError('');
     let created: TodoProject;
     try {
       created = await createProject({ name: value });
     } catch (e) {
-      const msg =
-        e instanceof Error ? e.message : "Could not create the project";
+      const msg = e instanceof Error ? e.message : 'Could not create the project';
       // Inline, so a rejected name — a duplicate, most often — is correctable right
       // there in the still-open input. AND a toast, because a rejected POST does not
       // prove nothing was created (the row can commit and the response be lost), so
@@ -664,10 +588,7 @@ export function TriageCard({
       // Adopted like every other write on this card: `setBusy(false)` runs before the
       // parent's reload resolves, so without this the Edit sheet can open on the pre-
       // assignment `project_id` and its full-row save undoes the assignment.
-      apply({
-        type: "adopt",
-        row: await updateTodo(todo.id, { project_id: created.id }),
-      });
+      apply({ type: 'adopt', row: await updateTodo(todo.id, { project_id: created.id }) });
     } catch {
       // A TOAST, not this card's inline error: promoting another queue row is not
       // gated on `busy`, so the user can swap the head item while these two writes
@@ -675,9 +596,7 @@ export function TriageCard({
       // an inline setError would land on a dead component and vanish. That is exactly
       // the case that must not go quiet: the project now exists and nothing on screen
       // would say so.
-      toast.error(
-        `Created “${created.name}”, but couldn't file this item under it — pick it from the list.`,
-      );
+      toast.error(`Created “${created.name}”, but couldn't file this item under it — pick it from the list.`);
     }
     setBusy(false);
     onChanged(); // reloads the todo AND the project list, so the new one is pickable
@@ -688,21 +607,21 @@ export function TriageCard({
   // swallow that very click. The two writes touch disjoint fields and the service
   // locks the row, so overlapping them is safe.
   const saveTitle = async (title: string): Promise<boolean> => {
-    setError("");
-    apply({ type: "title", value: title });
+    setError('');
+    apply({ type: 'title', value: title });
     try {
-      apply({ type: "adopt", row: await updateTodo(todo.id, { title }) });
+      apply({ type: 'adopt', row: await updateTodo(todo.id, { title }) });
       onChanged();
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Update failed");
+      setError(e instanceof Error ? e.message : 'Update failed');
       return false;
     } finally {
       // Released here, where this write settles — the one moment that IS evidence about it.
       // On success the response just adopted carries the new title, so the override has
       // nothing left to add; on failure nothing was written and it must not go on showing a
       // name the server never took. Either way the card falls back to the row it holds.
-      apply({ type: "title", value: null });
+      apply({ type: 'title', value: null });
     }
   };
 
@@ -721,9 +640,7 @@ export function TriageCard({
           disabled={locked}
           onClick={() => void patch({ star: !row.star }, false)}
           className={`shrink-0 text-xl leading-none disabled:opacity-50 ${
-            row.star
-              ? "text-ck-amber-text"
-              : "text-line hover:text-ck-amber-text"
+            row.star ? 'text-ck-amber-text' : 'text-line hover:text-ck-amber-text'
           }`}
           aria-label="Star as today priority"
         >
@@ -738,9 +655,7 @@ export function TriageCard({
       )}
 
       {compact && notesDraft && (
-        <p className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-sm text-muted">
-          {notesDraft}
-        </p>
+        <p className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-sm text-muted">{notesDraft}</p>
       )}
 
       {/* Step 1 — where it's headed. Selecting is local: the item stays put until
@@ -748,7 +663,7 @@ export function TriageCard({
       <div className={gap}>
         <StepHeading step={1}>What kind of action?</StepHeading>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {DESTINATIONS.map((d) => {
+          {DESTINATIONS.map(d => {
             const on = d.status === destination;
             return (
               <button
@@ -757,11 +672,9 @@ export function TriageCard({
                 disabled={locked}
                 aria-pressed={on}
                 onClick={() => setDestination(d.status)}
-                className={`${destCls} ${
-                  on
-                    ? "border-brand bg-brand/10 font-semibold text-charcoal"
-                    : "border-line bg-cream text-muted hover:bg-sand"
-                }`}
+                className={`${destCls} ${on
+                  ? 'border-brand bg-brand/10 font-semibold text-charcoal'
+                  : 'border-line bg-cream text-muted hover:bg-sand'}`}
               >
                 {d.label}
               </button>
@@ -775,7 +688,7 @@ export function TriageCard({
           <button
             type="button"
             disabled={locked}
-            onClick={() => void patch({ status: "done" }, true)}
+            onClick={() => void patch({ status: 'done' }, true)}
             title="It took 2 minutes or less — done"
             className="rounded-lg border border-green-600 px-3 py-1.5 text-sm font-heading text-green-700 disabled:opacity-50 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-950/30"
           >
@@ -784,7 +697,7 @@ export function TriageCard({
           <button
             type="button"
             disabled={locked}
-            onClick={() => void patch({ status: "dropped" }, true)}
+            onClick={() => void patch({ status: 'dropped' }, true)}
             title="Not needed — delete it"
             className="rounded-lg border border-ck-accent px-3 py-1.5 text-sm font-heading text-ck-accent-text disabled:opacity-50 hover:bg-ck-accent/10"
           >
@@ -799,41 +712,31 @@ export function TriageCard({
         <div className="flex flex-wrap items-end gap-2">
           {newProject === null ? (
             <div>
-              <span className={fieldCls}>Project</span>
-              <select
-                value={row.project_id ?? ""}
-                disabled={locked}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (v === NEW_PROJECT) {
-                    setNewProject("");
-                    return;
-                  }
-                  void patch({ project_id: v ? Number(v) : null }, false);
-                }}
-                className={inputCls}
-                aria-label="Project"
-              >
-                <option value="">No project</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-                <option value={NEW_PROJECT}>+ New project…</option>
-              </select>
+            <span className={fieldCls}>Project</span>
+            <select
+              value={row.project_id ?? ''}
+              disabled={locked}
+              onChange={e => {
+                const v = e.target.value;
+                if (v === NEW_PROJECT) { setNewProject(''); return; }
+                void patch({ project_id: v ? Number(v) : null }, false);
+              }}
+              className={inputCls}
+              aria-label="Project"
+            >
+              <option value="">No project</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              <option value={NEW_PROJECT}>+ New project…</option>
+            </select>
             </div>
           ) : (
             <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void createAndAssign(newProject);
-              }}
+              onSubmit={e => { e.preventDefault(); void createAndAssign(newProject); }}
               className="flex flex-wrap items-center gap-2"
             >
               <input
                 value={newProject}
-                onChange={(e) => setNewProject(e.target.value)}
+                onChange={e => setNewProject(e.target.value)}
                 placeholder="New project name"
                 autoFocus
                 disabled={locked}
@@ -854,10 +757,7 @@ export function TriageCard({
               <button
                 type="button"
                 disabled={locked}
-                onClick={() => {
-                  setNewProject(null);
-                  setError("");
-                }}
+                onClick={() => { setNewProject(null); setError(''); }}
                 className={`${linkCls} text-muted hover:text-charcoal`}
               >
                 Cancel
@@ -873,70 +773,58 @@ export function TriageCard({
               greyed rather than mm/dd/yyyy, so a partial overlay leaves digits peeking
               out), and the width floor keeps the cue on one line. */}
           <div>
-            <span className={fieldCls}>Due date</span>
-            <span className="relative flex">
-              <input
-                type="date"
-                value={dueValue}
-                disabled={locked}
-                onFocus={() => setDueFocused(true)}
-                onBlur={() => {
-                  setDueFocused(false);
-                  void commitDue();
-                }}
-                // Shown immediately, written on blur — `commitDue` says why. Nothing here
-                // disables the input, so the user can finish typing the date.
-                onChange={(e) => {
-                  dateEdits.current.due += 1;
-                  apply({ type: "due", value: e.target.value });
-                }}
-                className={`${inputCls} min-w-40`}
-                aria-label="Due date"
-              />
-              {/* Keyed off `dueValue`, not the raw prop: without the optimistic value the
+          <span className={fieldCls}>Due date</span>
+          <span className="relative flex">
+            <input
+              type="date"
+              value={dueValue}
+              disabled={locked}
+              onFocus={() => setDueFocused(true)}
+              onBlur={() => { setDueFocused(false); void commitDue(); }}
+              // Shown immediately, written on blur — `commitDue` says why. Nothing here
+              // disables the input, so the user can finish typing the date.
+              onChange={e => { dateEdits.current.due += 1; apply({ type: 'due', value: e.target.value }); }}
+              className={`${inputCls} min-w-40`}
+              aria-label="Due date"
+            />
+            {/* Keyed off `dueValue`, not the raw prop: without the optimistic value the
                 field reverts the instant the write is sent and the cue flashes back over
                 the date just chosen, for the whole length of the refetch. */}
-              {!dueValue && !dueFocused && (
-                <span
-                  aria-hidden="true"
-                  className="pointer-events-none absolute inset-px flex items-center whitespace-nowrap rounded-lg bg-cream pl-2 text-sm text-muted"
-                >
-                  Add due date
-                </span>
-              )}
-            </span>
+            {!dueValue && !dueFocused && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-px flex items-center whitespace-nowrap rounded-lg bg-cream pl-2 text-sm text-muted"
+              >
+                Add due date
+              </span>
+            )}
+          </span>
           </div>
           {/* Bring back on (#261): the due-date control's twin — same blur commit, same
               opaque cue over a native date input that ignores `placeholder`. */}
           <div>
-            <span className={fieldCls}>Bring back on</span>
-            <span className="relative flex">
-              <input
-                type="date"
-                value={backValue}
-                disabled={locked}
-                onFocus={() => setBackFocused(true)}
-                onBlur={() => {
-                  setBackFocused(false);
-                  void commitBack();
-                }}
-                onChange={(e) => {
-                  dateEdits.current.back += 1;
-                  apply({ type: "back", value: e.target.value });
-                }}
-                className={`${inputCls} min-w-40`}
-                aria-label="Bring back on"
-                title="Hidden from your lists until this day, then on Today. Not a deadline."
-              />
-              {!backValue && !backFocused && (
-                <span
-                  aria-hidden="true"
-                  className="pointer-events-none absolute inset-px flex items-center whitespace-nowrap rounded-lg bg-cream pl-2 text-sm text-muted"
-                >
-                  Bring back on…
-                </span>
-              )}
-            </span>
+          <span className={fieldCls}>Bring back on</span>
+          <span className="relative flex">
+            <input
+              type="date"
+              value={backValue}
+              disabled={locked}
+              onFocus={() => setBackFocused(true)}
+              onBlur={() => { setBackFocused(false); void commitBack(); }}
+              onChange={e => { dateEdits.current.back += 1; apply({ type: 'back', value: e.target.value }); }}
+              className={`${inputCls} min-w-40`}
+              aria-label="Bring back on"
+              title="Hidden from your lists until this day, then on Today. Not a deadline."
+            />
+            {!backValue && !backFocused && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-px flex items-center whitespace-nowrap rounded-lg bg-cream pl-2 text-sm text-muted"
+              >
+                Bring back on…
+              </span>
+            )}
+          </span>
           </div>
           <button
             type="button"
@@ -954,12 +842,7 @@ export function TriageCard({
               // change them meanwhile: the card is locked.
               const { pendingDue: due, pendingBack: back } = stateRef.current;
               setEditPending(true);
-              void Promise.all([
-                flushNotes(),
-                commitDue(),
-                commitBack(),
-                flushTags(),
-              ]).then(() => {
+              void Promise.all([flushNotes(), commitDue(), commitBack(), flushTags()]).then(() => {
                 if (!mounted.current) return;
                 setEditPending(false);
                 const sheet = payload();
@@ -977,100 +860,82 @@ export function TriageCard({
             project is the moment to check it belongs there. Edited on the project's own page,
             not here — this card's writes are all to the todo. Hidden while a new project is
             being named (it has neither yet) and when the project has neither. */}
-        {!compact &&
-          newProject === null &&
-          pickedProject &&
-          (pickedProject.purpose || pickedProject.outcome) && (
-            <dl className="mt-2 space-y-0.5 text-sm" data-project-purpose>
-              {pickedProject.purpose && (
-                <div className="flex gap-2">
-                  <dt className="shrink-0 text-muted">Purpose</dt>
-                  <dd className="min-w-0 break-words text-charcoal">
-                    {pickedProject.purpose}
-                  </dd>
-                </div>
-              )}
-              {pickedProject.outcome && (
-                <div className="flex gap-2">
-                  <dt className="shrink-0 text-muted">Outcome</dt>
-                  <dd className="min-w-0 break-words text-charcoal">
-                    {pickedProject.outcome}
-                  </dd>
-                </div>
-              )}
-            </dl>
-          )}
+        {!compact && newProject === null && pickedProject && (pickedProject.purpose || pickedProject.outcome) && (
+          <dl className="mt-2 space-y-0.5 text-sm" data-project-purpose>
+            {pickedProject.purpose && (
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-muted">Purpose</dt>
+                <dd className="min-w-0 break-words text-charcoal">{pickedProject.purpose}</dd>
+              </div>
+            )}
+            {pickedProject.outcome && (
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-muted">Outcome</dt>
+                <dd className="min-w-0 break-words text-charcoal">{pickedProject.outcome}</dd>
+              </div>
+            )}
+          </dl>
+        )}
         {/* Notes belong to clarifying, not only to the full editor — jot the link or the
             phone number without leaving triage. Saved on blur, non-resolving, so the item
             stays in the inbox. Compact reaches these fields through Edit instead. */}
-        {!compact && (
-          <>
-            <span className={`${fieldCls} mt-3`}>Notes</span>
-            <textarea
-              value={notesDraft}
-              disabled={locked}
-              onChange={(e) =>
-                apply({ type: "notes-draft", value: e.target.value })
-              }
-              onBlur={() => void flushNotes()}
-              placeholder="Links, numbers, anything you'll want when you do it"
-              className={`${inputCls} block min-h-16 w-full`}
-              aria-label="Notes"
-            />
-            {/* Tags while clarifying, comma-separated as in the Edit sheet, with the tags already
+        {!compact && <>
+          <span className={`${fieldCls} mt-3`}>Notes</span>
+          <textarea
+            value={notesDraft}
+            disabled={locked}
+            onChange={e => apply({ type: 'notes-draft', value: e.target.value })}
+            onBlur={() => void flushNotes()}
+            placeholder="Links, numbers, anything you'll want when you do it"
+            className={`${inputCls} block min-h-16 w-full`}
+            aria-label="Notes"
+          />
+          {/* Tags while clarifying, comma-separated as in the Edit sheet, with the tags already
               in use one tap away. Saved on blur or on a pick, non-resolving. */}
-            <span className={`${fieldCls} mt-3`}>Tags</span>
-            <input
-              value={tagsDraft}
-              disabled={locked}
-              onChange={(e) =>
-                apply({ type: "tags-draft", value: e.target.value })
-              }
-              onBlur={() => void flushTags()}
-              placeholder="errand, quick, house"
-              className={`${inputCls} block w-full`}
-              aria-label="Tags"
-            />
-            {tagsOffered.length > 0 && (
-              <span className="mt-1 flex flex-wrap gap-1" data-tag-suggestions>
-                {tagsOffered.map((tag) => (
-                  <button
-                    key={tag}
-                    type="button"
-                    disabled={locked}
-                    // Keep focus in the input: a blur here would commit the half-typed fragment
-                    // this click is about to replace.
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => pickTag(tag)}
-                    className="rounded-full border border-line px-2 py-0.5 text-xs text-muted hover:bg-sand hover:text-charcoal disabled:opacity-50"
-                  >
-                    + {tag}
-                  </button>
-                ))}
-              </span>
-            )}
-          </>
-        )}
+          <span className={`${fieldCls} mt-3`}>Tags</span>
+          <input
+            value={tagsDraft}
+            disabled={locked}
+            onChange={e => apply({ type: 'tags-draft', value: e.target.value })}
+            onBlur={() => void flushTags()}
+            placeholder="errand, quick, house"
+            className={`${inputCls} block w-full`}
+            aria-label="Tags"
+          />
+          {tagsOffered.length > 0 && (
+            <span className="mt-1 flex flex-wrap gap-1" data-tag-suggestions>
+              {tagsOffered.map(tag => (
+                <button
+                  key={tag}
+                  type="button"
+                  disabled={locked}
+                  // Keep focus in the input: a blur here would commit the half-typed fragment
+                  // this click is about to replace.
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={() => pickTag(tag)}
+                  className="rounded-full border border-line px-2 py-0.5 text-xs text-muted hover:bg-sand hover:text-charcoal disabled:opacity-50"
+                >
+                  + {tag}
+                </button>
+              ))}
+            </span>
+          )}
+        </>}
       </div>
 
       {/* Step 3 — the last step. Picking a context files it and clears the inbox. */}
-      <div
-        className={`${gap} border-t border-line-faint ${compact ? "pt-3" : "pt-4"}`}
-      >
-        <StepHeading step={3} required>
-          Last step — set context
-        </StepHeading>
+      <div className={`${gap} border-t border-line-faint ${compact ? 'pt-3' : 'pt-4'}`}>
+        <StepHeading step={3} required>Last step — set context</StepHeading>
         {compact ? (
           <p className="mb-2 text-sm text-muted">
-            Files it under{" "}
-            <span className="font-semibold text-charcoal">{dest.list}</span>.
+            Files it under <span className="font-semibold text-charcoal">{dest.list}</span>.
           </p>
         ) : (
           <p className="mb-2 text-sm text-muted">
-            Where can you actually do this? Every item needs a context before it
-            leaves the inbox. Choosing one files it under{" "}
-            <span className="font-semibold text-charcoal">{dest.list}</span> and
-            clears it out of your inbox — do it last.
+            Where can you actually do this? Every item needs a context before it leaves the
+            inbox. Choosing one files it under{' '}
+            <span className="font-semibold text-charcoal">{dest.list}</span> and clears it out of
+            your inbox — do it last.
           </p>
         )}
         {newContext === null ? (
@@ -1078,13 +943,10 @@ export function TriageCard({
             <select
               value=""
               disabled={locked}
-              onChange={(e) => {
+              onChange={e => {
                 const v = e.target.value;
                 if (!v) return;
-                if (v === NEW_CONTEXT) {
-                  setNewContext("");
-                  return;
-                }
+                if (v === NEW_CONTEXT) { setNewContext(''); return; }
                 const picked = options[Number(v)];
                 if (picked) void fileUnder(picked);
               }}
@@ -1092,30 +954,19 @@ export function TriageCard({
               aria-label="Set context and file this todo"
             >
               <option value="">Set context…</option>
-              {options.map((c, i) => (
-                <option key={c} value={i}>
-                  {c}
-                </option>
-              ))}
+              {options.map((c, i) => <option key={c} value={i}>{c}</option>)}
               <option value={NEW_CONTEXT}>+ New context…</option>
             </select>
-            {row.context && (
-              <span className="text-xs text-muted">
-                currently {row.context}
-              </span>
-            )}
+            {row.context && <span className="text-xs text-muted">currently {row.context}</span>}
           </div>
         ) : (
           <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void fileUnder(newContext);
-            }}
+            onSubmit={e => { e.preventDefault(); void fileUnder(newContext); }}
             className="flex flex-wrap items-center gap-2"
           >
             <input
               value={newContext}
-              onChange={(e) => setNewContext(e.target.value)}
+              onChange={e => setNewContext(e.target.value)}
               placeholder="@home, @calls, @errands…"
               autoFocus
               disabled={locked}
@@ -1132,10 +983,7 @@ export function TriageCard({
             <button
               type="button"
               disabled={locked}
-              onClick={() => {
-                setNewContext(null);
-                setError("");
-              }}
+              onClick={() => { setNewContext(null); setError(''); }}
               className={`${linkCls} text-muted hover:text-charcoal`}
             >
               Cancel
