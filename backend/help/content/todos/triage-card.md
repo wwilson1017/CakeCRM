@@ -17,6 +17,7 @@ device only, so a phone can stay Compact while a laptop is Expanded.
 
 ## Delete
 
-**Delete** takes the item out of the inbox and puts it in Done → Dropped. An **Undo?** button
+**Delete ✕**, beside **2 min — Done ✓** under the action choices, is for an item that isn't
+needed: it takes the item out of the inbox and puts it in Done → Dropped. An **Undo?** button
 shows under the card for seven seconds and puts it straight back. After that, reopen it from
 the Done tab's Dropped list. A todo is never erased.

@@ -21,7 +21,7 @@ Pick one:
 
 Picking one saves nothing yet. The item stays on the card while you add detail.
 
-If the whole thing takes under two minutes, just do it and press **Took 2 minutes — Done ✓**.
+If the whole thing takes two minutes or less, just do it and press **2 min — Done ✓**. If it doesn't need doing at all, press **Delete ✕**: it moves to Done → Dropped, where you can reopen it, and **Undo?** brings it straight back. A todo is never erased.
 
 ## 02 Add detail (optional)
 
@@ -29,7 +29,7 @@ If the whole thing takes under two minutes, just do it and press **Took 2 minute
 - **Due date** — only for a real deadline.
 - **Bring back on** — hides the todo until that day, then shows it on Today.
 - **Notes** and **Tags** — on the Expanded card only. Notes hold links, numbers, anything you will want when you do it; tags are comma-separated, like `errand, quick`, and the ones you already use show below the box. On the Compact card, any notes the item already has show under its title, and **Edit** reaches both.
-- **Edit** opens the full editor, once any note, date or tags you just changed have saved. **Delete** takes the item out of the inbox: it moves to Done → Dropped, where you can reopen it, and **Undo?** brings it straight back. A todo is never erased.
+- **Edit** opens the full editor, once any note, date or tags you just changed have saved.
 
 The card is **Compact** by default, so it fits on a phone screen. The **Triage card** choice at the bottom of the Inbox switches this device to **Expanded**, which adds notes, tags and the project's purpose and outcome to the card.
 
