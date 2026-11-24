@@ -641,7 +641,7 @@ describe('step 2 — notes without leaving triage', () => {
     render();
     setValue(notesBox(), 'two minute job');
     unfocus(notesBox());
-    click(button('Took 2 minutes — Done ✓'));
+    click(button('2 min — Done ✓'));
     await settle();
 
     expect(updateTodoMock).toHaveBeenCalledWith(7, { notes: 'two minute job' });
@@ -985,7 +985,7 @@ describe('Delete, the card\'s discard (#299)', () => {
   it('archives the item through the resolving write and queues Undo', async () => {
     const confirm = vi.spyOn(window, 'confirm');
     render();
-    const drop = [...container.querySelectorAll('button')].find(b => b.textContent === 'Delete');
+    const drop = [...container.querySelectorAll('button')].find(b => b.textContent === 'Delete ✕');
     if (!drop) throw new Error('no Delete button');
 
     setValue(notesBox(), 'not worth doing');
@@ -1345,7 +1345,7 @@ describe('compact triage', () => {
     }
     expect(container.querySelector('[data-project-purpose]')).toBeNull();
     expect(container.querySelector('.line-clamp-2')?.textContent).toBe('Call before noon');
-    for (const name of ['Took 2 minutes — Done ✓', 'Edit', 'Delete']) expect(button(name)).toBeTruthy();
+    for (const name of ['2 min — Done ✓', 'Delete ✕', 'Edit']) expect(button(name)).toBeTruthy();
     expect(container.querySelector('[aria-label="Set context and file this todo"]')).not.toBeNull();
     expect(container.textContent).toContain('Files it under To Do.');
     click(button('Edit'));

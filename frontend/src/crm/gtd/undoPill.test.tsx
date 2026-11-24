@@ -295,7 +295,7 @@ describe('the other two mark-done surfaces', () => {
   // drives the actual button can see. Both were mutation-checked: removing either
   // line leaves every other suite in this app green.
 
-  it('Inbox triage’s “Took 2 minutes — Done ✓” queues a row that undoes back to inbox', async () => {
+  it('Inbox triage’s “2 min — Done ✓” queues a row that undoes back to inbox', async () => {
     const item = todo({ id: 71, title: 'dentist', status: 'inbox' });
     updateTodoMock.mockResolvedValue({ ...item, status: 'done' });
     await act(async () => {
@@ -308,7 +308,7 @@ describe('the other two mark-done surfaces', () => {
       );
     });
 
-    await clickAsync(button('Took 2 minutes — Done ✓'));
+    await clickAsync(button('2 min — Done ✓'));
 
     expect(updateTodoMock).toHaveBeenCalledWith(71, { status: 'done' });
     expect(rows()).toHaveLength(1);
@@ -836,7 +836,7 @@ describe('a later context choice and a pending row (#2925, Codex stage 2)', () =
 
 describe('review-stage additions (#231)', () => {
   it('re-focuses the triage card for ANY undo that lands an item back in the inbox', async () => {
-    // "Took 2 minutes — Done ✓" completes straight from triage, so its undo restores
+    // "2 min — Done ✓" completes straight from triage, so its undo restores
     // 'inbox' exactly as a filing's does. Keying the focus on the kind left that item
     // wherever `items[0]` put it; keying it on where the revert lands does not.
     const seen: number[] = [];
@@ -909,7 +909,7 @@ describe('triage Delete undo', () => {
   it('labels deletion and restores the prior status', async () => {
     const item = todo({ status: 'inbox', title: 'Old idea' });
     await act(async () => { root.render(<TriageHarness item={item} contexts={[]} />); });
-    await clickAsync(button('Delete'));
+    await clickAsync(button('Delete ✕'));
     expect(updateTodoMock).toHaveBeenLastCalledWith(item.id, { status: 'dropped' });
     expect(headerCount()).toBe('1 deleted');
     expect(rows()[0].textContent).toContain('Deleted');
@@ -921,7 +921,7 @@ describe('triage Delete undo', () => {
 
   it('reports a failed deletion undo accurately', async () => {
     await act(async () => { root.render(<TriageHarness item={todo({ status: 'inbox' })} contexts={[]} />); });
-    await clickAsync(button('Delete'));
+    await clickAsync(button('Delete ✕'));
     updateTodoMock.mockRejectedValueOnce(new Error('offline'));
     const undo = container.querySelector<HTMLButtonElement>('[aria-label^="Undo deleting"]')!;
     await clickAsync(undo);

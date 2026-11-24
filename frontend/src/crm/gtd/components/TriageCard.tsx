@@ -681,15 +681,29 @@ export function TriageCard({ todo, projects, contexts, tags: knownTags = [], onP
             );
           })}
         </div>
-        <button
-          type="button"
-          disabled={locked}
-          onClick={() => void patch({ status: 'done' }, true)}
-          title="It took under 2 minutes — done"
-          className="mt-2 rounded-lg border border-green-600 px-3 py-1.5 text-sm font-heading text-green-700 disabled:opacity-50 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-950/30"
-        >
-          Took 2 minutes — Done ✓
-        </button>
+        {/* The two ways out of the inbox that need no context. Delete is for an item that never
+            belonged on the list: it archives it (status 'dropped'), and the Done page's Dropped
+            tab is where it can be brought back from. Nothing is ever hard-deleted. */}
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={locked}
+            onClick={() => void patch({ status: 'done' }, true)}
+            title="It took 2 minutes or less — done"
+            className="rounded-lg border border-green-600 px-3 py-1.5 text-sm font-heading text-green-700 disabled:opacity-50 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-950/30"
+          >
+            2 min — Done ✓
+          </button>
+          <button
+            type="button"
+            disabled={locked}
+            onClick={() => void patch({ status: 'dropped' }, true)}
+            title="Not needed — delete it"
+            className="rounded-lg border border-ck-accent px-3 py-1.5 text-sm font-heading text-ck-accent-text disabled:opacity-50 hover:bg-ck-accent/10"
+          >
+            Delete ✕
+          </button>
+        </div>
       </div>
 
       {/* Step 2 — optional enrichment. Nothing here leaves the inbox. */}
@@ -840,22 +854,6 @@ export function TriageCard({ todo, projects, contexts, tags: knownTags = [], onP
             className={`${linkCls} text-muted hover:text-charcoal`}
           >
             Edit
-          </button>
-          <button
-            type="button"
-            disabled={locked}
-            // Delete archives the todo with a 7-second Undo, using the same
-            // resolving write filing uses, so the item leaves the inbox for Done's
-            // Dropped tab, where it can be reopened. No confirm — it is recoverable.
-            onClick={() => void patch({ status: 'dropped' }, true)}
-            // Underline, not a colour or opacity change (issue #119). `brand-dark` was
-            // 2.18:1 as text on the dark card; `hover:opacity-80` — the obvious
-            // replacement — is 3.83:1, because fading a token tuned to sit just over
-            // 4.5:1 lands under it. A hover affordance that costs no contrast is the
-            // only kind these tokens can carry.
-            className={`${linkCls} text-ck-accent-text hover:underline`}
-          >
-            Delete
           </button>
         </div>
         {/* The picked project's purpose and outcome (#262), read-only: filing an item under a
